@@ -1,0 +1,32 @@
+# Binaries
+proxy/zai-proxy
+dashboard/zai-proxy-dashboard
+*.exe
+
+# Build artifacts
+proxy/bin/
+dashboard/bin/
+dashboard/frontend/dist/
+
+# Go
+vendor/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Beads
+.beads/
+
+# Test output artifacts
+test-output*.txt
+test-output*.log
+*.log
+/test-results/
+
+# BD completion summaries (belong in beads)
+BD-*.md
+bd-*.md
+
+# Misc
+.DS_Store

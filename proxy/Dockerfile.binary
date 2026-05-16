@@ -1,0 +1,19 @@
+# Ultra-minimal Dockerfile using pre-built binary, no RUN commands
+FROM alpine:3.19
+
+LABEL maintainer="ardenone"
+LABEL description="Z.AI API proxy with token injection and Prometheus metrics"
+
+# Copy pre-built binary (statically linked or with minimal deps)
+COPY --chown=1000:1000 zai-proxy /zai-proxy
+
+# Alpine includes ca-certificates by default
+# Just need to set up non-root user
+USER 1000:1000
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD wget -q --spider http://localhost:8080/health || exit 1
+
+ENTRYPOINT ["/zai-proxy"]

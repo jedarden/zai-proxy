@@ -1,0 +1,240 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Base theme variables */
+:root {
+  --bg-primary: #0f172a;
+  --bg-secondary: #1e293b;
+  --bg-tertiary: #334155;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --border-color: #334155;
+  --accent-color: #3b82f6;
+}
+
+/* Light theme */
+.light {
+  --bg-primary: #f8fafc;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #e2e8f0;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --border-color: #e2e8f0;
+  --accent-color: #3b82f6;
+}
+
+/* Dark theme (default) */
+.dark {
+  --bg-primary: #0f172a;
+  --bg-secondary: #1e293b;
+  --bg-tertiary: #334155;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --border-color: #334155;
+  --accent-color: #3b82f6;
+}
+
+/* Custom scrollbar - dark theme */
+.dark ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: #1e293b;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 4px;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+/* Custom scrollbar - light theme */
+.light ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.light ::-webkit-scrollbar-track {
+  background: #e2e8f0;
+}
+
+.light ::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 4px;
+}
+
+.light ::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+/* Panel styles - dark theme */
+.dark .panel {
+  @apply bg-slate-800 rounded-lg border border-slate-700 p-4;
+}
+
+.dark .panel-header {
+  @apply text-sm font-medium text-slate-400 mb-3;
+}
+
+.dark .panel-value {
+  @apply text-2xl font-bold text-slate-100;
+}
+
+/* Panel styles - light theme */
+.light .panel {
+  @apply bg-white rounded-lg border border-slate-200 p-4 shadow-sm;
+}
+
+.light .panel-header {
+  @apply text-sm font-medium text-slate-500 mb-3;
+}
+
+.light .panel-value {
+  @apply text-2xl font-bold text-slate-800;
+}
+
+/* Status indicators - dark theme */
+.dark .status-indicator {
+  @apply inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium;
+}
+
+.dark .status-connected {
+  @apply bg-green-500/20 text-green-400;
+}
+
+.dark .status-disconnected {
+  @apply bg-red-500/20 text-red-400;
+}
+
+.dark .status-warning {
+  @apply bg-yellow-500/20 text-yellow-400;
+}
+
+/* Status indicators - light theme */
+.light .status-indicator {
+  @apply inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs font-medium;
+}
+
+.light .status-connected {
+  @apply bg-green-100 text-green-700;
+}
+
+.light .status-disconnected {
+  @apply bg-red-100 text-red-700;
+}
+
+.light .status-warning {
+  @apply bg-yellow-100 text-yellow-700;
+}
+
+/* Loading skeleton animation */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-tertiary) 25%,
+    var(--bg-secondary) 50%,
+    var(--bg-tertiary) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 4px;
+}
+
+/* Responsive grid utilities */
+@layer utilities {
+  .dashboard-grid {
+    @apply grid grid-cols-1 lg:grid-cols-2 gap-4;
+  }
+
+  /* Stack below 1024px (lg breakpoint) */
+  @media (max-width: 1023px) {
+    .dashboard-grid {
+      @apply grid-cols-1;
+    }
+  }
+}
+
+/* Connection reconnect countdown */
+.reconnect-countdown {
+  @apply font-mono text-sm;
+}
+
+/* Stale data indicator */
+.stale-indicator {
+  @apply flex items-center gap-1 text-xs px-2 py-0.5 rounded;
+}
+
+.dark .stale-indicator {
+  @apply bg-orange-500/20 text-orange-400;
+}
+
+.light .stale-indicator {
+  @apply bg-orange-100 text-orange-700;
+}
+
+/* Error boundary fallback */
+.error-boundary-fallback {
+  @apply flex flex-col items-center justify-center p-4 text-center;
+}
+
+.dark .error-boundary-fallback {
+  @apply bg-slate-800 border border-red-500/30 rounded-lg;
+}
+
+.light .error-boundary-fallback {
+  @apply bg-white border border-red-200 rounded-lg shadow-sm;
+}
+
+.error-boundary-title {
+  @apply font-semibold mb-2;
+}
+
+.dark .error-boundary-title {
+  @apply text-red-400;
+}
+
+.light .error-boundary-title {
+  @apply text-red-600;
+}
+
+.error-boundary-message {
+  @apply text-sm mb-3;
+}
+
+.dark .error-boundary-message {
+  @apply text-slate-400;
+}
+
+.light .error-boundary-message {
+  @apply text-slate-500;
+}
+
+.error-boundary-retry {
+  @apply px-3 py-1 text-sm rounded transition-colors;
+}
+
+.dark .error-boundary-retry {
+  @apply bg-slate-700 hover:bg-slate-600 text-slate-200;
+}
+
+.light .error-boundary-retry {
+  @apply bg-slate-100 hover:bg-slate-200 text-slate-700;
+}

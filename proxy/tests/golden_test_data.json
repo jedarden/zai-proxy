@@ -1,0 +1,231 @@
+{
+  "version": "1.0",
+  "description": "Golden test data for zai-proxy token counting regression tests",
+  "metadata": {
+    "version": "1.0",
+    "created": "2026-02-08",
+    "tokenizer": "tiktoken cl100k_base",
+    "model_target": "glm-4",
+    "coverage_target": "90%"
+  },
+  "basic_token_counts": [
+    {
+      "id": "empty_string",
+      "input": "",
+      "expected_min": 0,
+      "expected_max": 0,
+      "description": "Empty string must return exactly 0 tokens"
+    },
+    {
+      "id": "single_word",
+      "input": "Hello",
+      "expected_min": 1,
+      "expected_max": 1,
+      "description": "Single common word should be 1 token"
+    },
+    {
+      "id": "simple_greeting",
+      "input": "Hello, world!",
+      "expected_min": 3,
+      "expected_max": 5,
+      "description": "Classic greeting with punctuation"
+    },
+    {
+      "id": "question_phrase",
+      "input": "Hello, how are you?",
+      "expected_min": 5,
+      "expected_max": 8,
+      "description": "Question format - API test baseline"
+    },
+    {
+      "id": "standard_sentence",
+      "input": "The quick brown fox jumps over the lazy dog.",
+      "expected_min": 9,
+      "expected_max": 12,
+      "description": "Pangram sentence - accuracy baseline"
+    },
+    {
+      "id": "python_code",
+      "input": "def hello_world():\n    print('Hello, world!')",
+      "expected_min": 10,
+      "expected_max": 18,
+      "description": "Python code with formatting"
+    },
+    {
+      "id": "unicode_mixed",
+      "input": "Hello 世界! 🌍",
+      "expected_min": 5,
+      "expected_max": 12,
+      "description": "Unicode characters - Chinese + emoji"
+    },
+    {
+      "id": "chinese_sentence",
+      "input": "你好，今天天气怎么样？",
+      "expected_min": 5,
+      "expected_max": 15,
+      "description": "Pure Chinese text - GLM-4 specific"
+    },
+    {
+      "id": "json_content",
+      "input": "{\"name\": \"test\", \"value\": 123}",
+      "expected_min": 8,
+      "expected_max": 15,
+      "description": "JSON data in message content"
+    }
+  ],
+  "edge_cases": [
+    {
+      "id": "whitespace_only",
+      "input": "   \n\t  ",
+      "should_error": false,
+      "description": "Only whitespace characters - must not crash"
+    },
+    {
+      "id": "special_characters",
+      "input": "!@#$%^&*()_+-=[]{}|;':\",./<>?",
+      "should_error": false,
+      "description": "All special characters - validated handling"
+    },
+    {
+      "id": "newlines_only",
+      "input": "\n\n\n\n\n",
+      "should_error": false,
+      "description": "Multiple newlines - edge case"
+    },
+    {
+      "id": "emoji_sequence",
+      "input": "👍👎🔥💯🎉",
+      "should_error": false,
+      "description": "Multiple emoji characters"
+    },
+    {
+      "id": "mixed_language",
+      "input": "Hello 世界 مرحبا κόσμος",
+      "should_error": false,
+      "description": "Multiple scripts in one string"
+    }
+  ],
+  "api_requests": [
+    {
+      "id": "valid_single_message",
+      "request": {
+        "model": "glm-4",
+        "messages": [
+          {"role": "user", "content": "Hello"}
+        ]
+      },
+      "expected_min": 1,
+      "expected_max": 3,
+      "description": "Baseline API request format"
+    },
+    {
+      "id": "multi_turn_conversation",
+      "request": {
+        "model": "glm-4",
+        "messages": [
+          {"role": "user", "content": "Hi"},
+          {"role": "assistant", "content": "Hello there"}
+        ]
+      },
+      "expected_min": 2,
+      "expected_max": 6,
+      "description": "Multi-turn conversation"
+    },
+    {
+      "id": "empty_messages",
+      "request": {
+        "model": "glm-4",
+        "messages": []
+      },
+      "expected_min": 0,
+      "expected_max": 0,
+      "description": "Empty messages array - must handle gracefully"
+    }
+  ],
+  "streaming_responses": [
+    {
+      "id": "simple_sse_stream",
+      "response": "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_123\"}}\n\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" world\"}}\n\ndata: {\"type\":\"message_stop\"}\n",
+      "expected_min": 2,
+      "expected_max": 4,
+      "description": "Basic SSE stream - Hello world"
+    },
+    {
+      "id": "empty_stream",
+      "response": "data: {\"type\":\"message_start\"}\n\ndata: {\"type\":\"message_stop\"}\n",
+      "expected_min": 0,
+      "expected_max": 0,
+      "description": "Stream with no content deltas"
+    },
+    {
+      "id": "unicode_stream",
+      "response": "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"你好\"}}\n\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"世界\"}}\n",
+      "expected_min": 2,
+      "expected_max": 8,
+      "description": "Chinese characters in streaming response"
+    }
+  ],
+  "json_responses": [
+    {
+      "id": "simple_response",
+      "response": "{\"id\":\"msg_123\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Hello there\"}]}",
+      "expected_min": 2,
+      "expected_max": 4,
+      "description": "Basic JSON response with single content block"
+    },
+    {
+      "id": "multiple_content_blocks",
+      "response": "{\"content\":[{\"type\":\"text\",\"text\":\"First block\"},{\"type\":\"text\",\"text\":\"Second block\"}]}",
+      "expected_min": 3,
+      "expected_max": 6,
+      "description": "Response with multiple text blocks"
+    },
+    {
+      "id": "empty_content",
+      "response": "{\"content\":[]}",
+      "expected_min": 0,
+      "expected_max": 0,
+      "description": "Response with no content blocks"
+    }
+  ],
+  "malformed_inputs": [
+    {
+      "id": "invalid_json_missing_bracket",
+      "input": "{\"model\":\"glm-4\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}",
+      "expect_error": false,
+      "description": "Should handle gracefully, return 0 tokens"
+    },
+    {
+      "id": "invalid_json_syntax",
+      "input": "{invalid json}",
+      "expect_error": false,
+      "description": "Should not crash on parse error"
+    },
+    {
+      "id": "empty_body",
+      "input": "",
+      "expect_error": false,
+      "description": "Should handle empty input without error"
+    },
+    {
+      "id": "incomplete_json",
+      "input": "{\"model\":\"glm-4\",\"messages\":[{\"role\":\"user\"",
+      "expect_error": false,
+      "description": "Truncated JSON - must not crash"
+    }
+  ],
+  "performance_benchmarks": [
+    {
+      "id": "short_text_benchmark",
+      "input": "Hello, how are you today?",
+      "target_time_ms": 5,
+      "description": "Short text should tokenize in <5ms"
+    },
+    {
+      "id": "medium_text_benchmark",
+      "input": "The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog.",
+      "target_time_ms": 10,
+      "description": "Medium text (~50 tokens) should tokenize in <10ms"
+    }
+  ]
+}

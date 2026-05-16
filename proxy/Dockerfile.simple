@@ -1,0 +1,23 @@
+# Simplified Dockerfile that avoids overlayfs mount issues
+# Uses single-stage build with pre-compiled binary
+
+FROM docker.io/library/alpine:3.19
+
+LABEL maintainer="ardenone"
+LABEL description="Z.AI API proxy with token injection and Prometheus metrics"
+
+# Install ca-certificates and create user in one layer
+RUN apk add --no-cache ca-certificates && \
+    adduser -D -u 1000 proxyuser
+
+# Copy pre-built binary
+COPY --chown=proxyuser:proxyuser zai-proxy /zai-proxy
+
+USER proxyuser
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+    CMD wget -q --spider http://localhost:8080/health || exit 1
+
+ENTRYPOINT ["/zai-proxy"]
