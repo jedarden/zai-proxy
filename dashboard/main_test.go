@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ardenone/ardenone-cluster/containers/zai-proxy-dashboard/api"
-	"github.com/ardenone/ardenone-cluster/containers/zai-proxy-dashboard/logger"
-	"github.com/ardenone/ardenone-cluster/containers/zai-proxy-dashboard/storage"
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/api"
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/logger"
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/storage"
 )
 
 // TestIndexRedirectLoopBug verifies that / and /index.html return 200 OK

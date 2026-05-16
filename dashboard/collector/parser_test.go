@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/ardenone/ardenone-cluster/containers/zai-proxy-dashboard/model"
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/model"
 )
 
 func TestParser_ParseCounter(t *testing.T) {

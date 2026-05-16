@@ -1,4 +1,4 @@
-module github.com/ardenone/zai-proxy
+module git.ardenone.com/jedarden/zai-proxy
 
 go 1.23
 

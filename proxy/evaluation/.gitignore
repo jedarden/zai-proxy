@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+venv/
+
+# Environment variables
+.env
+
+# Output files
+results/
+*.json
+!evaluation-report.json
+!evaluation-*.json
+*.md
+!README.md
+!EXAMPLE_USAGE.md
+!.env.example

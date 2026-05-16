@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ardenone/ardenone-cluster/containers/zai-proxy-dashboard/logger"
-	"github.com/ardenone/ardenone-cluster/containers/zai-proxy-dashboard/model"
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/logger"
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/model"
 )
 
 var sseLog = logger.Component("sse")

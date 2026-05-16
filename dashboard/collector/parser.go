@@ -12,7 +12,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 
-	"github.com/ardenone/ardenone-cluster/containers/zai-proxy-dashboard/model"
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/model"
 )
 
 // Parser parses Prometheus exposition format text into metric families.

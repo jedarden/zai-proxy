@@ -10,10 +10,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/ardenone/ardenone-cluster/containers/zai-proxy-dashboard/api"
-	"github.com/ardenone/ardenone-cluster/containers/zai-proxy-dashboard/collector"
-	"github.com/ardenone/ardenone-cluster/containers/zai-proxy-dashboard/logger"
-	"github.com/ardenone/ardenone-cluster/containers/zai-proxy-dashboard/storage"
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/api"
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/collector"
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/logger"
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/storage"
 )
 
 //go:embed frontend/dist/*

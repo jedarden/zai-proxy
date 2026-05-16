@@ -8,7 +8,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/ardenone/ardenone-cluster/containers/zai-proxy-dashboard/model"
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/model"
 )
 
 func TestStorage_WriteAndRead(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/ardenone/ardenone-cluster/containers/zai-proxy-dashboard/logger"
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/logger"
 )
 
 // Middleware is a function that wraps an http.Handler.

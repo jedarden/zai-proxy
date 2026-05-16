@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ardenone/ardenone-cluster/containers/zai-proxy-dashboard/model"
-	"github.com/ardenone/ardenone-cluster/containers/zai-proxy-dashboard/storage"
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/model"
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/storage"
 )
 
 // Router sets up the HTTP routes.

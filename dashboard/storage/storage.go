@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ardenone/ardenone-cluster/containers/zai-proxy-dashboard/model"
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/model"
 )
 
 // Storage provides SQLite-based metric persistence.

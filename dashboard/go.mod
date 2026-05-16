@@ -1,4 +1,4 @@
-module github.com/ardenone/ardenone-cluster/containers/zai-proxy-dashboard
+module git.ardenone.com/jedarden/zai-proxy/dashboard
 
 go 1.23
 

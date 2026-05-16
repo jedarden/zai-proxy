@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ardenone/ardenone-cluster/containers/zai-proxy-dashboard/model"
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/model"
 )
 
 func newTestSSEHub() *SSEHub {
