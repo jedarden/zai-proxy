@@ -259,6 +259,8 @@ func (c *Collector) buildSnapshot(cur, prev map[string][]MetricValue, now, prevT
 
 	s.TokensInput = sumMetric("zai_proxy_tokens_total", map[string]string{"direction": "input"})
 	s.TokensOutput = sumMetric("zai_proxy_tokens_total", map[string]string{"direction": "output"})
+	s.TokensCacheRead = sumMetric("zai_proxy_tokens_total", map[string]string{"direction": "cache_read"})
+	s.TokensCacheWrite = sumMetric("zai_proxy_tokens_total", map[string]string{"direction": "cache_write"})
 	s.ConcurrentRequests = sumMetric("zai_proxy_concurrent_requests", nil)
 	s.MaxWorkers = sumMetric("zai_proxy_max_workers", nil)
 	s.RateLimitRps = sumMetric("zai_proxy_rate_limit_requests_per_second", nil)
@@ -273,6 +275,8 @@ func (c *Collector) buildSnapshot(cur, prev map[string][]MetricValue, now, prevT
 	s.ReqRate = prefixRate("zai_proxy_requests_total", "status_code", "")
 	s.TokenRateIn = rate("zai_proxy_tokens_total", map[string]string{"direction": "input"})
 	s.TokenRateOut = rate("zai_proxy_tokens_total", map[string]string{"direction": "output"})
+	s.TokenRateCacheRead = rate("zai_proxy_tokens_total", map[string]string{"direction": "cache_read"})
+	s.TokenRateCacheWrite = rate("zai_proxy_tokens_total", map[string]string{"direction": "cache_write"})
 
 	// Per-status-code rates
 	s.StatusCodeRates = make(map[string]float64)

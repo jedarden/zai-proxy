@@ -16,6 +16,8 @@ type MetricSnapshot struct {
 	Requests5xx           float64 `json:"requests_5xx"`           // Total 5xx requests
 	TokensInput           float64 `json:"tokens_input"`           // Total input tokens
 	TokensOutput          float64 `json:"tokens_output"`          // Total output tokens
+	TokensCacheRead       float64 `json:"tokens_cache_read"`      // Total cache-read tokens
+	TokensCacheWrite      float64 `json:"tokens_cache_write"`     // Total cache-write tokens
 	ConcurrentRequests    float64 `json:"concurrent_requests"`    // Current concurrent requests
 	MaxWorkers            float64 `json:"max_workers"`            // Maximum workers
 	RateLimitRps          float64 `json:"rate_limit_rps"`         // Current rate limit (req/s)
@@ -29,8 +31,10 @@ type MetricSnapshot struct {
 	LatencyP99            float64 `json:"latency_p99"`            // Request latency p99 (ms)
 	RequestSizeAvg        float64 `json:"request_size_avg"`       // Average request size (bytes)
 	ResponseSizeAvg       float64 `json:"response_size_avg"`      // Average response size (bytes)
-	TokenRateIn           float64 `json:"token_rate_in"`          // Input token rate (tokens/s)
-	TokenRateOut          float64 `json:"token_rate_out"`         // Output token rate (tokens/s)
+	TokenRateIn           float64 `json:"token_rate_in"`           // Input token rate (tokens/s)
+	TokenRateOut          float64 `json:"token_rate_out"`          // Output token rate (tokens/s)
+	TokenRateCacheRead    float64 `json:"token_rate_cache_read"`   // Cache-read token rate (tokens/s)
+	TokenRateCacheWrite   float64 `json:"token_rate_cache_write"`  // Cache-write token rate (tokens/s)
 	ReqRate               float64 `json:"req_rate"`               // Request rate (req/s)
 	ErrorRatePct          float64 `json:"error_rate_pct"`         // Error rate percentage
 	WorkerUtilization     float64 `json:"worker_utilization"`     // Worker utilization ratio (0-1)

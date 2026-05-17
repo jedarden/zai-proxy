@@ -11,6 +11,8 @@ export interface MetricSnapshot {
   requests_5xx: number;
   tokens_input: number;
   tokens_output: number;
+  tokens_cache_read: number;
+  tokens_cache_write: number;
   concurrent_requests: number;
   max_workers: number;
   rate_limit_rps: number;
@@ -26,6 +28,8 @@ export interface MetricSnapshot {
   response_size_avg: number;
   token_rate_in: number; // tokens/s
   token_rate_out: number;
+  token_rate_cache_read: number;
+  token_rate_cache_write: number;
   req_rate: number; // requests/s
   error_rate_pct: number; // percentage
   worker_utilization: number; // ratio 0-1
