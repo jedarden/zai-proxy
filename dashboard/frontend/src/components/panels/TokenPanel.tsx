@@ -10,7 +10,6 @@ import {
   Legend,
 } from 'recharts';
 import type { MetricSnapshot, VariantFilter } from '../../lib/types';
-import { formatRate } from '../../lib/format';
 
 interface TokenPanelProps {
   data: MetricSnapshot[];
