@@ -426,6 +426,8 @@ Workers reach the proxy via cluster-internal DNS:
 - [x] Source extracted from `ardenone-cluster/containers/zai-proxy-dashboard` → `dashboard/`
 - [x] Go module paths updated to `git.ardenone.com/jedarden/zai-proxy[/dashboard]`
 - [x] Argo Workflow templates created (`zai-proxy-build`, `zai-proxy-dashboard-build`)
-- [ ] Push new workflow templates to declarative-config (triggers ArgoCD sync)
-- [ ] Update CLAUDE.md / ardenone-cluster README to point to new repo
-- [ ] Retire `ardenone-cluster/containers/zai-proxy` and `containers/zai-proxy-dashboard` once builds verified from new repo
+- [x] Push new workflow templates to declarative-config (triggers ArgoCD sync)
+- [x] Update documentation to point to new repo
+- [x] Retire `ardenone-cluster/containers/zai-proxy` and `containers/zai-proxy-dashboard` once builds verified from new repo
+
+**Migration complete as of 2026-06-21.** The zai-proxy project now lives at `git.ardenone.com/jedarden/zai-proxy` with CI/CD workflow templates deployed via ArgoCD.
