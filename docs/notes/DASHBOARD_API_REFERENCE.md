@@ -437,8 +437,20 @@ This is an SSE comment (prefixed with `:`) and should be ignored by clients but 
 
 - **Persistent Connection:** The connection remains open until the client disconnects or the server terminates.
 - **Automatic Reconnect:** Clients should implement reconnection logic with exponential backoff.
-- **Buffer Overflow:** Slow clients may be disconnected if their send buffer fills up (16-message buffer per client).
-- **Broadcast:** All connected clients receive the same metric updates simultaneously.
+- **Slow Client Detection:** Clients with full send buffers are automatically disconnected to prevent backpressure buildup.
+- **Broadcast Capacity:** 100-message buffer for the broadcast channel.
+- **Concurrent Clients:** No hard limit (limited by system resources).
+- **HTTP/2 Compatible:** Works with HTTP/2 and cloudflared tunnels (uses standard HTTP GET, not WebSocket upgrade).
+
+#### Server-Side Implementation
+
+The SSE endpoint is implemented via a broadcast hub (`/dashboard/api/sse.go`):
+
+- **Broadcast Channel:** Buffered channel (capacity: 100) for metric snapshots
+- **Client Registration:** Concurrent-safe client registration/unregistration
+- **Slow Client Protection:** Clients with full send buffers are automatically disconnected
+- **Heartbeat:** Sent every 30 seconds to keep connections alive
+- **Client Context:** Disconnections detected via `r.Context().Done()`
 
 #### Example Clients
 
@@ -508,8 +520,26 @@ The dashboard stores metrics at two granularities with different retention polic
 
 | Table | Granularity | Retention | Purpose |
 |-------|-------------|-----------|---------|
-| `metrics_5s` | 5 seconds | 6 hours | High-resolution recent data |
+| `metrics_5s` | 5 seconds | 24 hours | High-resolution recent data |
 | `metrics_1m` | 1 minute | 7 days | Downsampled historical data |
+
+### Automatic Operations
+
+- **Downsampling:** Runs every 10 minutes, aggregates 5-second data into 1-minute averages
+- **Cleanup:** Runs every hour, deletes data beyond retention windows
+- **WAL Mode:** Enabled for performance and concurrency
+
+### Storage Backend
+
+**Database:** SQLite with WAL mode
+
+**Path:** Configured via `DB_PATH` environment variable (default: `/data/dashboard.db`)
+
+**Write Strategy:** Asynchronous writes via buffered channel (capacity: 1000)
+
+**Query Strategy:** Time-based table selection
+- Queries > 1 hour use `metrics_1m` (downsampled)
+- Queries ≤ 1 hour use `metrics_5s` (high-resolution)
 
 Data is automatically downsampled from 5-second to 1-minute granularity every 10 minutes. Old data beyond retention periods is automatically cleaned up.
 
