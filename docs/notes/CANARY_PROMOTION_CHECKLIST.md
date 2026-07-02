@@ -159,7 +159,7 @@ kubectl rollout undo deployment/zai-proxy -n mcp
 ### Token Counting
 - [ ] Token metrics are being exported
   ```bash
-  curl -s http://zai-proxy.mcp.svc.cluster.local:8080/metrics | \
+  curl -s http://zai-proxy.devpod.svc.cluster.local:8080/metrics | \
     grep zai_proxy_tokens_total | grep production
   ```
 
@@ -199,7 +199,7 @@ kubectl rollout undo deployment/zai-proxy -n mcp
 
 - [ ] Token counting is working for workers
   ```bash
-  curl -s http://zai-proxy.mcp.svc.cluster.local:8080/metrics | \
+  curl -s http://zai-proxy.devpod.svc.cluster.local:8080/metrics | \
     grep zai_proxy_tokens_total | grep production
   ```
   Expected: Incrementing counters
@@ -325,7 +325,7 @@ watch kubectl get pods -n mcp -l app=zai-proxy,variant=production
 kubectl logs -f -n mcp deployment/zai-proxy
 
 # Check metrics every minute
-watch -n 60 'curl -s http://zai-proxy.mcp.svc.cluster.local:8080/metrics | grep zai_proxy_requests_total'
+watch -n 60 'curl -s http://zai-proxy.devpod.svc.cluster.local:8080/metrics | grep zai_proxy_requests_total'
 ```
 
 ---

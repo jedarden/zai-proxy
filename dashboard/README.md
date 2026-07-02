@@ -477,7 +477,7 @@ collector initialized with targets: [http://zai-proxy:8080/metrics]
 
 **Check if proxy is reachable:**
 ```bash
-kubectl exec -n devpod deployment/zai-proxy-dashboard -- wget -O- http://zai-proxy.mcp.svc.cluster.local:8080/metrics
+kubectl exec -n devpod deployment/zai-proxy-dashboard -- wget -O- http://zai-proxy.devpod.svc.cluster.local:8080/metrics
 ```
 
 ### SSE connection drops

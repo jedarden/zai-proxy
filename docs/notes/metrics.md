@@ -11,7 +11,7 @@ The zai-proxy exports comprehensive metrics for monitoring token consumption, re
 curl http://zai-proxy:8080/metrics
 
 # Query from within Kubernetes cluster
-curl http://zai-proxy.mcp.svc.cluster.local:8080/metrics
+curl http://zai-proxy.devpod.svc.cluster.local:8080/metrics
 ```
 
 ## Token Consumption Metrics

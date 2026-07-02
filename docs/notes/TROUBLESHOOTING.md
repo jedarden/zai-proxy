@@ -40,7 +40,7 @@ Token counting enabled (fallback mode, model: glm-4)
 
 **Command:**
 ```bash
-curl -s http://zai-proxy.mcp.svc.cluster.local:8080/metrics | grep zai_proxy_tokens_total
+curl -s http://zai-proxy.devpod.svc.cluster.local:8080/metrics | grep zai_proxy_tokens_total
 ```
 
 **Expected Output:**
@@ -483,7 +483,7 @@ If you've tried all troubleshooting steps and still have issues:
    kubectl get deployment zai-proxy -n mcp -o yaml > deployment.yaml
 
    # Metrics snapshot
-   curl -s http://zai-proxy.mcp.svc.cluster.local:8080/metrics | grep zai_proxy_token > metrics.txt
+   curl -s http://zai-proxy.devpod.svc.cluster.local:8080/metrics | grep zai_proxy_token > metrics.txt
    ```
 
 2. **Check documentation:**
@@ -518,7 +518,7 @@ kubectl logs -f -n mcp deployment/zai-proxy | grep "Token usage"
 
 **Query token metrics:**
 ```bash
-curl -s http://zai-proxy.mcp.svc.cluster.local:8080/metrics | grep zai_proxy_tokens
+curl -s http://zai-proxy.devpod.svc.cluster.local:8080/metrics | grep zai_proxy_tokens
 ```
 
 **Check latency:**

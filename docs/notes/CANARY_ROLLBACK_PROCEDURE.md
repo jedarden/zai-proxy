@@ -163,7 +163,7 @@ kubectl get pods -n mcp -l app=zai-proxy,variant=production
 kubectl exec -n mcp deployment/zai-proxy -- curl -s http://localhost:8080/health
 
 # Verify production metrics
-curl -s http://zai-proxy.mcp.svc.cluster.local:8080/metrics | grep zai_proxy_requests_total
+curl -s http://zai-proxy.devpod.svc.cluster.local:8080/metrics | grep zai_proxy_requests_total
 ```
 
 ### Step 6: Clean Up Canary Resources
@@ -287,7 +287,7 @@ kubectl get deployment/zai-proxy -n mcp \
 kubectl exec -n mcp deployment/zai-proxy -- curl -s http://localhost:8080/health
 
 # Verify metrics are being exported
-curl -s http://zai-proxy.mcp.svc.cluster.local:8080/metrics | grep zai_proxy_requests_total
+curl -s http://zai-proxy.devpod.svc.cluster.local:8080/metrics | grep zai_proxy_requests_total
 ```
 
 ### Step 6: Document the Rollback
@@ -553,13 +553,13 @@ git push origin main
 kubectl get endpoints -n mcp | grep zai-proxy
 
 # 2. Test service from devpod
-curl -s http://zai-proxy.mcp.svc.cluster.local:8080/health
+curl -s http://zai-proxy.devpod.svc.cluster.local:8080/health
 
 # 3. Check worker configuration
 grep -r "zai-proxy" ~/.beads-workers/*.log
 
 # 4. If workers pointing to canary service, update them
-# Workers should use: http://zai-proxy.mcp.svc.cluster.local:8080
+# Workers should use: http://zai-proxy.devpod.svc.cluster.local:8080
 # NOT: http://zai-proxy-canary.mcp.svc.cluster.local:8080
 
 # 5. Restart affected workers
@@ -644,7 +644,7 @@ kubectl scale deployment/zai-proxy-test -n mcp --replicas=0 --dry-run=server
 kubectl logs -n mcp deployment/zai-proxy --tail=10
 
 # 7. Verify you can access metrics
-curl -s http://zai-proxy.mcp.svc.cluster.local:8080/metrics | head -20
+curl -s http://zai-proxy.devpod.svc.cluster.local:8080/metrics | head -20
 
 # 8. Check service endpoints
 kubectl get endpoints -n mcp zai-proxy

@@ -478,11 +478,11 @@ kubectl logs deployment/zai-proxy -n mcp | grep -i "fallback"
 kubectl logs deployment/zai-proxy-dashboard -n mcp | grep "scrape"
 
 # Check proxy metrics endpoint
-curl http://zai-proxy.mcp.svc.cluster.local:8080/metrics
+curl http://zai-proxy.devpod.svc.cluster.local:8080/metrics
 
 # Test direct connection from dashboard pod
 kubectl exec -n mcp deployment/zai-proxy-dashboard -- \
-  wget -O- http://zai-proxy.mcp.svc.cluster.local:8080/metrics
+  wget -O- http://zai-proxy.devpod.svc.cluster.local:8080/metrics
 ```
 
 #### High Memory/CPU Usage
@@ -888,7 +888,7 @@ If Docker builds fail in devpod environments:
 - **Issues:** File in repository
 - **Questions:** Contact `jedarden@jedarden.com`
 - **Logs:** `kubectl logs -f deployment/zai-proxy -n mcp`
-- **Metrics:** `http://zai-proxy.mcp.svc.cluster.local:8080/metrics`
+- **Metrics:** `http://zai-proxy.devpod.svc.cluster.local:8080/metrics`
 
 ## Additional Resources
 

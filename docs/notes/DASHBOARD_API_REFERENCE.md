@@ -80,7 +80,7 @@ No parameters required.
 {
   "scrape_interval": 5,
   "targets": [
-    "http://zai-proxy.mcp.svc.cluster.local:8080/metrics"
+    "http://zai-proxy.devpod.svc.cluster.local:8080/metrics"
   ]
 }
 ```
@@ -96,7 +96,7 @@ No parameters required.
 
 - `LISTEN_ADDR` environment variable (default: `:8080`)
 - `SCRAPE_INTERVAL` environment variable (default: `5s`)
-- `SCRAPE_TARGETS` environment variable (comma-separated URLs, default: `http://zai-proxy.mcp.svc.cluster.local:8080/metrics`)
+- `SCRAPE_TARGETS` environment variable (comma-separated URLs, default: `http://zai-proxy.devpod.svc.cluster.local:8080/metrics`)
 
 #### Example
 

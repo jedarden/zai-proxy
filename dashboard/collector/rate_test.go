@@ -149,18 +149,6 @@ func sumValues(values []MetricValue, filter map[string]string) float64 {
 	return total
 }
 
-func matchesLabels(labels, filter map[string]string) bool {
-	if filter == nil {
-		return true
-	}
-	for k, v := range filter {
-		if labels[k] != v {
-			return false
-		}
-	}
-	return true
-}
-
 // TestDeltaComputation tests delta computation for counters.
 func TestDeltaComputation(t *testing.T) {
 	tests := []struct {

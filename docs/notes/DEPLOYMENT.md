@@ -8,7 +8,7 @@ The zai-proxy service supports **dual deployment mode** for safe testing and gra
 
 | Deployment | Service Name | Purpose | Endpoint URL |
 |------------|--------------|---------|--------------|
-| **Production** | `zai-proxy.mcp.svc.cluster.local:8080` | Live traffic | `http://zai-proxy.devpod.svc.cluster.local:8080/api/anthropic` |
+| **Production** | `zai-proxy.devpod.svc.cluster.local:8080` | Live traffic | `http://zai-proxy.devpod.svc.cluster.local:8080/api/anthropic` |
 | **Canary** | `zai-proxy-test.mcp.svc.cluster.local:8080` | Testing new versions | `http://zai-proxy-test.devpod.svc.cluster.local:8080/api/anthropic` |
 | **Split Traffic** | `zai-proxy-canary.mcp.svc.cluster.local:8080` | Weighted traffic split | `http://zai-proxy-canary.devpod.svc.cluster.local:8080/api/anthropic` |
 
@@ -119,7 +119,7 @@ cat $CLAUDE_CONFIG_DIR/settings.json | grep ANTHROPIC_BASE_URL
 
 ```bash
 # Test production endpoint
-curl -s http://zai-proxy.mcp.svc.cluster.local:8080/health
+curl -s http://zai-proxy.devpod.svc.cluster.local:8080/health
 # Expected: {"status":"ok"}
 
 # Test canary endpoint
@@ -135,7 +135,7 @@ curl -s http://zai-proxy-canary.mcp.svc.cluster.local:8080/health
 
 ```bash
 # From within a devpod, check DNS resolution
-nslookup zai-proxy.mcp.svc.cluster.local
+nslookup zai-proxy.devpod.svc.cluster.local
 nslookup zai-proxy-test.mcp.svc.cluster.local
 
 # Check service endpoints
@@ -413,7 +413,7 @@ histogram_quantile(0.95,
 
 **Issue: Workers getting connection errors**
 - Verify service is running: `kubectl get svc -n mcp | grep zai-proxy`
-- Check DNS resolution from devpod: `nslookup zai-proxy.mcp.svc.cluster.local`
+- Check DNS resolution from devpod: `nslookup zai-proxy.devpod.svc.cluster.local`
 - Verify endpoint URL in worker settings
 
 **Issue: Workers using wrong deployment**
@@ -433,9 +433,9 @@ histogram_quantile(0.95,
 | Production | `http://zai-proxy.devpod.svc.cluster.local:8080/api/anthropic` | All production traffic |
 | Canary | `http://zai-proxy-test.devpod.svc.cluster.local:8080/api/anthropic` | Testing new versions |
 | Split | `http://zai-proxy-canary.devpod.svc.cluster.local:8080/api/anthropic` | Weighted traffic splitting |
-| Metrics (Prod) | `http://zai-proxy.mcp.svc.cluster.local:8080/metrics` | Production metrics |
+| Metrics (Prod) | `http://zai-proxy.devpod.svc.cluster.local:8080/metrics` | Production metrics |
 | Metrics (Canary) | `http://zai-proxy-test.mcp.svc.cluster.local:8080/metrics` | Canary metrics |
-| Health (Prod) | `http://zai-proxy.mcp.svc.cluster.local:8080/health` | Production health check |
+| Health (Prod) | `http://zai-proxy.devpod.svc.cluster.local:8080/health` | Production health check |
 | Health (Canary) | `http://zai-proxy-test.mcp.svc.cluster.local:8080/health` | Canary health check |
 
 ## Summary

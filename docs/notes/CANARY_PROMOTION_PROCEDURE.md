@@ -160,7 +160,7 @@ kubectl get pods -n mcp -l app=zai-proxy,variant=production -w
 kubectl logs -f -n mcp deployment/zai-proxy --tail=100
 
 # Check metrics endpoint directly
-curl -s http://zai-proxy.mcp.svc.cluster.local:8080/metrics | grep zai_proxy
+curl -s http://zai-proxy.devpod.svc.cluster.local:8080/metrics | grep zai_proxy
 ```
 
 ### Step 4: Verify Workers Successfully Use New Version
@@ -195,7 +195,7 @@ kubectl logs -n mcp deployment/zai-proxy --tail=100 | grep "Token usage"
 ```bash
 # Query Prometheus for token usage by workers
 # This verifies workers are successfully using the new version
-curl -s http://zai-proxy.mcp.svc.cluster.local:8080/metrics | \
+curl -s http://zai-proxy.devpod.svc.cluster.local:8080/metrics | \
   grep zai_proxy_tokens_total | \
   grep 'variant="production"'
 ```
@@ -483,7 +483,7 @@ kubectl logs <pod-name> -n mcp
 kubectl get svc -n mcp | grep zai-proxy
 
 # Test from devpod
-curl -s http://zai-proxy.mcp.svc.cluster.local:8080/health
+curl -s http://zai-proxy.devpod.svc.cluster.local:8080/health
 
 # Check worker logs
 tail -f ~/.beads-workers/*.log
