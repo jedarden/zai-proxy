@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/config"
 	"git.ardenone.com/jedarden/zai-proxy/dashboard/model"
 )
 
@@ -38,29 +38,10 @@ type Config struct {
 
 // DefaultConfig returns the default configuration.
 func DefaultConfig() Config {
-	targets := os.Getenv("SCRAPE_TARGETS")
-	if targets == "" {
-		targets = "http://zai-proxy.mcp.svc.cluster.local:8080/metrics"
-	}
-
-	interval := 5 * time.Second
-	if v := os.Getenv("SCRAPE_INTERVAL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			interval = d
-		}
-	}
-
-	timeout := 3 * time.Second
-	if v := os.Getenv("SCRAPE_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			timeout = d
-		}
-	}
-
 	return Config{
-		Targets:  strings.Split(targets, ","),
-		Interval: interval,
-		Timeout:  timeout,
+		Targets:  config.GetScrapeTargets(),
+		Interval: config.GetScrapeInterval(),
+		Timeout:  config.GetScrapeTimeout(),
 	}
 }
 

@@ -3,10 +3,10 @@ package api
 
 import (
 	"net/http"
-	"os"
 	"strconv"
 	"time"
 
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/config"
 	"git.ardenone.com/jedarden/zai-proxy/dashboard/model"
 	"git.ardenone.com/jedarden/zai-proxy/dashboard/storage"
 )
@@ -27,53 +27,11 @@ type Config struct {
 
 // DefaultConfig returns the default API configuration.
 func DefaultConfig() *Config {
-	addr := os.Getenv("LISTEN_ADDR")
-	if addr == "" {
-		addr = ":8080"
-	}
-
-	interval := 5 * time.Second
-	if v := os.Getenv("SCRAPE_INTERVAL"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			interval = d
-		}
-	}
-
-	targets := []string{"http://zai-proxy.mcp.svc.cluster.local:8080/metrics"}
-	if v := os.Getenv("SCRAPE_TARGETS"); v != "" {
-		// Simple split by comma
-		for i, t := range splitTargets(v) {
-			if i == 0 {
-				targets = nil
-			}
-			targets = append(targets, t)
-		}
-	}
-
 	return &Config{
-		ListenAddr:     addr,
-		ScrapeInterval: interval,
-		ScrapeTargets:  targets,
+		ListenAddr:     config.GetListenAddr(),
+		ScrapeInterval: config.GetScrapeInterval(),
+		ScrapeTargets:  config.GetScrapeTargets(),
 	}
-}
-
-func splitTargets(s string) []string {
-	var result []string
-	var current string
-	for _, c := range s {
-		if c == ',' {
-			if current != "" {
-				result = append(result, current)
-				current = ""
-			}
-		} else {
-			current += string(c)
-		}
-	}
-	if current != "" {
-		result = append(result, current)
-	}
-	return result
 }
 
 // NewRouter creates a new Router.
