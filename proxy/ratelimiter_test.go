@@ -1,4 +1,4 @@
-package main
+package proxy
 
 import (
 	"sync"
@@ -1291,8 +1291,10 @@ func TestAdaptiveRateLimiter_NoAdjustInWindow(t *testing.T) {
 		t.Errorf("Rate changed mid-window: %.2f -> %.2f", initialRate, midWindowRate)
 	}
 
-	time.Sleep(testWindow + 10*time.Millisecond)
-
+	// Manually advance the window instead of sleeping
+	arl.mu.Lock()
+	arl.lastAdjustment = arl.lastAdjustment.Add(-arl.adjustmentWindow - 1*time.Second)
+	arl.mu.Unlock()
 	arl.Record429()
 
 	finalRate := arl.GetCurrentRate()
