@@ -912,6 +912,368 @@ func TestAdaptiveRateLimiter_EnvVars(t *testing.T) {
 	}
 }
 
+// TestAdaptiveRateLimiter_BasicState tests basic state initialization and access
+func TestAdaptiveRateLimiter_BasicState(t *testing.T) {
+	tests := []struct {
+		name             string
+		initialRate      float64
+		minRate          float64
+		maxRate          float64
+		wantInitialRate  float64
+		wantCeiling      float64
+	}{
+		{
+			name:            "default initialization",
+			initialRate:     50.0,
+			minRate:         10.0,
+			maxRate:         100.0,
+			wantInitialRate: 50.0,
+			wantCeiling:     100.0,
+		},
+		{
+			name:            "initial rate at max",
+			initialRate:     100.0,
+			minRate:         10.0,
+			maxRate:         100.0,
+			wantInitialRate: 100.0,
+			wantCeiling:     100.0,
+		},
+		{
+			name:            "initial rate at min",
+			initialRate:     10.0,
+			minRate:         10.0,
+			maxRate:         100.0,
+			wantInitialRate: 10.0,
+			wantCeiling:     100.0,
+		},
+		{
+			name:            "small range",
+			initialRate:     25.0,
+			minRate:         20.0,
+			maxRate:         30.0,
+			wantInitialRate: 25.0,
+			wantCeiling:     30.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			arl := NewAdaptiveRateLimiter(tt.initialRate, tt.minRate, tt.maxRate)
+
+			// Test GetCurrentRate returns initial rate
+			if got := arl.GetCurrentRate(); got != tt.wantInitialRate {
+				t.Errorf("GetCurrentRate() = %.2f, want %.2f", got, tt.wantInitialRate)
+			}
+
+			// Test ceiling starts at maxRate
+			if got := arl.estimatedCeiling; got != tt.wantCeiling {
+				t.Errorf("estimatedCeiling = %.2f, want %.2f", got, tt.wantCeiling)
+			}
+
+			// Test initial rate equals current rate
+			if got := arl.GetCurrentRate(); got != tt.initialRate {
+				t.Errorf("Initial currentRate = %.2f, want %.2f", got, tt.initialRate)
+			}
+		})
+	}
+}
+
+// TestAdaptiveRateLimiter_BasicBounds tests basic min/max rate enforcement
+func TestAdaptiveRateLimiter_BasicBounds(t *testing.T) {
+	tests := []struct {
+		name        string
+		initialRate float64
+		minRate     float64
+		maxRate     float64
+	}{
+		{
+			name:        "standard bounds",
+			initialRate: 50.0,
+			minRate:     10.0,
+			maxRate:     100.0,
+		},
+		{
+			name:        "default values mentioned in task",
+			initialRate: 50.0,
+			minRate:     10.0,
+			maxRate:     100.0,
+		},
+		{
+			name:        "narrow range",
+			initialRate: 25.0,
+			minRate:     20.0,
+			maxRate:     30.0,
+		},
+		{
+			name:        "wide range",
+			initialRate: 100.0,
+			minRate:     1.0,
+			maxRate:     1000.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			arl := NewAdaptiveRateLimiter(tt.initialRate, tt.minRate, tt.maxRate)
+
+			// Simulate heavy 429 load to drive rate down
+			for i := 0; i < 100; i++ {
+				arl.Record429()
+			}
+
+			// Force window advancement
+			arl.mu.Lock()
+			arl.lastAdjustment = arl.lastAdjustment.Add(-arl.adjustmentWindow - 1*time.Second)
+			arl.mu.Unlock()
+			arl.Record429()
+
+			// Rate should not drop below minRate
+			currentRate := arl.GetCurrentRate()
+			if currentRate < tt.minRate {
+				t.Errorf("Rate %.2f dropped below minRate %.2f", currentRate, tt.minRate)
+			}
+
+			// Simulate continuous success to drive rate up
+			for i := 0; i < 1000; i++ {
+				arl.RecordSuccess()
+			}
+
+			// Force multiple window advancements
+			for i := 0; i < 20; i++ {
+				arl.mu.Lock()
+				arl.lastAdjustment = arl.lastAdjustment.Add(-arl.adjustmentWindow - 1*time.Second)
+				arl.mu.Unlock()
+				arl.RecordSuccess()
+			}
+
+			// Rate should not exceed maxRate
+			currentRate = arl.GetCurrentRate()
+			if currentRate > tt.maxRate {
+				t.Errorf("Rate %.2f exceeded maxRate %.2f", currentRate, tt.maxRate)
+			}
+
+			// Final check: rate must be within bounds
+			if currentRate < tt.minRate || currentRate > tt.maxRate {
+				t.Errorf("Final rate %.2f out of bounds [%.2f, %.2f]",
+					currentRate, tt.minRate, tt.maxRate)
+			}
+		})
+	}
+}
+
+// TestAdaptiveRateLimiter_BasicReset tests basic Reset functionality
+func TestAdaptiveRateLimiter_BasicReset(t *testing.T) {
+	tests := []struct {
+		name        string
+		initialRate float64
+		minRate     float64
+		maxRate     float64
+		resetTo     float64
+	}{
+		{
+			name:        "reset to original",
+			initialRate: 50.0,
+			minRate:     10.0,
+			maxRate:     100.0,
+			resetTo:     50.0,
+		},
+		{
+			name:        "reset to different value",
+			initialRate: 50.0,
+			minRate:     10.0,
+			maxRate:     100.0,
+			resetTo:     75.0,
+		},
+		{
+			name:        "reset to min",
+			initialRate: 50.0,
+			minRate:     10.0,
+			maxRate:     100.0,
+			resetTo:     10.0,
+		},
+		{
+			name:        "reset to max",
+			initialRate: 50.0,
+			minRate:     10.0,
+			maxRate:     100.0,
+			resetTo:     100.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			arl := NewAdaptiveRateLimiter(tt.initialRate, tt.minRate, tt.maxRate)
+
+			// Drive rate to min
+			for i := 0; i < 100; i++ {
+				arl.Record429()
+			}
+			arl.mu.Lock()
+			arl.lastAdjustment = arl.lastAdjustment.Add(-arl.adjustmentWindow - 1*time.Second)
+			arl.mu.Unlock()
+			arl.Record429()
+
+			// Verify rate changed
+			rateBeforeReset := arl.GetCurrentRate()
+			if rateBeforeReset == tt.resetTo {
+				t.Skip("Rate already at reset value, cannot test reset behavior")
+			}
+
+			// Reset
+			arl.Reset(tt.resetTo)
+
+			// Verify current rate restored
+			if got := arl.GetCurrentRate(); got != tt.resetTo {
+				t.Errorf("After Reset(%v), GetCurrentRate() = %.2f, want %.2f",
+					tt.resetTo, got, tt.resetTo)
+			}
+
+			// Verify ceiling restored
+			if got := arl.estimatedCeiling; got != tt.resetTo {
+				t.Errorf("After Reset(%v), estimatedCeiling = %.2f, want %.2f",
+					tt.resetTo, got, tt.resetTo)
+			}
+
+			// Verify clean windows counter reset
+			if got := arl.cleanWindows; got != 0 {
+				t.Errorf("After Reset(), cleanWindows = %d, want 0", got)
+			}
+		})
+	}
+}
+
+// TestAdaptiveRateLimiter_BasicGetCurrentRate tests GetCurrentRate returns expected values
+func TestAdaptiveRateLimiter_BasicGetCurrentRate(t *testing.T) {
+	tests := []struct {
+		name           string
+		initialRate    float64
+		minRate        float64
+		maxRate        float64
+		modifyRate     bool
+		expectedChange bool
+	}{
+		{
+			name:           "returns initial rate",
+			initialRate:    50.0,
+			minRate:        10.0,
+			maxRate:        100.0,
+			modifyRate:     false,
+			expectedChange: false,
+		},
+		{
+			name:           "returns modified rate after 429",
+			initialRate:    50.0,
+			minRate:        10.0,
+			maxRate:        100.0,
+			modifyRate:     true,
+			expectedChange: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			arl := NewAdaptiveRateLimiter(tt.initialRate, tt.minRate, tt.maxRate)
+
+			initialCurrentRate := arl.GetCurrentRate()
+			if initialCurrentRate != tt.initialRate {
+				t.Errorf("Initial GetCurrentRate() = %.2f, want %.2f",
+					initialCurrentRate, tt.initialRate)
+			}
+
+			if tt.modifyRate {
+				// Drive rate down with 429s
+				for i := 0; i < 100; i++ {
+					arl.Record429()
+				}
+				arl.mu.Lock()
+				arl.lastAdjustment = arl.lastAdjustment.Add(-arl.adjustmentWindow - 1*time.Second)
+				arl.mu.Unlock()
+				arl.Record429()
+
+				modifiedRate := arl.GetCurrentRate()
+				if tt.expectedChange && modifiedRate == initialCurrentRate {
+					t.Errorf("GetCurrentRate() should have changed after 429s, still %.2f",
+						modifiedRate)
+				}
+			}
+		})
+	}
+}
+
+// TestAdaptiveRateLimiter_BasicEdgeCases tests basic edge cases
+func TestAdaptiveRateLimiter_BasicEdgeCases(t *testing.T) {
+	tests := []struct {
+		name        string
+		initialRate float64
+		minRate     float64
+		maxRate     float64
+	}{
+		{
+			name:        "min equals max (fixed rate)",
+			initialRate: 25.0,
+			minRate:     25.0,
+			maxRate:     25.0,
+		},
+		{
+			name:        "zero ceiling (initialRate starts at 0)",
+			initialRate: 0.0,
+			minRate:     0.0,
+			maxRate:     100.0,
+		},
+		{
+			name:        "very small min",
+			initialRate: 1.0,
+			minRate:     0.1,
+			maxRate:     100.0,
+		},
+		{
+			name:        "large max",
+			initialRate: 1000.0,
+			minRate:     1.0,
+			maxRate:     10000.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Should not panic on construction
+			arl := NewAdaptiveRateLimiter(tt.initialRate, tt.minRate, tt.maxRate)
+
+			// Should return valid current rate
+			currentRate := arl.GetCurrentRate()
+			if currentRate < tt.minRate || currentRate > tt.maxRate {
+				t.Errorf("Initial rate %.2f out of bounds [%.2f, %.2f]",
+					currentRate, tt.minRate, tt.maxRate)
+			}
+
+			// Test Reset works with edge case values
+			arl.Reset(tt.initialRate)
+			if got := arl.GetCurrentRate(); got != tt.initialRate {
+				t.Errorf("After Reset(%.2f), GetCurrentRate() = %.2f",
+					tt.initialRate, got)
+			}
+
+			// For min==max case, verify rate stays constant
+			if tt.minRate == tt.maxRate {
+				for i := 0; i < 50; i++ {
+					arl.Record429()
+				}
+				arl.mu.Lock()
+				arl.lastAdjustment = arl.lastAdjustment.Add(-arl.adjustmentWindow - 1*time.Second)
+				arl.mu.Unlock()
+				arl.Record429()
+
+				// Rate should still be at min/max
+				currentRate = arl.GetCurrentRate()
+				if currentRate != tt.minRate {
+					t.Errorf("With min==max, rate should stay %.2f, got %.2f",
+						tt.minRate, currentRate)
+				}
+			}
+		})
+	}
+}
+
 // TestAdaptiveRateLimiter_NoAdjustInWindow tests that tryAdjustRate doesn't run mid-window
 func TestAdaptiveRateLimiter_NoAdjustInWindow(t *testing.T) {
 	// Use injected window duration for fast test execution (100ms instead of 30s default)
