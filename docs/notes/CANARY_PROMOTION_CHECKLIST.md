@@ -239,7 +239,7 @@ kubectl rollout undo deployment/zai-proxy -n mcp
 ### VERSION File Update
 - [ ] VERSION file updated (removed -canary suffix)
   ```bash
-  cd /home/coder/ardenone-cluster/containers/zai-proxy
+  cd /home/coding/zai-proxy
   echo "VERSION" > VERSION
   cat VERSION
   ```
@@ -248,7 +248,7 @@ kubectl rollout undo deployment/zai-proxy -n mcp
 ### Git Commit and Tag
 - [ ] VERSION change committed
   ```bash
-  cd /home/coder/ardenone-cluster/containers/zai-proxy
+  cd /home/coding/zai-proxy
   git add VERSION
   git commit -m "chore: release zai-proxy vVERSION"
   ```

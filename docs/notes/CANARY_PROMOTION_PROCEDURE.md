@@ -64,7 +64,7 @@ kubectl edit deployment/zai-proxy -n mcp
 
 1. Update the manifest in Git:
 ```bash
-cd /home/coder/ardenone-cluster/cluster-configuration/apexalgo-iad/mcp
+cd /home/coding/declarative-config
 ```
 
 2. Edit `zai-proxy.yml`:
@@ -214,7 +214,7 @@ kubectl get deployment/zai-proxy -n mcp \
 Remove the `-canary` suffix from the VERSION file in the repository:
 
 ```bash
-cd /home/coder/ardenone-cluster/containers/zai-proxy
+cd /home/coding/zai-proxy/proxy
 
 # View current version
 cat VERSION
@@ -233,7 +233,7 @@ cat VERSION
 Create a git tag for the release:
 
 ```bash
-cd /home/coder/ardenone-cluster/containers/zai-proxy
+cd /home/coding/zai-proxy
 
 # Ensure all changes are committed
 git status
@@ -337,7 +337,7 @@ kubectl rollout undo deployment/zai-proxy -n mcp --to-revision=2
 
 ```bash
 # Revert the commit that changed the image tag
-cd /home/coder/ardenone-cluster/cluster-configuration/apexalgo-iad/mcp
+cd /home/coding/declarative-config
 git revert HEAD
 git push origin main
 

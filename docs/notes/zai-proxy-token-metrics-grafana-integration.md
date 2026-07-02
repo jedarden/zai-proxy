@@ -278,10 +278,10 @@ The zai-proxy exposes these token-related metrics:
 
 ## References
 
-- **Metrics Documentation:** `ardenone-cluster/docs/zai-proxy-metrics.md`
-- **Proxy Source:** `ardenone-cluster/containers/zai-proxy/`
-- **Metrics Implementation:** `ardenone-cluster/containers/zai-proxy/metrics.go`
-- **Token Tracking Code:** `ardenone-cluster/containers/zai-proxy/main.go:323,496,521`
+- **Metrics Documentation:** `docs/notes/zai-proxy-token-metrics-grafana-integration.md`
+- **Proxy Source:** `git.ardenone.com/jedarden/zai-proxy`
+- **Metrics Implementation:** `proxy/metrics.go`
+- **Token Tracking Code:** `proxy/main.go:323,496,521`
 
 ---
 

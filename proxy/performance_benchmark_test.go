@@ -80,8 +80,8 @@ func init() {
 	}
 }
 
-// mockUpstream creates a mock upstream server for testing
-func mockUpstream(responseDelay time.Duration, responseBody string) *httptest.Server {
+// createMockUpstreamServer creates a mock upstream server for testing
+func createMockUpstreamServer(responseDelay time.Duration, responseBody string) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(responseDelay)
 		w.Header().Set("Content-Type", "application/json")

@@ -144,7 +144,7 @@ Token counting enabled (fallback mode, model: glm-4)
 
 **Option 1: Rebuild with tiktoken dependencies**
 ```bash
-cd /home/coder/ardenone-cluster/containers/zai-proxy
+cd /home/coding/zai-proxy
 
 # Check tiktoken dependency
 go list -m github.com/tiktoken-go/tokenizer
@@ -162,7 +162,7 @@ go build -o zai-proxy main.go tokenizer.go
 
 **Option 2: Rebuild Docker image**
 ```bash
-cd /home/coder/ardenone-cluster/containers/zai-proxy
+cd /home/coding/zai-proxy
 
 # Rebuild image
 docker build -t zai-proxy:latest .
@@ -383,7 +383,7 @@ Token usage: input=8, output=5
 
 **Check dependencies:**
 ```bash
-cd /home/coder/ardenone-cluster/containers/zai-proxy
+cd /home/coding/zai-proxy
 
 # List tiktoken dependency
 go list -m github.com/tiktoken-go/tokenizer

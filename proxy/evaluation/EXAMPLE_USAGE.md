@@ -7,7 +7,7 @@ This document provides examples and usage patterns for the evaluation framework.
 ### 1. Set up environment
 
 ```bash
-cd /home/coder/ardenone-cluster/containers/zai-proxy/evaluation
+cd /home/coding/zai-proxy/proxy/evaluation
 
 # Create and activate virtual environment
 python3 -m venv .venv

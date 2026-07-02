@@ -9,7 +9,7 @@ The z.ai proxy counts tokens using tiktoken's `cl100k_base` encoding. This frame
 ## Installation
 
 ```bash
-cd /home/coder/ardenone-cluster/containers/zai-proxy/evaluation
+cd /home/coding/zai-proxy/proxy/evaluation
 
 # Create virtual environment
 python3 -m venv .venv

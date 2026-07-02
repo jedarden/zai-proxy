@@ -50,6 +50,12 @@ type AdaptiveRateLimiter struct {
 }
 
 func NewAdaptiveRateLimiter(initialRate, minRate, maxRate float64) *AdaptiveRateLimiter {
+	return NewAdaptiveRateLimiterWithWindow(initialRate, minRate, maxRate, 30*time.Second)
+}
+
+// NewAdaptiveRateLimiterWithWindow creates an AdaptiveRateLimiter with a configurable adjustment window.
+// Use this for tests to inject shorter durations (e.g., 1ms or 100ms) for fast execution without sleeping.
+func NewAdaptiveRateLimiterWithWindow(initialRate, minRate, maxRate float64, windowDuration time.Duration) *AdaptiveRateLimiter {
 	return &AdaptiveRateLimiter{
 		limiter:            rate.NewLimiter(rate.Limit(initialRate), int(initialRate*2)),
 		currentRate:        initialRate,
@@ -61,7 +67,7 @@ func NewAdaptiveRateLimiter(initialRate, minRate, maxRate float64) *AdaptiveRate
 		probeInterval:      10,                   // Probe every 10 clean windows (5 min at 30s windows)
 		cleanWindows:       0,
 		lastAdjustment:     time.Now(),
-		adjustmentWindow:   30 * time.Second,
+		adjustmentWindow:   windowDuration,
 	}
 }
 

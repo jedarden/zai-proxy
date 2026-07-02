@@ -95,7 +95,7 @@ kubectl logs -n mcp deployment/zai-proxy-test --tail=100
 Create an incident report or bead to track the issues:
 
 ```bash
-cd /home/coder/ardenone-cluster/containers/zai-proxy
+cd /home/coding/zai-proxy
 
 # Create bead for tracking the rollback
 br create "Investigate canary deployment failure - vVERSION" \
@@ -138,7 +138,7 @@ kubectl delete deployment/zai-proxy-test -n mcp
 If the canary failure was due to code issues:
 
 ```bash
-cd /home/coder/ardenone-cluster/containers/zai-proxy
+cd /home/coding/zai-proxy
 
 # View recent commits
 git log --oneline -5
@@ -293,7 +293,7 @@ curl -s http://zai-proxy.mcp.svc.cluster.local:8080/metrics | grep zai_proxy_req
 ### Step 6: Document the Rollback
 
 ```bash
-cd /home/coder/ardenone-cluster/containers/zai-proxy
+cd /home/coding/zai-proxy
 
 # Create incident report
 br create "Production rollback after vVERSION promotion" \
@@ -353,7 +353,7 @@ curl -s "https://registry.hub.docker.com/v2/repositories/ronaldraygun/zai-proxy/
   jq '.results[] | select(.name == "VERSION-canary")'
 
 # 5. If image issue, rebuild and redeploy
-# See: /home/coder/ardenone-cluster/containers/zai-proxy/docs/DEPLOYMENT.md
+# See: /home/coding/zai-proxy/docs/DEPLOYMENT.md
 ```
 
 **Prevention:**
@@ -384,7 +384,7 @@ kubectl scale deployment/zai-proxy-test -n mcp --replicas=0
 kubectl get pods -n mcp -l app=zai-proxy,variant=production
 
 # 5. Document the issue
-cd /home/coder/ardenone-cluster/containers/zai-proxy
+cd /home/coding/zai-proxy
 br create "Fix canary high error rate - vVERSION" \
   --type bug --priority P1 --labels bug,canary,errors
 ```
@@ -933,7 +933,7 @@ git push origin main
 
 ```bash
 # Create a bead to request rollback
-cd /home/coder/ardenone-cluster/containers/zai-proxy
+cd /home/coding/zai-proxy
 
 br create "URGENT: Request production rollback for zai-proxy" \
   --type bug \

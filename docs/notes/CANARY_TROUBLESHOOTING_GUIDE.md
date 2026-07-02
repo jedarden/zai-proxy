@@ -372,7 +372,7 @@ curl -s https://hub.docker.com/v2/repositories/ronaldraygun/zai-proxy/tags/ | \
   jq '.results[].name'
 
 # If tag doesn't exist, build it
-cd /home/coder/ardenone-cluster/containers/zai-proxy
+cd /home/coding/zai-proxy
 docker build -t ronaldraygun/zai-proxy:VERSION .
 docker push ronaldraygun/zai-proxy:VERSION
 
