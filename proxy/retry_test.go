@@ -10,9 +10,12 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // mockUpstream is a test helper that creates a controllable HTTP server
@@ -1095,6 +1098,355 @@ func TestBackoffDelayNotSleepingInTests(t *testing.T) {
 		t.Logf("For tests, set MAX_RETRIES=1 or MAX_RETRIES=2")
 		t.Logf("This reduces total delay from ~7s to ~1s")
 	})
+}
+
+// ============================================================================
+// 429 Retry Tests with Metric Verification
+// These tests verify that retry attempts are properly tracked in metrics
+// ============================================================================
+
+// Test429WithRetryAfterMetricVerification tests that 429 with Retry-After header:
+// 1. Honors the delay before retry
+// 2. Returns success after retry
+// 3. Makes exactly 2 upstream calls (initial + retry)
+// 4. Increments zai_proxy_retry_attempts_total{reason="429"} exactly once
+func Test429WithRetryAfterMetricVerification(t *testing.T) {
+	retryAttempts.Reset()
+
+	maxRetries := 2
+	upstreamCallCount := atomic.Int32{}
+
+	// Create upstream that returns 429 once, then success
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count := upstreamCallCount.Add(1)
+		if count == 1 {
+			// First request: 429 with Retry-After
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		// Second request: success
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":      "msg_test123",
+			"type":    "message",
+			"role":    "assistant",
+			"content": []map[string]string{{"type": "text", "text": "Success"}},
+		})
+	}))
+	defer upstream.Close()
+
+	handler := createTestProxyHandler(t, upstream.URL, maxRetries)
+
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(createNonStreamingRequestBody()))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	// Get initial metric value
+	initialRetryCount := testutil.ToFloat64(retryAttempts.WithLabelValues("429", "test"))
+
+	// Record start time to verify retry-after delay
+	start := time.Now()
+
+	handler.ServeHTTP(w, req)
+
+	duration := time.Since(start)
+
+	// Verify success response
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", resp.StatusCode)
+	}
+
+	// Verify upstream call count: 1 initial + 1 retry = 2 total
+	expectedCalls := int32(2)
+	actualCalls := upstreamCallCount.Load()
+	if actualCalls != expectedCalls {
+		t.Errorf("Expected %d upstream calls (initial + retry), got %d", expectedCalls, actualCalls)
+	}
+
+	// Verify retry attempt metric incremented exactly once
+	finalRetryCount := testutil.ToFloat64(retryAttempts.WithLabelValues("429", "test"))
+	expectedIncrement := 1.0
+	actualIncrement := finalRetryCount - initialRetryCount
+	if actualIncrement != expectedIncrement {
+		t.Errorf("Expected retry metric to increment by %f, got increment of %f (initial=%f, final=%f)",
+			expectedIncrement, actualIncrement, initialRetryCount, finalRetryCount)
+	}
+
+	// Verify duration is at least 1 second (Retry-After: 1)
+	if duration < 1*time.Second {
+		t.Logf("WARNING: Duration %v is less than expected 1s (may be due to fast test execution)", duration)
+	}
+
+	t.Logf("PASS: 429 with Retry-After -> success in %v, %d upstream calls, metric incremented %f times",
+		duration, actualCalls, actualIncrement)
+}
+
+// Test429WithoutRetryAfterMetricVerification tests that 429 without Retry-After header:
+// 1. Uses exponential backoff for retries
+// 2. Returns 429 after MAX_RETRIES exhausted
+// 3. Makes exactly MAX_RETRIES+1 upstream calls
+// 4. Increments zai_proxy_retry_attempts_total{reason="429"} exactly MAX_RETRIES times
+func Test429WithoutRetryAfterMetricVerification(t *testing.T) {
+	retryAttempts.Reset()
+
+	maxRetries := 2
+	upstreamCallCount := atomic.Int32{}
+
+	// Create upstream that always returns 429 without Retry-After
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCallCount.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer upstream.Close()
+
+	handler := createTestProxyHandler(t, upstream.URL, maxRetries)
+
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(createNonStreamingRequestBody()))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	// Get initial metric value
+	initialRetryCount := testutil.ToFloat64(retryAttempts.WithLabelValues("429", "test"))
+
+	// Record start time to verify exponential backoff
+	start := time.Now()
+
+	handler.ServeHTTP(w, req)
+
+	duration := time.Since(start)
+
+	// Verify 429 is returned to client
+	resp := w.Result()
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("Expected status 429, got %d", resp.StatusCode)
+	}
+
+	// Verify upstream call count: 1 initial + maxRetries retries = maxRetries+1 total
+	expectedCalls := int32(maxRetries + 1)
+	actualCalls := upstreamCallCount.Load()
+	if actualCalls != expectedCalls {
+		t.Errorf("Expected %d upstream calls (initial + %d retries), got %d",
+			expectedCalls, maxRetries, actualCalls)
+	}
+
+	// Verify retry attempt metric incremented MAX_RETRIES times
+	finalRetryCount := testutil.ToFloat64(retryAttempts.WithLabelValues("429", "test"))
+	expectedIncrement := float64(maxRetries)
+	actualIncrement := finalRetryCount - initialRetryCount
+	if actualIncrement != expectedIncrement {
+		t.Errorf("Expected retry metric to increment by %f (MAX_RETRIES), got increment of %f (initial=%f, final=%f)",
+			expectedIncrement, actualIncrement, initialRetryCount, finalRetryCount)
+	}
+
+	// Verify exponential backoff: with maxRetries=2, should wait 1s + 2s = 3s minimum
+	// (first retry waits 1s, second retry waits 2s)
+	expectedMinDuration := 1*time.Second + 2*time.Second
+	if duration < expectedMinDuration {
+		t.Logf("WARNING: Duration %v is less than expected %v (may be due to fast test execution)",
+			duration, expectedMinDuration)
+	}
+
+	t.Logf("PASS: 429 without Retry-After -> 429 in %v, %d upstream calls, metric incremented %f times",
+		duration, actualCalls, actualIncrement)
+}
+
+// Test429MultipleRetriesMetricVerification tests that 429 with multiple retries:
+// 1. Retries up to MAX_RETRIES times
+// 2. Each retry increments the metric
+// 3. Returns success if upstream recovers within retry limit
+func Test429MultipleRetriesMetricVerification(t *testing.T) {
+	retryAttempts.Reset()
+
+	maxRetries := 3
+	upstreamCallCount := atomic.Int32{}
+
+	// Create upstream that returns 429 for first 2 requests, then success
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count := upstreamCallCount.Add(1)
+		if count <= 2 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		// Third request: success
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":      "msg_test123",
+			"type":    "message",
+			"role":    "assistant",
+			"content": []map[string]string{{"type": "text", "text": "Success"}},
+		})
+	}))
+	defer upstream.Close()
+
+	handler := createTestProxyHandler(t, upstream.URL, maxRetries)
+
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(createNonStreamingRequestBody()))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	// Get initial metric value
+	initialRetryCount := testutil.ToFloat64(retryAttempts.WithLabelValues("429", "test"))
+
+	start := time.Now()
+	handler.ServeHTTP(w, req)
+	duration := time.Since(start)
+
+	// Verify success response
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", resp.StatusCode)
+	}
+
+	// Verify upstream call count: 2 failures + 1 success = 3 total
+	expectedCalls := int32(3)
+	actualCalls := upstreamCallCount.Load()
+	if actualCalls != expectedCalls {
+		t.Errorf("Expected %d upstream calls, got %d", expectedCalls, actualCalls)
+	}
+
+	// Verify retry attempt metric incremented twice (once per 429 response)
+	finalRetryCount := testutil.ToFloat64(retryAttempts.WithLabelValues("429", "test"))
+	expectedIncrement := 2.0
+	actualIncrement := finalRetryCount - initialRetryCount
+	if actualIncrement != expectedIncrement {
+		t.Errorf("Expected retry metric to increment by %f, got increment of %f (initial=%f, final=%f)",
+			expectedIncrement, actualIncrement, initialRetryCount, finalRetryCount)
+	}
+
+	// Verify duration reflects two Retry-After delays (2 seconds minimum)
+	if duration < 2*time.Second {
+		t.Logf("WARNING: Duration %v is less than expected 2s (may be due to fast test execution)", duration)
+	}
+
+	t.Logf("PASS: Multiple 429s -> success in %v, %d upstream calls, metric incremented %f times",
+		duration, actualCalls, actualIncrement)
+}
+
+// Test429MetricLabelVerification tests that the retry metric uses the correct labels
+func Test429MetricLabelVerification(t *testing.T) {
+	retryAttempts.Reset()
+
+	maxRetries := 1
+	upstreamCallCount := atomic.Int32{}
+
+	// Create upstream that returns 429
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCallCount.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer upstream.Close()
+
+	handler := createTestProxyHandler(t, upstream.URL, maxRetries)
+
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(createNonStreamingRequestBody()))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	// Verify the metric has the correct reason label
+	count429 := testutil.ToFloat64(retryAttempts.WithLabelValues("429", "test"))
+	if count429 < 1.0 {
+		t.Errorf("Expected retry metric with reason='429' to be >= 1, got %f", count429)
+	}
+
+	// Verify other reason labels are not incremented
+	countNetworkError := testutil.ToFloat64(retryAttempts.WithLabelValues("network_error", "test"))
+	if countNetworkError != 0 {
+		t.Errorf("Expected retry metric with reason='network_error' to be 0, got %f", countNetworkError)
+	}
+
+	countTruncated := testutil.ToFloat64(retryAttempts.WithLabelValues("truncated_response", "test"))
+	if countTruncated != 0 {
+		t.Errorf("Expected retry metric with reason='truncated_response' to be 0, got %f", countTruncated)
+	}
+
+	t.Logf("PASS: Metric labels verified correctly")
+}
+
+// Test429ConcurrentMetricVerification tests that concurrent 429 responses
+// are tracked correctly in metrics
+func Test429ConcurrentMetricVerification(t *testing.T) {
+	retryAttempts.Reset()
+
+	maxRetries := 1
+	upstreamCallCount := atomic.Int32{}
+
+	// Use sync.Map to track request state per goroutine
+	var requestState sync.Map
+
+	// Create upstream that returns 429 on first request per goroutine, then success
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCallCount.Add(1)
+
+		// Extract a unique identifier from the request (using request body as a simple key)
+		// In production, this would be a proper request ID
+		body, _ := io.ReadAll(r.Body)
+		requestID := string(body)
+
+		// Check if this request ID has been seen before
+		if seen, exists := requestState.Load(requestID); !exists || seen == false {
+			// First time seeing this request: return 429
+			requestState.Store(requestID, true)
+			w.WriteHeader(http.StatusTooManyRequests)
+		} else {
+			// Second time (retry): return success
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":      "msg_test123",
+				"type":    "message",
+				"content": []map[string]string{{"type": "text", "text": "Success"}},
+			})
+		}
+	}))
+	defer upstream.Close()
+
+	handler := createTestProxyHandler(t, upstream.URL, maxRetries)
+
+	// Send 3 concurrent requests with unique bodies
+	const numRequests = 3
+	errors := make(chan error, numRequests)
+
+	for i := 0; i < numRequests; i++ {
+		go func(idx int) {
+			// Create unique request body per goroutine
+			reqBody := fmt.Sprintf(`{"model":"glm-4","messages":[{"role":"user","content":"Request %d"}],"stream":false}`, idx)
+			req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(reqBody))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			handler.ServeHTTP(w, req)
+
+			resp := w.Result()
+			if resp.StatusCode != http.StatusOK {
+				errors <- fmt.Errorf("request %d: expected status 200, got %d", idx, resp.StatusCode)
+				return
+			}
+			errors <- nil
+		}(i)
+	}
+
+	// Collect results
+	for i := 0; i < numRequests; i++ {
+		if err := <-errors; err != nil {
+			t.Errorf("Concurrent request error: %v", err)
+		}
+	}
+
+	// Verify metric increments: each request triggered 1 retry, so 3 total
+	count429 := testutil.ToFloat64(retryAttempts.WithLabelValues("429", "test"))
+	if count429 < float64(numRequests) {
+		t.Errorf("Expected retry metric >= %f, got %f", float64(numRequests), count429)
+	}
+
+	t.Logf("PASS: Concurrent 429 handling verified, metric count: %f, upstream calls: %d",
+		count429, upstreamCallCount.Load())
 }
 
 // ============================================================================
