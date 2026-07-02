@@ -605,6 +605,58 @@ func TestHelperFunctions(t *testing.T) {
 		}
 	})
 
+	t.Run("GetTestMaxRetries_WithOverride", func(t *testing.T) {
+		// Test that GetTestMaxRetries respects MAX_RETRIES environment variable
+		testCases := []struct {
+			name          string
+			envValue      string
+			expected      int
+			shouldDefault bool
+		}{
+			{"zero", "0", 0, false},
+			{"one", "1", 1, false},
+			{"five", "5", 5, false},
+			{"large", "100", 100, false},
+			{"invalid_text", "abc", 1, true}, // Should default to DefaultTestMaxRetries
+			{"negative", "-1", 1, true},      // Should default to DefaultTestMaxRetries
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Setenv(TestMaxRetriesEnv, tc.envValue)
+				result := GetTestMaxRetries()
+				if result != tc.expected {
+					t.Errorf("Expected %d, got %d", tc.expected, result)
+				}
+			})
+		}
+	})
+
+	t.Run("ConfigureTestEnv", func(t *testing.T) {
+		// Test that ConfigureTestEnv sets all required environment variables
+		ConfigureTestEnv(t)
+
+		// Verify all required environment variables are set
+		expectedVars := map[string]string{
+			TestMaxRetriesEnv:    strconv.Itoa(DefaultTestMaxRetries),
+			TestModeEnv:          "true",
+			"DEPLOYMENT_VARIANT": "test",
+			"TOKEN_COUNTING_ENABLED": "false",
+			"RATE_LIMIT_INITIAL": "1000",
+			"RATE_LIMIT_MIN": "1000",
+			"RATE_LIMIT_MAX": "1000",
+		}
+
+		for key, expectedValue := range expectedVars {
+			t.Run(key, func(t *testing.T) {
+				actualValue := os.Getenv(key)
+				if actualValue != expectedValue {
+					t.Errorf("Environment variable %s: expected %q, got %q", key, expectedValue, actualValue)
+				}
+			})
+		}
+	})
+
 	t.Run("CalculateBackoffDelay", func(t *testing.T) {
 		testCases := []struct {
 			attempt   int
