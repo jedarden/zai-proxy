@@ -4,7 +4,7 @@ Production-grade LLM reverse proxy with token counting, adaptive rate limiting, 
 
 ## What it is
 
-zai-proxy sits in front of the Z.AI Anthropic-compatible API and adds the observability and reliability layer that bare API access lacks:
+zai-proxy sits in front of the Z.AI Claude API and adds the observability and reliability layer that bare API access lacks:
 
 - **Token tracking** — counts input and output tokens on every request, using API-reported usage when available and tiktoken estimation as a fallback
 - **Adaptive rate limiting** — tracks upstream 429 responses with an EWMA ceiling estimator and automatically holds just below the limit, probing periodically to detect ceiling increases
