@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,17 +35,34 @@ func TestAssertStatusCode(t *testing.T) {
 		}
 	})
 
-	t.Run("non-matching status code logs error", func(t *testing.T) {
-		// Use a subtest to capture the error without failing the parent test
-		t.Run("mismatch detection", func(t *testing.T) {
-			// This test verifies the helper detects mismatches
-			// We can't actually test it fails without triggering a test failure
-			// but we can verify the structure is correct by inspection
-			resp := &http.Response{StatusCode: http.StatusOK}
-			// Would fail if we checked against a different code
-			// AssertStatusCode(t, resp, http.StatusNotFound) // Would fail
-			_ = resp // Verify we can create responses
-		})
+	t.Run("all common status codes match exactly", func(t *testing.T) {
+		commonCodes := []int{
+			http.StatusOK,                  // 200
+			http.StatusCreated,             // 201
+			http.StatusAccepted,            // 202
+			http.StatusNoContent,            // 204
+			http.StatusMovedPermanently,     // 301
+			http.StatusFound,               // 302
+			http.StatusBadRequest,          // 400
+			http.StatusUnauthorized,         // 401
+			http.StatusForbidden,            // 403
+			http.StatusNotFound,             // 404
+			http.StatusTooManyRequests,     // 429
+			http.StatusInternalServerError, // 500
+			http.StatusBadGateway,          // 502
+			http.StatusServiceUnavailable,  // 503
+		}
+		for _, code := range commonCodes {
+			t.Run(fmt.Sprintf("%d", code), func(t *testing.T) {
+				resp := &http.Response{
+					StatusCode: code,
+					Body:       io.NopCloser(strings.NewReader("")),
+				}
+				defer resp.Body.Close()
+				// Should pass without error when codes match
+				AssertStatusCode(t, resp, code)
+			})
+		}
 	})
 }
 
