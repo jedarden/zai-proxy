@@ -1,7 +1,7 @@
 # ZAI Proxy Ecosystem — Plan
 
-**Last updated:** 2026-05-16
-**Version:** proxy/1.10.0, dashboard/1.0.0
+**Last updated:** 2026-07-02
+**Version:** proxy/1.10.0, dashboard/1.1.0
 
 ## Objective
 
@@ -178,6 +178,7 @@ purge runs every 10 minutes.
 |-------|-------------|
 | `req_rate` | Requests per second (counter rate over interval) |
 | `token_rate_in/out` | Input/output tokens per second |
+| `token_rate_cache_read/write` | Cache-read/cache-write tokens per second |
 | `error_rate_pct` | `5xx / total * 100` |
 | `latency_p50/p95/p99` | Histogram quantiles (ms) |
 | `request_size_avg` / `response_size_avg` | Histogram mean (bytes) |
@@ -194,7 +195,7 @@ Six panels in a 2×3 responsive grid, each wrapped in an error boundary:
 |-------|---------------|
 | Request Rate | req/s time series |
 | Latency | p50 / p95 / p99 (ms) time series |
-| Tokens | Input + output token rate (tokens/s) |
+| Tokens | Input + output + cache-read + cache-write token rate (tokens/s) and window running totals |
 | Concurrency | In-flight requests vs MAX_WORKERS |
 | Rate Limiter | Current rate, AIMD adjustments, rejections |
 | Errors | Error rate %, upstream errors by type |
@@ -212,16 +213,13 @@ Global controls:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SCRAPE_TARGETS` | `http://zai-proxy.mcp.svc.cluster.local:8080/metrics` | Comma-separated scrape URLs |
+| `SCRAPE_TARGETS` | `http://zai-proxy.devpod.svc.cluster.local:8080/metrics` | Comma-separated scrape URLs |
 | `SCRAPE_INTERVAL` | `5s` | How often to scrape |
 | `SCRAPE_TIMEOUT` | `3s` | Per-scrape HTTP timeout |
 | `LISTEN_ADDR` | `:8080` | Dashboard listen address |
 | `DB_PATH` | `/data/dashboard.db` | SQLite file path |
 | `RETENTION_5S` | `24h` | High-resolution data retention |
 | `RETENTION_1M` | `168h` (7d) | Downsampled data retention |
-
-> The default `SCRAPE_TARGETS` hardcodes `mcp` namespace. In deployments where
-> the proxy runs in a different namespace (e.g., `devpod`), override via env.
 
 ### Grafana — Prometheus Dashboard (separate from the React dashboard)
 
@@ -406,6 +404,10 @@ Workers reach the proxy via cluster-internal DNS:
 
 | Document | What it covers |
 |----------|----------------|
+| `dashboard/README.md` | Dashboard architecture, components, and development guide |
+| `docs/notes/DASHBOARD_API_REFERENCE.md` | Dashboard REST API and SSE event documentation |
+| `DEVELOPMENT.md` | Development workflow, testing, and CI/CD |
+| `CONTRIBUTING.md` | Contribution guidelines and code review process |
 | `docs/notes/ENVIRONMENT_VARIABLES.md` | Full env var reference |
 | `docs/notes/DEPLOYMENT.md` | Production/canary dual-deploy workflow |
 | `docs/notes/CANARY_PROMOTION_PROCEDURE.md` | Step-by-step canary promotion |
