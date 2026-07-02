@@ -20,7 +20,7 @@ A production-ready HTTP proxy for the Z.AI API with token counting, adaptive rat
 export ZAI_API_KEY="your-api-key-here"
 
 # Run the proxy
-go run main.go tokenizer.go
+go run .
 
 # Proxy listens on :8080
 # Metrics available at :8080/metrics
@@ -30,13 +30,13 @@ go run main.go tokenizer.go
 
 ```bash
 # Build image
-docker build -t zai-proxy:latest .
+docker build -t zai-proxy:1.10.0 .
 
 # Run container
 docker run -p 8080:8080 \
   -e ZAI_API_KEY="your-api-key" \
   -e TOKEN_COUNTING_ENABLED=true \
-  zai-proxy:latest
+  zai-proxy:1.10.0
 ```
 
 ### Kubernetes Deployment
@@ -46,7 +46,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: zai-proxy
-  namespace: mcp
+  namespace: devpod
 spec:
   replicas: 2
   selector:
@@ -59,7 +59,7 @@ spec:
     spec:
       containers:
       - name: zai-proxy
-        image: ghcr.io/ardenone/zai-proxy:latest
+        image: ronaldraygun/zai-proxy:1.10.0
         ports:
         - containerPort: 8080
           name: http
@@ -87,7 +87,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: zai-proxy
-  namespace: mcp
+  namespace: devpod
 spec:
   selector:
     app: zai-proxy
@@ -167,7 +167,7 @@ export TOKEN_COUNTING_ENABLED=false
 
 **View logs:**
 ```bash
-kubectl logs -f deployment/zai-proxy -n mcp | grep "Token usage"
+kubectl logs -f deployment/zai-proxy -n devpod | grep "Token usage"
 # Output: Token usage: input=123, output=456
 ```
 
@@ -261,10 +261,10 @@ go tool cover -html=coverage.out
 
 ```bash
 # Build binary
-go build -o zai-proxy main.go tokenizer.go
+go build -o zai-proxy .
 
 # Build Docker image (use GitHub Actions for devpod environments)
-docker build -t zai-proxy:dev .
+docker build -t zai-proxy:1.10.0 .
 ```
 
 **Note:** Docker builds in devpod environments may fail with overlayfs errors. See [docs/DEVPOD_DOCKER_BUILD_LIMITATION.md](docs/DEVPOD_DOCKER_BUILD_LIMITATION.md) for details and the recommended GitHub Actions build workflow.
@@ -310,7 +310,7 @@ zai-proxy/
 
 **Check startup logs:**
 ```bash
-kubectl logs deployment/zai-proxy -n mcp | grep -i token
+kubectl logs deployment/zai-proxy -n devpod | grep -i token
 ```
 
 **Expected output:**
@@ -325,15 +325,15 @@ Token counting disabled (TOKEN_COUNTING_ENABLED=false)
 
 **Fix:**
 ```bash
-kubectl set env deployment/zai-proxy -n mcp TOKEN_COUNTING_ENABLED=true
-kubectl rollout restart deployment/zai-proxy -n mcp
+kubectl set env deployment/zai-proxy -n devpod TOKEN_COUNTING_ENABLED=true
+kubectl rollout restart deployment/zai-proxy -n devpod
 ```
 
 ### Token counts seem inaccurate
 
 **Check if fallback tokenizer is active:**
 ```bash
-kubectl logs deployment/zai-proxy -n mcp | grep -i fallback
+kubectl logs deployment/zai-proxy -n devpod | grep -i fallback
 ```
 
 **If you see:**
@@ -401,5 +401,5 @@ Contributions welcome! Please:
 
 - **Documentation:** Check `docs/` directory
 - **Issues:** File in repository
-- **Logs:** `kubectl logs -f deployment/zai-proxy -n mcp`
-- **Metrics:** `http://zai-proxy.mcp.svc.cluster.local:8080/metrics`
+- **Logs:** `kubectl logs -f deployment/zai-proxy -n devpod`
+- **Metrics:** `http://zai-proxy.devpod.svc.cluster.local:8080/metrics`
