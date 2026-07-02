@@ -204,7 +204,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: zai-proxy-config
-  namespace: mcp
+  namespace: devpod
 data:
   TOKEN_COUNTING_ENABLED: "true"
   TOKENIZER_MODEL: "glm-4"
@@ -222,7 +222,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: zai-proxy
-  namespace: mcp
+  namespace: devpod
 spec:
   template:
     spec:

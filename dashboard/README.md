@@ -106,7 +106,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: zai-proxy-dashboard
-  namespace: mcp
+  namespace: devpod
 spec:
   replicas: 1
   selector:
@@ -125,7 +125,7 @@ spec:
           name: http
         env:
         - name: SCRAPE_TARGETS
-          value: "http://zai-proxy.mcp.svc.cluster.local:8080/metrics"
+          value: "http://zai-proxy.devpod.svc.cluster.local:8080/metrics"
         - name: DB_PATH
           value: "/data/dashboard.db"
         volumeMounts:
@@ -146,7 +146,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: zai-proxy-dashboard
-  namespace: mcp
+  namespace: devpod
 spec:
   selector:
     app: zai-proxy-dashboard
@@ -162,7 +162,7 @@ spec:
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `LISTEN_ADDR` | String | `:8080` | HTTP listen address |
-| `SCRAPE_TARGETS` | String | `http://zai-proxy.mcp.svc.cluster.local:8080/metrics` | Comma-separated Prometheus endpoints to scrape |
+| `SCRAPE_TARGETS` | String | `http://zai-proxy.devpod.svc.cluster.local:8080/metrics` | Comma-separated Prometheus endpoints to scrape |
 | `SCRAPE_INTERVAL` | Duration | `5s` | Scrape interval |
 | `SCRAPE_TIMEOUT` | Duration | `3s` | HTTP timeout for each scrape |
 | `DB_PATH` | String | `/data/dashboard.db` | SQLite database file path |
@@ -276,7 +276,7 @@ Returns dashboard configuration.
 ```json
 {
   "scrape_interval": 5,
-  "targets": ["http://zai-proxy.mcp.svc.cluster.local:8080/metrics"]
+  "targets": ["http://zai-proxy.devpod.svc.cluster.local:8080/metrics"]
 }
 ```
 
@@ -467,7 +467,7 @@ dashboard/
 
 **Check collector is scraping:**
 ```bash
-kubectl logs -f deployment/zai-proxy-dashboard -n mcp | grep "scrape"
+kubectl logs -f deployment/zai-proxy-dashboard -n devpod | grep "scrape"
 ```
 
 **Expected output:**
@@ -477,7 +477,7 @@ collector initialized with targets: [http://zai-proxy:8080/metrics]
 
 **Check if proxy is reachable:**
 ```bash
-kubectl exec -n mcp deployment/zai-proxy-dashboard -- wget -O- http://zai-proxy.mcp.svc.cluster.local:8080/metrics
+kubectl exec -n devpod deployment/zai-proxy-dashboard -- wget -O- http://zai-proxy.mcp.svc.cluster.local:8080/metrics
 ```
 
 ### SSE connection drops
@@ -497,26 +497,26 @@ curl -N http://localhost:8080/api/events
 
 **Check disk space:**
 ```bash
-kubectl exec -n mcp deployment/zai-proxy-dashboard -- df -h /data
+kubectl exec -n devpod deployment/zai-proxy-dashboard -- df -h /data
 ```
 
 **Verify database file:**
 ```bash
-kubectl exec -n mcp deployment/zai-proxy-dashboard -- sqlite3 /data/dashboard.db ".schema"
+kubectl exec -n devpod deployment/zai-proxy-dashboard -- sqlite3 /data/dashboard.db ".schema"
 ```
 
 ### High memory usage
 
 **Adjust retention periods:**
 ```bash
-kubectl set env deployment/zai-proxy-dashboard -n mcp \
+kubectl set env deployment/zai-proxy-dashboard -n devpod \
   RETENTION_5S=12h \
   RETENTION_1M=72h
 ```
 
 **Check database size:**
 ```bash
-kubectl exec -n mcp deployment/zai-proxy-dashboard -- du -sh /data/dashboard.db
+kubectl exec -n devpod deployment/zai-proxy-dashboard -- du -sh /data/dashboard.db
 ```
 
 ## Performance
@@ -538,19 +538,19 @@ kubectl exec -n mcp deployment/zai-proxy-dashboard -- du -sh /data/dashboard.db
 
 ```bash
 # View all logs
-kubectl logs -f deployment/zai-proxy-dashboard -n mcp
+kubectl logs -f deployment/zai-proxy-dashboard -n devpod
 
 # Component-specific logs
-kubectl logs -f deployment/zai-proxy-dashboard -n mcp | grep "collector"
-kubectl logs -f deployment/zai-proxy-dashboard -n mcp | grep "sse"
-kubectl logs -f deployment/zai-proxy-dashboard -n mcp | grep "storage"
+kubectl logs -f deployment/zai-proxy-dashboard -n devpod | grep "collector"
+kubectl logs -f deployment/zai-proxy-dashboard -n devpod | grep "sse"
+kubectl logs -f deployment/zai-proxy-dashboard -n devpod | grep "storage"
 ```
 
 ### Health Checks
 
 ```bash
 # Kubernetes liveness/readiness
-kubectl get endpoints zai-proxy-dashboard -n mcp
+kubectl get endpoints zai-proxy-dashboard -n devpod
 
 # Manual health check
 curl http://dashboard-url/healthz
@@ -580,4 +580,4 @@ Contributions welcome! Please:
 
 - **Documentation:** Check parent `README.md` and `docs/` directory
 - **Issues:** File in repository
-- **Logs:** `kubectl logs -f deployment/zai-proxy-dashboard -n mcp`
+- **Logs:** `kubectl logs -f deployment/zai-proxy-dashboard -n devpod`
