@@ -4,7 +4,7 @@ Production-grade LLM reverse proxy with token counting, adaptive rate limiting, 
 
 ## What it is
 
-zai-proxy sits in front of an OpenAI-compatible LLM API and adds the observability and reliability layer that bare API access lacks:
+zai-proxy sits in front of the Z.AI Anthropic-compatible API and adds the observability and reliability layer that bare API access lacks:
 
 - **Token tracking** — counts input and output tokens on every request, using API-reported usage when available and tiktoken estimation as a fallback
 - **Adaptive rate limiting** — tracks upstream 429 responses with an EWMA ceiling estimator and automatically holds just below the limit, probing periodically to detect ceiling increases
@@ -48,7 +48,7 @@ go run .
 # 3. (Optional) start the dashboard in another terminal
 cd dashboard
 go run .
-# Dashboard → :3000
+# Dashboard → :8080
 ```
 
 ## Environment variables
@@ -58,15 +58,18 @@ go run .
 | Variable | Default | Description |
 |---|---|---|
 | `ZAI_API_KEY` | (required) | API key forwarded to the upstream provider |
-| `ZAI_TARGET_URL` | provider default | Override the upstream base URL |
+| `ZAI_TARGET_URL` | `https://api.z.ai/api/anthropic` | Override the upstream base URL |
 | `TOKEN_COUNTING_ENABLED` | `true` | Enable/disable token counting |
 | `TOKENIZER_MODEL` | `glm-4` | Tokenizer model name for estimation |
 | `MAX_WORKERS` | `10` | Max concurrent upstream requests |
 | `DEPLOYMENT_VARIANT` | `production` | Label for blue/green or canary tracking |
-| `RATE_LIMIT_INITIAL` | | Initial rate (req/s) |
-| `RATE_LIMIT_MIN` | | Minimum rate floor |
-| `RATE_LIMIT_MAX` | | Maximum rate ceiling |
-| `MAX_RETRIES` | | Retry count on transient errors |
+| `RATE_LIMIT_INITIAL` | `10.0` | Initial rate (req/s) |
+| `RATE_LIMIT_MIN` | `1.0` | Minimum rate floor |
+| `RATE_LIMIT_MAX` | `50.0` | Maximum rate ceiling |
+| `RATE_LIMIT_CEILING_ALPHA` | `0.3` | EWMA smoothing factor for ceiling estimation |
+| `RATE_LIMIT_HOLD_MARGIN` | `0.02` | Hold margin below ceiling (as fraction, e.g., 0.02 = 2%) |
+| `RATE_LIMIT_PROBE_INTERVAL` | `10` | Probe ceiling every N clean windows |
+| `MAX_RETRIES` | `3` | Retry count on transient errors |
 
 ### Dashboard
 
@@ -76,12 +79,24 @@ See [`docs/notes/`](docs/notes/) for dashboard configuration and deployment.
 
 The proxy exposes standard Prometheus metrics at `/metrics`:
 
-- `proxy_requests_total` — request counts by method, path, status, and variant
-- `proxy_request_duration_seconds` — latency histogram
-- `proxy_response_size_bytes` — response size histogram
-- `proxy_upstream_errors_total` — upstream error counts by type and variant
-- `proxy_token_input_total` / `proxy_token_output_total` — token counters by model and variant
-- `proxy_rate_limit_wait_seconds` — time spent waiting on the rate limiter
+- `zai_proxy_requests_total` — request counts by method, path, status, and variant
+- `zai_proxy_request_duration_seconds` — latency histogram
+- `zai_proxy_request_size_bytes` — request size histogram
+- `zai_proxy_response_size_bytes` — response size histogram
+- `zai_proxy_concurrent_requests` — concurrent request gauge
+- `zai_proxy_upstream_errors_total` — upstream error counts by type and variant
+- `zai_proxy_tokens_total` — token counters with labels: direction (input/output/cache_read/cache_write), model, variant, pricing_tier
+- `zai_proxy_rate_limit_requests_per_second` — current rate limit gauge
+- `zai_proxy_rate_limit_wait_seconds` — time spent waiting on the rate limiter
+- `zai_proxy_rate_limit_adjustments_total` — rate limit adjustments by direction and variant
+- `zai_proxy_rate_limit_rejections_total` — requests rejected due to rate limiting
+- `zai_proxy_retry_attempts_total` — retry attempts by reason and variant
+- `zai_proxy_worker_utilization_ratio` — worker utilization gauge
+- `zai_proxy_max_workers` — maximum concurrent workers gauge
+- `zai_proxy_token_rate_seconds` — token processing time histogram
+- `zai_proxy_token_rate` — token throughput histogram (tokens per second)
+- `zai_proxy_token_count_duration_seconds` — token counting operation duration
+- `zai_proxy_build_info` — build information (version, variant, commit, build time)
 
 ## Docs
 
