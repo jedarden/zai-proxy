@@ -980,6 +980,9 @@ func TestAdaptiveRateLimiter_BasicState(t *testing.T) {
 
 // TestAdaptiveRateLimiter_BasicBounds tests basic min/max rate enforcement
 func TestAdaptiveRateLimiter_BasicBounds(t *testing.T) {
+	// Use short window duration for fast test execution without sleep calls
+	testWindow := 10 * time.Millisecond
+
 	tests := []struct {
 		name        string
 		initialRate float64
@@ -1014,16 +1017,17 @@ func TestAdaptiveRateLimiter_BasicBounds(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			arl := NewAdaptiveRateLimiter(tt.initialRate, tt.minRate, tt.maxRate)
+			// Use injected window duration for test speed
+			arl := NewAdaptiveRateLimiterWithWindow(tt.initialRate, tt.minRate, tt.maxRate, testWindow)
 
 			// Simulate heavy 429 load to drive rate down
 			for i := 0; i < 100; i++ {
 				arl.Record429()
 			}
 
-			// Force window advancement
+			// Force window advancement by manipulating internal state
 			arl.mu.Lock()
-			arl.lastAdjustment = arl.lastAdjustment.Add(-arl.adjustmentWindow - 1*time.Second)
+			arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
 			arl.mu.Unlock()
 			arl.Record429()
 
@@ -1041,7 +1045,7 @@ func TestAdaptiveRateLimiter_BasicBounds(t *testing.T) {
 			// Force multiple window advancements
 			for i := 0; i < 20; i++ {
 				arl.mu.Lock()
-				arl.lastAdjustment = arl.lastAdjustment.Add(-arl.adjustmentWindow - 1*time.Second)
+				arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
 				arl.mu.Unlock()
 				arl.RecordSuccess()
 			}
