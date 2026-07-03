@@ -43,3 +43,16 @@ grep -r "\.mcp\.svc\.cluster\.local" --include="*.go" --include="*.yaml" --inclu
 ## Related Work
 
 This cleanup follows the previous namespace migration work documented in `notes/bf-3ik4.md`.
+
+---
+
+## Re-verification (2026-07-02)
+
+Ran verification to confirm no remaining references:
+
+```bash
+grep -r "\.mcp\.svc\.cluster\.local" . --include="*.go" --include="*.yaml" --include="*.md" --exclude-dir=".beads" --exclude-dir=".git" --exclude="notes/*"
+# Result: No matches found
+```
+
+**Conclusion:** All namespace references successfully migrated to `devpod`. No action required for this bead - verification confirmed the cleanup is complete.
