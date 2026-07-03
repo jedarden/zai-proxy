@@ -15,14 +15,16 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/time/rate"
+
+	"git.ardenone.com/jedarden/zai-proxy/proxy/config"
 )
 
 var (
 	currentRequests   int64
-	maxWorkersValue   int64  = 10           // Default
+	maxWorkersValue   int64
 	tokenCounter      TokenCounter
-	tokenizerModel    string = "glm-4"      // Default tokenizer model name for metrics
-	deploymentVariant string = "production" // Default deployment variant
+	tokenizerModel    string
+	deploymentVariant string
 
 	// Build info — set via -ldflags at build time
 	buildVersion string
@@ -207,11 +209,8 @@ func main() {
 	}
 
 	// Read deployment variant from environment
-	deploymentVariant = os.Getenv("DEPLOYMENT_VARIANT")
-	if deploymentVariant == "" {
-		deploymentVariant = "production"
-		log.Printf("DEPLOYMENT_VARIANT not set, defaulting to: %s", deploymentVariant)
-	} else {
+	deploymentVariant = config.GetDeploymentVariant()
+	if deploymentVariant != config.DefaultDeploymentVariant {
 		log.Printf("Deployment variant: %s", deploymentVariant)
 	}
 
@@ -251,16 +250,8 @@ func main() {
 	// TOKENIZER_MODEL: Model name for Prometheus metrics labels (default: glm-4)
 	//   Used to tag token count metrics in Prometheus (e.g., glm-4, claude-3, etc.)
 	//   This is purely for metrics labeling and does not affect tokenization algorithm.
-	tokenCountingEnabled := true
-	if val := os.Getenv("TOKEN_COUNTING_ENABLED"); val != "" {
-		if val == "false" || val == "0" {
-			tokenCountingEnabled = false
-		}
-	}
-
-	if val := os.Getenv("TOKENIZER_MODEL"); val != "" {
-		tokenizerModel = val
-	}
+	tokenCountingEnabled := config.GetTokenCountingEnabled()
+	tokenizerModel = config.GetTokenizerModel()
 
 	// Initialize tokenizer with tiktoken cl100k_base encoding
 	if tokenCountingEnabled {
@@ -280,71 +271,27 @@ func main() {
 	}
 
 	// Read max workers from environment
-	if maxWorkersEnv := os.Getenv("MAX_WORKERS"); maxWorkersEnv != "" {
-		if val, err := strconv.ParseInt(maxWorkersEnv, 10, 64); err == nil && val > 0 {
-			atomic.StoreInt64(&maxWorkersValue, val)
-			maxWorkers.WithLabelValues(deploymentVariant).Set(float64(val))
-			log.Printf("Max workers set to: %d", val)
-		}
-	} else {
-		maxWorkers.WithLabelValues(deploymentVariant).Set(float64(maxWorkersValue))
-		log.Printf("Max workers defaulting to: %d", maxWorkersValue)
-	}
+	maxWorkersValue = config.GetMaxWorkers()
+	maxWorkers.WithLabelValues(deploymentVariant).Set(float64(maxWorkersValue))
+	log.Printf("Max workers: %d", maxWorkersValue)
 
 	// Initialize adaptive rate limiter
-	initialRate := 10.0 // 10 req/s
-	minRate := 1.0      // 1 req/s minimum
-	maxRate := 50.0     // 50 req/s maximum
-
-	// Read rate limit config from environment
-	if val := os.Getenv("RATE_LIMIT_INITIAL"); val != "" {
-		if parsed, err := strconv.ParseFloat(val, 64); err == nil && parsed > 0 {
-			initialRate = parsed
-		}
-	}
-	if val := os.Getenv("RATE_LIMIT_MIN"); val != "" {
-		if parsed, err := strconv.ParseFloat(val, 64); err == nil && parsed > 0 {
-			minRate = parsed
-		}
-	}
-	if val := os.Getenv("RATE_LIMIT_MAX"); val != "" {
-		if parsed, err := strconv.ParseFloat(val, 64); err == nil && parsed > 0 {
-			maxRate = parsed
-		}
-	}
+	initialRate := config.GetRateLimitInitial()
+	minRate := config.GetRateLimitMin()
+	maxRate := config.GetRateLimitMax()
 
 	rateLimiter := NewAdaptiveRateLimiter(initialRate, minRate, maxRate)
-	if val := os.Getenv("RATE_LIMIT_CEILING_ALPHA"); val != "" {
-		if parsed, err := strconv.ParseFloat(val, 64); err == nil && parsed > 0 && parsed <= 1 {
-			rateLimiter.ceilingSmoothAlpha = parsed
-		}
-	}
-	if val := os.Getenv("RATE_LIMIT_HOLD_MARGIN"); val != "" {
-		if parsed, err := strconv.ParseFloat(val, 64); err == nil && parsed > 0 && parsed < 1 {
-			rateLimiter.holdMargin = parsed
-		}
-	}
-	if val := os.Getenv("RATE_LIMIT_PROBE_INTERVAL"); val != "" {
-		if parsed, err := strconv.Atoi(val); err == nil && parsed > 0 {
-			rateLimiter.probeInterval = parsed
-		}
-	}
+	rateLimiter.ceilingSmoothAlpha = config.GetRateLimitCeilingAlpha()
+	rateLimiter.holdMargin = config.GetRateLimitHoldMargin()
+	rateLimiter.probeInterval = config.GetRateLimitProbeInterval()
 	rateLimitCurrentRate.WithLabelValues(deploymentVariant).Set(initialRate)
 	log.Printf("Adaptive rate limiting: initial=%.1f, min=%.1f, max=%.1f req/s (ceiling alpha=%.2f, margin=%.1f%%, probe every %d windows)",
 		initialRate, minRate, maxRate, rateLimiter.ceilingSmoothAlpha, rateLimiter.holdMargin*100, rateLimiter.probeInterval)
 
 	// Retry configuration
-	maxRetries := 3
-	if val := os.Getenv("MAX_RETRIES"); val != "" {
-		if parsed, err := strconv.Atoi(val); err == nil && parsed >= 0 {
-			maxRetries = parsed
-		}
-	}
+	maxRetries := config.GetMaxRetries()
 
-	target := "https://api.z.ai/api/anthropic"
-	if val := os.Getenv("ZAI_TARGET_URL"); val != "" {
-		target = val
-	}
+	target := config.GetTargetURL()
 
 	client := &http.Client{
 		Timeout: 5 * time.Minute,
