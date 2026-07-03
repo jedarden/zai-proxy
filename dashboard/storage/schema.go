@@ -4,8 +4,9 @@ package storage
 import (
 	"database/sql"
 	"fmt"
-	"os"
 	"time"
+
+	"git.ardenone.com/jedarden/zai-proxy/dashboard/config"
 
 	_ "modernc.org/sqlite"
 )
@@ -92,28 +93,9 @@ type Config struct {
 
 // DefaultConfig returns the default storage configuration.
 func DefaultConfig() Config {
-	dbPath := os.Getenv("DB_PATH")
-	if dbPath == "" {
-		dbPath = "/data/dashboard.db"
-	}
-
-	retention5s := 24 * time.Hour
-	if v := os.Getenv("RETENTION_5S"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			retention5s = d
-		}
-	}
-
-	retention1m := 168 * time.Hour // 7 days
-	if v := os.Getenv("RETENTION_1M"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			retention1m = d
-		}
-	}
-
 	return Config{
-		DBPath:      dbPath,
-		Retention5s: retention5s,
-		Retention1m: retention1m,
+		DBPath:      config.GetDBPath(),
+		Retention5s: config.GetRetention5s(),
+		Retention1m: config.GetRetention1m(),
 	}
 }

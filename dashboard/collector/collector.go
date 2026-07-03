@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -313,14 +311,4 @@ func (c *Collector) buildSnapshot(cur, prev map[string][]MetricValue, now, prevT
 	}
 
 	return s
-}
-
-// parseFloatEnv parses a float from an environment variable.
-func parseFloatEnv(key string, def float64) float64 {
-	if v := os.Getenv(key); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			return f
-		}
-	}
-	return def
 }

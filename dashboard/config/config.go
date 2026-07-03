@@ -18,6 +18,16 @@ const DefaultScrapeTimeout = 3 * time.Second
 // DefaultListenAddr is the default HTTP listen address for the dashboard API.
 const DefaultListenAddr = ":8080"
 
+// Storage defaults
+const (
+	// DefaultDBPath is the default path to the SQLite database file.
+	DefaultDBPath = "/data/dashboard.db"
+	// DefaultRetention5s is the default retention for 5-second interval data.
+	DefaultRetention5s = 24 * time.Hour
+	// DefaultRetention1m is the default retention for 1-minute interval data.
+	DefaultRetention1m = 168 * time.Hour // 7 days
+)
+
 // GetEnvOrDefault retrieves an environment variable or returns a default value.
 func GetEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
@@ -82,4 +92,22 @@ func GetScrapeTimeout() time.Duration {
 // or the default address if not set.
 func GetListenAddr() string {
 	return GetEnvOrDefault("LISTEN_ADDR", DefaultListenAddr)
+}
+
+// GetDBPath returns the database path from DB_PATH env var,
+// or the default path if not set.
+func GetDBPath() string {
+	return GetEnvOrDefault("DB_PATH", DefaultDBPath)
+}
+
+// GetRetention5s returns the retention for 5s data from RETENTION_5S env var,
+// or the default retention if not set/invalid.
+func GetRetention5s() time.Duration {
+	return ParseDurationOrDefault("RETENTION_5S", DefaultRetention5s)
+}
+
+// GetRetention1m returns the retention for 1m data from RETENTION_1M env var,
+// or the default retention if not set/invalid.
+func GetRetention1m() time.Duration {
+	return ParseDurationOrDefault("RETENTION_1M", DefaultRetention1m)
 }
