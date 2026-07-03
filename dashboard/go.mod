@@ -2,6 +2,10 @@ module git.ardenone.com/jedarden/zai-proxy/dashboard
 
 go 1.23
 
+require git.ardenone.com/jedarden/zai-proxy v0.0.0
+
+replace git.ardenone.com/jedarden/zai-proxy => ../
+
 require (
 	github.com/prometheus/client_model v0.6.1
 	github.com/prometheus/common v0.62.0

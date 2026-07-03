@@ -2,7 +2,7 @@
 package config
 
 import (
-	"os"
+	"git.ardenone.com/jedarden/zai-proxy/internal/configenv"
 	"time"
 )
 
@@ -28,24 +28,6 @@ const (
 	DefaultRetention1m = 168 * time.Hour // 7 days
 )
 
-// GetEnvOrDefault retrieves an environment variable or returns a default value.
-func GetEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-// ParseDurationOrDefault parses a duration from an env var or returns a default.
-func ParseDurationOrDefault(key string, defaultValue time.Duration) time.Duration {
-	if value := os.Getenv(key); value != "" {
-		if parsed, err := time.ParseDuration(value); err == nil {
-			return parsed
-		}
-	}
-	return defaultValue
-}
-
 // SplitTargets splits a comma-separated list of scrape targets.
 // Empty strings between commas are skipped.
 func SplitTargets(s string) []string {
@@ -70,7 +52,7 @@ func SplitTargets(s string) []string {
 // GetScrapeTargets returns the list of scrape targets from SCRAPE_TARGETS env var,
 // or the default target if not set.
 func GetScrapeTargets() []string {
-	if value := os.Getenv("SCRAPE_TARGETS"); value != "" {
+	if value := configenv.GetString("SCRAPE_TARGETS", ""); value != "" {
 		return SplitTargets(value)
 	}
 	return []string{DefaultScrapeTarget}
@@ -79,35 +61,35 @@ func GetScrapeTargets() []string {
 // GetScrapeInterval returns the scrape interval from SCRAPE_INTERVAL env var,
 // or the default interval if not set/invalid.
 func GetScrapeInterval() time.Duration {
-	return ParseDurationOrDefault("SCRAPE_INTERVAL", DefaultScrapeInterval)
+	return configenv.ParseDurationOrDefault("SCRAPE_INTERVAL", DefaultScrapeInterval)
 }
 
 // GetScrapeTimeout returns the scrape timeout from SCRAPE_TIMEOUT env var,
 // or the default timeout if not set/invalid.
 func GetScrapeTimeout() time.Duration {
-	return ParseDurationOrDefault("SCRAPE_TIMEOUT", DefaultScrapeTimeout)
+	return configenv.ParseDurationOrDefault("SCRAPE_TIMEOUT", DefaultScrapeTimeout)
 }
 
 // GetListenAddr returns the HTTP listen address from LISTEN_ADDR env var,
 // or the default address if not set.
 func GetListenAddr() string {
-	return GetEnvOrDefault("LISTEN_ADDR", DefaultListenAddr)
+	return configenv.GetString("LISTEN_ADDR", DefaultListenAddr)
 }
 
 // GetDBPath returns the database path from DB_PATH env var,
 // or the default path if not set.
 func GetDBPath() string {
-	return GetEnvOrDefault("DB_PATH", DefaultDBPath)
+	return configenv.GetString("DB_PATH", DefaultDBPath)
 }
 
 // GetRetention5s returns the retention for 5s data from RETENTION_5S env var,
 // or the default retention if not set/invalid.
 func GetRetention5s() time.Duration {
-	return ParseDurationOrDefault("RETENTION_5S", DefaultRetention5s)
+	return configenv.ParseDurationOrDefault("RETENTION_5S", DefaultRetention5s)
 }
 
 // GetRetention1m returns the retention for 1m data from RETENTION_1M env var,
 // or the default retention if not set/invalid.
 func GetRetention1m() time.Duration {
-	return ParseDurationOrDefault("RETENTION_1M", DefaultRetention1m)
+	return configenv.ParseDurationOrDefault("RETENTION_1M", DefaultRetention1m)
 }
