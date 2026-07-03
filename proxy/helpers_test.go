@@ -702,6 +702,10 @@ func TestHelperFunctions(t *testing.T) {
 	})
 }
 
+// ============================================================================
+// Mock Upstream Tests
+// ============================================================================
+
 // TestMockUpstreamBasic tests basic mock upstream functionality
 func TestMockUpstreamBasic(t *testing.T) {
 	t.Run("success scenario", func(t *testing.T) {
