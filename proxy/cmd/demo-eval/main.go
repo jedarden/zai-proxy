@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"git.ardenone.com/jedarden/zai-proxy/evaluation"
+	"git.ardenone.com/jedarden/zai-proxy/proxy/evaluation"
 )
 
 func main() {

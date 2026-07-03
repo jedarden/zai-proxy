@@ -358,11 +358,11 @@ func TestMetricsExportFormat(t *testing.T) {
 
 	// Collect metrics in Prometheus text format
 	metadata := `
-		# HELP zai_proxy_tokens_total Total number of tokens processed by direction (input/output), model, and deployment variant (stable/canary)
+		# HELP zai_proxy_tokens_total Total number of tokens processed by direction (input/output), model, deployment variant, and pricing tier
 		# TYPE zai_proxy_tokens_total counter
 	`
-	expectedInputLine := `zai_proxy_tokens_total{direction="input",model="glm-4",variant="stable"} 100`
-	expectedOutputLine := `zai_proxy_tokens_total{direction="output",model="glm-4",variant="stable"} 200`
+	expectedInputLine := `zai_proxy_tokens_total{direction="input",model="glm-4",variant="stable",pricing_tier="off_peak"} 100`
+	expectedOutputLine := `zai_proxy_tokens_total{direction="output",model="glm-4",variant="stable",pricing_tier="off_peak"} 200`
 
 	// Verify metric can be collected
 	if err := testutil.CollectAndCompare(tokensTotal, strings.NewReader(metadata+expectedInputLine+"\n"+expectedOutputLine+"\n")); err != nil {
