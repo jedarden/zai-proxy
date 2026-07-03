@@ -9,8 +9,8 @@ The zai-proxy service supports **dual deployment mode** for safe testing and gra
 | Deployment | Service Name | Purpose | Endpoint URL |
 |------------|--------------|---------|--------------|
 | **Production** | `zai-proxy.devpod.svc.cluster.local:8080` | Live traffic | `http://zai-proxy.devpod.svc.cluster.local:8080/api/anthropic` |
-| **Canary** | `zai-proxy-test.mcp.svc.cluster.local:8080` | Testing new versions | `http://zai-proxy-test.devpod.svc.cluster.local:8080/api/anthropic` |
-| **Split Traffic** | `zai-proxy-canary.mcp.svc.cluster.local:8080` | Weighted traffic split | `http://zai-proxy-canary.devpod.svc.cluster.local:8080/api/anthropic` |
+| **Canary** | `zai-proxy-test.devpod.svc.cluster.local:8080` | Testing new versions | `http://zai-proxy-test.devpod.svc.cluster.local:8080/api/anthropic` |
+| **Split Traffic** | `zai-proxy-canary.devpod.svc.cluster.local:8080` | Weighted traffic split | `http://zai-proxy-canary.devpod.svc.cluster.local:8080/api/anthropic` |
 
 ## Architecture
 
@@ -123,11 +123,11 @@ curl -s http://zai-proxy.devpod.svc.cluster.local:8080/health
 # Expected: {"status":"ok"}
 
 # Test canary endpoint
-curl -s http://zai-proxy-test.mcp.svc.cluster.local:8080/health
+curl -s http://zai-proxy-test.devpod.svc.cluster.local:8080/health
 # Expected: {"status":"ok"}
 
 # Test split traffic endpoint
-curl -s http://zai-proxy-canary.mcp.svc.cluster.local:8080/health
+curl -s http://zai-proxy-canary.devpod.svc.cluster.local:8080/health
 # Expected: {"status":"ok"}
 ```
 
@@ -136,7 +136,7 @@ curl -s http://zai-proxy-canary.mcp.svc.cluster.local:8080/health
 ```bash
 # From within a devpod, check DNS resolution
 nslookup zai-proxy.devpod.svc.cluster.local
-nslookup zai-proxy-test.mcp.svc.cluster.local
+nslookup zai-proxy-test.devpod.svc.cluster.local
 
 # Check service endpoints
 kubectl get endpoints -n mcp | grep zai-proxy
@@ -195,10 +195,10 @@ br create "Test canary endpoint connectivity" \
 
 ```bash
 # Check canary proxy metrics
-curl -s http://zai-proxy-test.mcp.svc.cluster.local:8080/metrics | grep zai_proxy_requests_total
+curl -s http://zai-proxy-test.devpod.svc.cluster.local:8080/metrics | grep zai_proxy_requests_total
 
 # Verify variant label in metrics
-curl -s http://zai-proxy-test.mcp.svc.cluster.local:8080/metrics | grep deployment_variant
+curl -s http://zai-proxy-test.devpod.svc.cluster.local:8080/metrics | grep deployment_variant
 # Should show: deployment_variant="canary"
 ```
 
@@ -223,7 +223,7 @@ curl -s http://zai-proxy-test.mcp.svc.cluster.local:8080/metrics | grep deployme
 
 - [ ] **Run smoke tests on canary endpoint**
   ```bash
-  curl -X POST http://zai-proxy-test.mcp.svc.cluster.local:8080/v1/messages \
+  curl -X POST http://zai-proxy-test.devpod.svc.cluster.local:8080/v1/messages \
     -H "Content-Type: application/json" \
     -H "x-api-key: $ZAI_API_KEY" \
     -d '{"model":"claude-3-sonnet","messages":[{"role":"user","content":"test"}],"max_tokens":10}'
@@ -231,7 +231,7 @@ curl -s http://zai-proxy-test.mcp.svc.cluster.local:8080/metrics | grep deployme
 
 - [ ] **Review canary metrics for baseline**
   ```bash
-  curl -s http://zai-proxy-test.mcp.svc.cluster.local:8080/metrics
+  curl -s http://zai-proxy-test.devpod.svc.cluster.local:8080/metrics
   ```
 
 ### Migration
@@ -434,9 +434,9 @@ histogram_quantile(0.95,
 | Canary | `http://zai-proxy-test.devpod.svc.cluster.local:8080/api/anthropic` | Testing new versions |
 | Split | `http://zai-proxy-canary.devpod.svc.cluster.local:8080/api/anthropic` | Weighted traffic splitting |
 | Metrics (Prod) | `http://zai-proxy.devpod.svc.cluster.local:8080/metrics` | Production metrics |
-| Metrics (Canary) | `http://zai-proxy-test.mcp.svc.cluster.local:8080/metrics` | Canary metrics |
+| Metrics (Canary) | `http://zai-proxy-test.devpod.svc.cluster.local:8080/metrics` | Canary metrics |
 | Health (Prod) | `http://zai-proxy.devpod.svc.cluster.local:8080/health` | Production health check |
-| Health (Canary) | `http://zai-proxy-test.mcp.svc.cluster.local:8080/health` | Canary health check |
+| Health (Canary) | `http://zai-proxy-test.devpod.svc.cluster.local:8080/health` | Canary health check |
 
 ## Summary
 

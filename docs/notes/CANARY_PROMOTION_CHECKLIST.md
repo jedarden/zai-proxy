@@ -40,13 +40,13 @@ kubectl rollout undo deployment/zai-proxy -n mcp
 
 - [ ] Canary is receiving traffic (if using split traffic)
   ```bash
-  curl -s http://zai-proxy-test.mcp.svc.cluster.local:8080/metrics | grep zai_proxy_requests_total
+  curl -s http://zai-proxy-test.devpod.svc.cluster.local:8080/metrics | grep zai_proxy_requests_total
   ```
 
 ### Functional Testing
 - [ ] Health endpoint responds
   ```bash
-  curl -s http://zai-proxy-test.mcp.svc.cluster.local:8080/health
+  curl -s http://zai-proxy-test.devpod.svc.cluster.local:8080/health
   ```
   Expected: `{"status":"ok"}`
 
@@ -58,7 +58,7 @@ kubectl rollout undo deployment/zai-proxy -n mcp
 
 - [ ] Metrics are being exported
   ```bash
-  curl -s http://zai-proxy-test.mcp.svc.cluster.local:8080/metrics | grep zai_proxy_tokens_total
+  curl -s http://zai-proxy-test.devpod.svc.cluster.local:8080/metrics | grep zai_proxy_tokens_total
   ```
   Expected: Metrics with `variant="test"` label
 

@@ -413,7 +413,7 @@ kubectl get svc zai-proxy-test -n mcp
 kubectl get endpoints zai-proxy-test -n mcp
 
 # Test from devpod
-curl -s http://zai-proxy-test.mcp.svc.cluster.local:8080/health
+curl -s http://zai-proxy-test.devpod.svc.cluster.local:8080/health
 
 # Check service selector matches pods
 kubectl get svc zai-proxy-test -n mcp \

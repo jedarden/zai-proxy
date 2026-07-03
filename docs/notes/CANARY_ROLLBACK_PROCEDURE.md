@@ -408,7 +408,7 @@ br create "Fix canary high error rate - vVERSION" \
 # Query: histogram_quantile(0.90, sum(rate(zai_proxy_request_duration_seconds_bucket{variant="test"}[5m])) by (le))
 
 # 2. Check token counting overhead
-curl -s http://zai-proxy-test.mcp.svc.cluster.local:8080/metrics | \
+curl -s http://zai-proxy-test.devpod.svc.cluster.local:8080/metrics | \
   grep zai_proxy_token_count_duration_seconds
 
 # 3. If token counting is slow (>100ms p99), disable it temporarily
@@ -560,7 +560,7 @@ grep -r "zai-proxy" ~/.beads-workers/*.log
 
 # 4. If workers pointing to canary service, update them
 # Workers should use: http://zai-proxy.devpod.svc.cluster.local:8080
-# NOT: http://zai-proxy-canary.mcp.svc.cluster.local:8080
+# NOT: http://zai-proxy-canary.devpod.svc.cluster.local:8080
 
 # 5. Restart affected workers
 # Find worker session
