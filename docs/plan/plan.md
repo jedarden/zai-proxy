@@ -1,6 +1,6 @@
 # ZAI Proxy Ecosystem — Plan
 
-**Last updated:** 2026-07-02
+**Last updated:** 2026-07-20
 **Version:** proxy/1.10.0, dashboard/1.1.0
 
 ## Objective
@@ -433,3 +433,94 @@ Workers reach the proxy via cluster-internal DNS:
 - [x] Retire `ardenone-cluster/containers/zai-proxy` and `containers/zai-proxy-dashboard` once builds verified from new repo
 
 **Migration complete as of 2026-06-21.** The zai-proxy project now lives at `git.ardenone.com/jedarden/zai-proxy` with CI/CD workflow templates deployed via ArgoCD.
+
+## ADR-1: 2026-07-20 — Dashboard metrics storage: drop the PVC-backed SQLite dependency, go stateless
+
+### Context
+
+A 2026-07-20 live-artifact check of the `devpod` namespace on `ardenone-cluster` found
+`zai-proxy-dashboard` non-functional in production, and has apparently been so for weeks:
+
+- `zai-proxy-dashboard-5ff6b485f-5fpn6`: `CrashLoopBackOff`, 14,569 restarts over 51 days.
+  `--previous` logs show: `failed to initialize storage ... unable to open database file:
+  out of memory (14)`.
+- `zai-proxy-dashboard-b9fd57878-thc4t`: stuck `ContainerCreating` for 36 days — a second
+  ReplicaSet fighting the first for the single `ReadWriteOnce` PVC (`zai-proxy-dashboard-data`,
+  Longhorn), which can only attach to one node/pod at a time.
+- The public URL (`https://zai-dash.ardenone.com/`) returns `503 no available server` —
+  confirmed by direct curl during this audit.
+
+Root cause chain: `dashboard/main.go` treats storage initialization as fatal
+(`os.Exit(1)` if `storage.NewStorage()` fails), with no in-memory/degraded fallback. Any
+hiccup opening the SQLite file on the Longhorn-backed PVC takes the entire dashboard
+offline, and because the volume is RWO, a wedged old pod can block the replacement pod's
+attach — turning a transient storage error into a weeks-long outage that nothing alerted
+on (the dashboard itself is the thing that would have shown the alert).
+
+Meanwhile, the same metrics this dashboard exists to serve are already durably captured
+elsewhere: `k8s/ardenone-cluster/devpod/zai-proxy-servicemonitor.yml` has Prometheus
+(`kube-prometheus-stack`, confirmed live, `retention: 10d`) scraping `/metrics` from both
+`zai-proxy` (routes to v2 pods) and `zai-proxy-canary` every 15s, and
+`k8s/ardenone-cluster/monitoring/grafana-dashboard-zai-proxy.yml` already renders
+essentially the same panel set (throughput, latency percentiles, error rate, token rate,
+rate-limiter state) straight from Prometheus. The custom dashboard's SQLite tables
+(`metrics_5s`/24h, `metrics_1m`/7d) are therefore redundant history — Prometheus already
+retains equal-or-longer history at comparable resolution. The genuinely differentiated
+value of the Go+React dashboard is the live SSE push experience (sub-5s updates, variant
+toggle, connection status, loading skeleton) — none of which requires durable storage.
+
+### Decision
+
+Make the dashboard backend stateless: replace the PVC-backed SQLite store with an
+in-process, bounded in-memory ring buffer (sized for the documented 24h@5s / 7d@1m
+windows — a few thousand small structs, trivially within the existing 256Mi limit) for
+serving `/api/metrics`, `/api/status`, and the SSE stream. Drop the
+`zai-proxy-dashboard-data` PVC and the Longhorn dependency entirely. On pod restart the
+in-memory window starts empty and refills over subsequent scrape cycles — acceptable
+because Grafana remains the system of record for anything older than the live view, and
+the frontend's existing "history backfill on connect" behavior already tolerates a thin
+initial window.
+
+### Alternatives Considered
+
+1. **Keep SQLite, switch to `emptyDir`** (what this plan originally documented as the
+   design, before the PVC was actually added). Fixes the RWO multi-attach/stuck-rollout
+   half of the incident but not the fragility half: node drain/pod eviction still loses
+   history, and a corrupt or ENOMEM-prone SQLite open still hits the same fatal
+   `os.Exit(1)` path. Rejected as only a partial fix.
+2. **Fix the immediate incident (stuck ReplicaSet + PVC) and leave the architecture as
+   is.** Cheapest, restores service fastest, but leaves the exact failure class in place
+   to recur — which is how it went unnoticed for 51+ days in the first place. Tracked
+   separately as a near-term tactical bead; not sufficient alone as the long-term
+   answer.
+3. **Make storage-init failures non-fatal (log + run in degraded in-memory mode) but
+   keep SQLite+PVC for the common case.** Smaller diff, preserves durable history across
+   ordinary restarts. Rejected as the primary decision because it still carries the
+   RWO/Longhorn operational risk that caused half of this outage — but it's a reasonable
+   defense-in-depth addition regardless of which storage backend wins (see Consequences).
+4. **Point the dashboard's storage layer at Prometheus via PromQL range queries** instead
+   of an in-memory buffer, avoiding re-implementing retention/downsampling logic.
+   Rejected for this first cut because it adds a new runtime dependency (dashboard →
+   Prometheus reachability) and a PromQL query layer; worth revisiting once the
+   stateless rewrite ships, as a way to extend the dashboard's default ranges past the
+   in-memory window using Prometheus's 10d+ retention.
+
+### Consequences
+
+- Eliminates the PVC/Longhorn failure mode entirely for this component — removes the
+  exact bug class that caused the current 51+ day outage.
+- Dashboard becomes trivially horizontally scalable (no RWO volume contention), closing
+  the way for running it as more than a single replica.
+- Loses metrics history across pod restarts/redeploys. Anyone needing history beyond the
+  live window should be pointed at the existing Grafana dashboard, which already has
+  equivalent panels with comparable-or-longer retention.
+- Simplifies `k8s/ardenone-cluster/devpod/zai-proxy-dashboard.yml`: drop the PVC,
+  `storageClassName: longhorn`, and the volume mount.
+- Should be paired with making storage-layer errors non-fatal in general (Alternative 3)
+  as defense in depth, so a future storage bug degrades the dashboard instead of taking
+  it down entirely.
+
+Tracked via beads: restoring the current outage is a near-term tactical fix; the
+stateless storage rewrite this ADR commits to is tracked as follow-up implementation
+work against `dashboard/storage/`, `dashboard/main.go`, and
+`k8s/ardenone-cluster/devpod/zai-proxy-dashboard.yml` (in `jedarden/declarative-config`).
