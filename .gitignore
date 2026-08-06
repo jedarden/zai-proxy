@@ -16,7 +16,11 @@ node_modules/
 npm-debug.log*
 
 # Beads
-.beads/
+# Bead store: SQLite and history stay local; the JSONL checkpoint is tracked.
+# Must be `.beads/*`, not `.beads/` — git cannot re-include a file whose
+# parent directory is excluded.
+.beads/*
+!.beads/issues.jsonl
 
 # Test output artifacts
 test-output*.txt
