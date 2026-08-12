@@ -1206,6 +1206,9 @@ func TestAdaptiveRateLimiter_BasicGetCurrentRate(t *testing.T) {
 
 // TestAdaptiveRateLimiter_BasicEdgeCases tests basic edge cases
 func TestAdaptiveRateLimiter_BasicEdgeCases(t *testing.T) {
+	// Use injected window duration for fast test execution without sleep calls
+	testWindow := 10 * time.Millisecond
+
 	tests := []struct {
 		name        string
 		initialRate float64
@@ -1219,31 +1222,44 @@ func TestAdaptiveRateLimiter_BasicEdgeCases(t *testing.T) {
 			maxRate:     25.0,
 		},
 		{
-			name:        "zero ceiling (initialRate starts at 0)",
+			name:        "zero initial rate and ceiling",
 			initialRate: 0.0,
 			minRate:     0.0,
 			maxRate:     100.0,
 		},
 		{
-			name:        "very small min",
+			name:        "very small min values",
 			initialRate: 1.0,
-			minRate:     0.1,
+			minRate:     0.001,
 			maxRate:     100.0,
 		},
 		{
-			name:        "large max",
+			name:        "large max values",
 			initialRate: 1000.0,
 			minRate:     1.0,
-			maxRate:     10000.0,
+			maxRate:     100000.0,
+		},
+		{
+			name:        "extremely small range",
+			initialRate: 5.0,
+			minRate:     5.0,
+			maxRate:     5.001,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Should not panic on construction
-			arl := NewAdaptiveRateLimiter(tt.initialRate, tt.minRate, tt.maxRate)
+			defer func() {
+				// Should not panic on any edge case input
+				if r := recover(); r != nil {
+					t.Errorf("Unexpected panic on edge case %+v: %v", tt, r)
+				}
+			}()
 
-			// Should return valid current rate
+			// Use injected window duration for fast tests
+			arl := NewAdaptiveRateLimiterWithWindow(tt.initialRate, tt.minRate, tt.maxRate, testWindow)
+
+			// Should return valid current rate within bounds
 			currentRate := arl.GetCurrentRate()
 			if currentRate < tt.minRate || currentRate > tt.maxRate {
 				t.Errorf("Initial rate %.2f out of bounds [%.2f, %.2f]",
@@ -1257,21 +1273,39 @@ func TestAdaptiveRateLimiter_BasicEdgeCases(t *testing.T) {
 					tt.initialRate, got)
 			}
 
-			// For min==max case, verify rate stays constant
-			if tt.minRate == tt.maxRate {
-				for i := 0; i < 50; i++ {
+			// For min==max case, verify rate stays constant even after adjustments
+			if tt.minRate == tt.maxRate || tt.maxRate-tt.minRate < 0.01 {
+				// Apply adjustment pressure with 429s
+				for i := 0; i < 100; i++ {
 					arl.Record429()
 				}
+
+				// Force window advancement using injected duration
 				arl.mu.Lock()
-				arl.lastAdjustment = arl.lastAdjustment.Add(-arl.adjustmentWindow - 1*time.Second)
+				arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
 				arl.mu.Unlock()
 				arl.Record429()
 
-				// Rate should still be at min/max
+				// Rate should still be at min/max (fixed rate behavior)
 				currentRate = arl.GetCurrentRate()
-				if currentRate != tt.minRate {
-					t.Errorf("With min==max, rate should stay %.2f, got %.2f",
-						tt.minRate, currentRate)
+				if currentRate < tt.minRate || currentRate > tt.maxRate {
+					t.Errorf("With min≈max, rate should stay in [%.2f, %.2f], got %.2f",
+						tt.minRate, tt.maxRate, currentRate)
+				}
+
+				// Also verify with success pressure
+				for i := 0; i < 1000; i++ {
+					arl.RecordSuccess()
+				}
+				arl.mu.Lock()
+				arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
+				arl.mu.Unlock()
+				arl.RecordSuccess()
+
+				currentRate = arl.GetCurrentRate()
+				if currentRate < tt.minRate || currentRate > tt.maxRate {
+					t.Errorf("With min≈max, rate should stay in [%.2f, %.2f] even with success pressure, got %.2f",
+						tt.minRate, tt.maxRate, currentRate)
 				}
 			}
 		})
