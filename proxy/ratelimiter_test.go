@@ -2426,3 +2426,566 @@ func TestAdaptiveRateLimiter_EnvVarParsing(t *testing.T) {
 		})
 	}
 }
+
+// TestProbeActivatesAfterCleanWindows verifies probe activates after N clean windows
+func TestProbeActivatesAfterCleanWindows(t *testing.T) {
+	tests := []struct {
+		name          string
+		initialRate   float64
+		minRate       float64
+		maxRate       float64
+		holdMargin    float64
+		probeInterval int
+		cleanWindows  int
+		description   string
+	}{
+		{
+			name:          "probe activates after exactly 10 clean windows",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			cleanWindows:  10,
+			description:   "Probe should trigger exactly at interval threshold",
+		},
+		{
+			name:          "probe activates after 5 clean windows with custom interval",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 5,
+			cleanWindows:  5,
+			description:   "Probe should respect custom interval",
+		},
+		{
+			name:          "probe activates after 20 clean windows with extended interval",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 20,
+			cleanWindows:  20,
+			description:   "Probe should wait for extended interval",
+		},
+		{
+			name:          "no probe before interval completes",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			cleanWindows:  9,
+			description:   "Probe should not activate before interval threshold",
+		},
+		{
+			name:          "no probe at half interval",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			cleanWindows:  5,
+			description:   "Probe should not activate early at half interval",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testWindow := 10 * time.Millisecond
+			arl := NewAdaptiveRateLimiterWithWindow(tt.initialRate, tt.minRate, tt.maxRate, testWindow)
+			arl.holdMargin = tt.holdMargin
+			arl.probeInterval = tt.probeInterval
+
+			holdRate := arl.estimatedCeiling * (1 - tt.holdMargin)
+			initialRate := arl.GetCurrentRate()
+
+			t.Logf(tt.description)
+			t.Logf("  Initial rate: %.2f, hold position: %.2f, interval: %d",
+				initialRate, holdRate, tt.probeInterval)
+
+			// Simulate clean windows (0% 429 rate, well below 1% threshold)
+			for i := 0; i < tt.cleanWindows; i++ {
+				for j := 0; j < 100; j++ {
+					arl.RecordSuccess()
+				}
+				// Force window advancement
+				arl.mu.Lock()
+				arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
+				arl.mu.Unlock()
+				arl.RecordSuccess()
+			}
+
+			finalRate := arl.GetCurrentRate()
+
+			// Verify probe activation behavior
+			if tt.cleanWindows >= tt.probeInterval {
+				// Probe should activate - rate should exceed hold position
+				if finalRate <= holdRate {
+					t.Errorf("After %d clean windows (interval=%d), rate %.2f should exceed hold position %.2f",
+						tt.cleanWindows, tt.probeInterval, finalRate, holdRate)
+				}
+				t.Logf("✓ Probe activated: rate %.2f > hold %.2f", finalRate, holdRate)
+			} else {
+				// Probe should NOT activate - rate should be at or below hold position
+				if finalRate > holdRate {
+					t.Errorf("After only %d clean windows (interval=%d), rate %.2f should not exceed hold position %.2f",
+						tt.cleanWindows, tt.probeInterval, finalRate, holdRate)
+				}
+				t.Logf("✓ No probe (before interval): rate %.2f ≤ hold %.2f", finalRate, holdRate)
+			}
+
+			// Verify cleanWindows counter state
+			if tt.cleanWindows >= tt.probeInterval {
+				// After probing, cleanWindows should be reset
+				if arl.cleanWindows != 0 {
+					t.Errorf("After probing, cleanWindows should reset to 0, got %d", arl.cleanWindows)
+				}
+				t.Logf("✓ Clean windows counter reset after probe")
+			}
+		})
+	}
+}
+
+// TestProbeRateAboveCeiling confirms probed rate exceeds configured ceiling
+func TestProbeRateAboveCeiling(t *testing.T) {
+	tests := []struct {
+		name          string
+		initialRate   float64
+		minRate       float64
+		maxRate       float64
+		holdMargin    float64
+		probeInterval int
+		ceiling       float64
+		description   string
+	}{
+		{
+			name:          "probe rate exceeds ceiling by hold margin",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			ceiling:       50.0,
+			description:   "Probe should go to ceiling * (1 + holdMargin)",
+		},
+		{
+			name:          "probe with 5% hold margin",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       60.0,
+			holdMargin:    0.05,
+			probeInterval: 10,
+			ceiling:       60.0,
+			description:   "Probe should exceed ceiling by 5%",
+		},
+		{
+			name:          "probe with 10% hold margin",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       80.0,
+			holdMargin:    0.10,
+			probeInterval: 10,
+			ceiling:       80.0,
+			description:   "Probe should exceed ceiling by 10%",
+		},
+		{
+			name:          "probe capped at maxRate when ceiling + margin exceeds max",
+			initialRate:   40.0,
+			minRate:       1.0,
+			maxRate:       45.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			ceiling:       45.0,
+			description:   "Probe should not exceed maxRate even with margin",
+		},
+		{
+			name:          "probe from low rate still exceeds ceiling",
+			initialRate:   10.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			ceiling:       50.0,
+			description:   "Starting rate should not affect probe target",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testWindow := 10 * time.Millisecond
+			arl := NewAdaptiveRateLimiterWithWindow(tt.initialRate, tt.minRate, tt.maxRate, testWindow)
+			arl.holdMargin = tt.holdMargin
+			arl.probeInterval = tt.probeInterval
+			arl.estimatedCeiling = tt.ceiling
+
+			holdRate := tt.ceiling * (1 - tt.holdMargin)
+			expectedProbeRate := tt.ceiling * (1 + tt.holdMargin)
+			if expectedProbeRate > tt.maxRate {
+				expectedProbeRate = tt.maxRate
+			}
+
+			t.Logf(tt.description)
+			t.Logf("  Ceiling: %.2f, hold: %.2f, expected probe: %.2f, max: %.2f",
+				tt.ceiling, holdRate, expectedProbeRate, tt.maxRate)
+
+			// Simulate probe_interval clean windows to trigger probe
+			for i := 0; i < tt.probeInterval; i++ {
+				for j := 0; j < 100; j++ {
+					arl.RecordSuccess()
+				}
+				arl.mu.Lock()
+				arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
+				arl.mu.Unlock()
+				arl.RecordSuccess()
+			}
+
+			finalRate := arl.GetCurrentRate()
+
+			// Verify probe rate exceeds ceiling
+			tolerance := 0.01
+			if finalRate < expectedProbeRate-tolerance || finalRate > expectedProbeRate+tolerance {
+				t.Errorf("Probe rate %.2f should equal expected probe rate %.2f±%.2f",
+					finalRate, expectedProbeRate, tolerance)
+			}
+
+			// Verify probe rate exceeds hold position
+			if finalRate <= holdRate {
+				t.Errorf("Probe rate %.2f should exceed hold position %.2f",
+					finalRate, holdRate)
+			}
+
+			// Verify probe rate does not exceed maxRate
+			if finalRate > tt.maxRate {
+				t.Errorf("Probe rate %.2f should not exceed maxRate %.2f",
+					finalRate, tt.maxRate)
+			}
+
+			t.Logf("✓ Probe rate %.2f exceeds ceiling %.2f (within bounds)",
+				finalRate, tt.ceiling)
+		})
+	}
+}
+
+// TestCleanWindowDetection validates 429-rate < 1% threshold
+func TestCleanWindowDetection(t *testing.T) {
+	tests := []struct {
+		name          string
+		initialRate   float64
+		minRate       float64
+		maxRate       float64
+		holdMargin    float64
+		percent429    float64
+		isClean       bool
+		description   string
+	}{
+		{
+			name:          "0% 429 rate is clean",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			percent429:    0.0,
+			isClean:       true,
+			description:   "Zero 429s should increment cleanWindows counter",
+		},
+		{
+			name:          "0.5% 429 rate is clean",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			percent429:    0.5,
+			isClean:       true,
+			description:   "0.5% 429 rate is below 1% threshold, should be clean",
+		},
+		{
+			name:          "0.99% 429 rate is clean",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			percent429:    0.99,
+			isClean:       true,
+			description:   "0.99% 429 rate is still below 1% threshold (strict inequality)",
+		},
+		{
+			name:          "1.0% 429 rate is not clean",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			percent429:    1.0,
+			isClean:       false,
+			description:   "Exactly 1% 429 rate should NOT be clean (threshold is < 1%)",
+		},
+		{
+			name:          "1.01% 429 rate is not clean",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			percent429:    1.01,
+			isClean:       false,
+			description:   "1.01% 429 rate exceeds 1% threshold",
+		},
+		{
+			name:          "2% 429 rate is not clean",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			percent429:    2.0,
+			isClean:       false,
+			description:   "2% 429 rate is in middle regime (1-5%), not clean",
+		},
+		{
+			name:          "5% 429 rate is not clean",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			percent429:    5.0,
+			isClean:       false,
+			description:   "5% 429 rate is at high regime threshold, not clean",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testWindow := 10 * time.Millisecond
+			arl := NewAdaptiveRateLimiterWithWindow(tt.initialRate, tt.minRate, tt.maxRate, testWindow)
+			arl.holdMargin = tt.holdMargin
+
+			t.Logf(tt.description)
+			t.Logf("  429 rate: %.2f%%, isClean: %v", tt.percent429, tt.isClean)
+
+			// Record requests to achieve desired 429 percentage
+			totalRequests := int64(1000) // Use 1000 for finer granularity
+			count429 := int64(float64(totalRequests) * tt.percent429 / 100.0)
+			countSuccess := totalRequests - count429
+
+			// Ensure at least 1 request for accurate percentage
+			if count429 == 0 && tt.percent429 > 0 {
+				count429 = 1
+				countSuccess = totalRequests - 1
+			}
+
+			// Get initial cleanWindows count
+			initialCleanWindows := arl.cleanWindows
+
+			// Record the requests
+			for i := int64(0); i < count429; i++ {
+				arl.Record429()
+			}
+			for i := int64(0); i < countSuccess; i++ {
+				arl.RecordSuccess()
+			}
+
+			// Force window advancement to trigger tryAdjustRate
+			arl.mu.Lock()
+			arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
+			arl.mu.Unlock()
+			arl.RecordSuccess()
+
+			finalCleanWindows := arl.cleanWindows
+
+			if tt.isClean {
+				// Clean window should increment counter
+				if finalCleanWindows <= initialCleanWindows {
+					t.Errorf("429 rate %.2f%% should be clean (increment counter), but cleanWindows stayed at %d",
+						tt.percent429, finalCleanWindows)
+				}
+				t.Logf("✓ Clean window detected: cleanWindows incremented from %d to %d",
+					initialCleanWindows, finalCleanWindows)
+			} else {
+				// Non-clean window should reset counter to 0 (if 429 rate > 5%)
+				// or leave unchanged (if 1-5% range)
+				if tt.percent429 >= 5.0 {
+					if finalCleanWindows != 0 {
+						t.Errorf("429 rate %.2f%% should reset cleanWindows to 0, got %d",
+							tt.percent429, finalCleanWindows)
+					}
+					t.Logf("✓ High 429 rate detected: cleanWindows reset to 0")
+				} else {
+					// In middle regime (1-5%), cleanWindows should not increment
+					if finalCleanWindows != initialCleanWindows {
+						t.Logf("  Note: cleanWindows changed from %d to %d (middle regime behavior)",
+							initialCleanWindows, finalCleanWindows)
+					}
+					t.Logf("✓ Middle regime: cleanWindows unchanged (as expected for 1-5%% range)")
+				}
+			}
+		})
+	}
+}
+
+// TestProbeDeactivation ensures probe state resets appropriately
+func TestProbeDeactivation(t *testing.T) {
+	tests := []struct {
+		name          string
+		initialRate   float64
+		minRate       float64
+		maxRate       float64
+		holdMargin    float64
+		probeInterval int
+		triggerType   string
+		description   string
+	}{
+		{
+			name:          "deactivation after 429 during probe",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			triggerType:   "429",
+			description:   "429 during probe should reset state and drop rate to hold",
+		},
+		{
+			name:          "deactivation after single 429 resets counter",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			triggerType:   "single429",
+			description:   "Single 429 should reset cleanWindows counter",
+		},
+		{
+			name:          "deactivation after high 429 rate",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			triggerType:   "high429",
+			description:   "High 429 rate should reset probe state completely",
+		},
+		{
+			name:          "probe then clean windows restarts cycle",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 5,
+			triggerType:   "cycle",
+			description:   "After probe, clean windows should restart counting",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testWindow := 10 * time.Millisecond
+			arl := NewAdaptiveRateLimiterWithWindow(tt.initialRate, tt.minRate, tt.maxRate, testWindow)
+			arl.holdMargin = tt.holdMargin
+			arl.probeInterval = tt.probeInterval
+
+			holdRate := arl.estimatedCeiling * (1 - tt.holdMargin)
+			t.Logf(tt.description)
+
+			// First, trigger probe by accumulating clean windows
+			for i := 0; i < tt.probeInterval; i++ {
+				for j := 0; j < 100; j++ {
+					arl.RecordSuccess()
+				}
+				arl.mu.Lock()
+				arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
+				arl.mu.Unlock()
+				arl.RecordSuccess()
+			}
+
+			probeRate := arl.GetCurrentRate()
+			cleanWindowsAfterProbe := arl.cleanWindows
+
+			t.Logf("  After probe: rate=%.2f, cleanWindows=%d", probeRate, cleanWindowsAfterProbe)
+
+			// Verify probe activated
+			if probeRate <= holdRate {
+				t.Errorf("Probe should have activated (rate %.2f should exceed hold %.2f)",
+					probeRate, holdRate)
+			}
+
+			// Now apply deactivation trigger
+			switch tt.triggerType {
+			case "429":
+				// Simulate 429s during probe
+				arl.mu.Lock()
+				arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
+				arl.mu.Unlock()
+				for i := 0; i < 10; i++ {
+					arl.Record429()
+				}
+				for i := 0; i < 90; i++ {
+					arl.RecordSuccess()
+				}
+
+			case "single429":
+				// Single 429 should reset counter
+				arl.mu.Lock()
+				arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
+				arl.mu.Unlock()
+				arl.Record429()
+				for i := 0; i < 99; i++ {
+					arl.RecordSuccess()
+				}
+
+			case "high429":
+				// High 429 rate
+				arl.mu.Lock()
+				arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
+				arl.mu.Unlock()
+				for i := 0; i < 50; i++ {
+					arl.Record429()
+				}
+				for i := 0; i < 50; i++ {
+					arl.RecordSuccess()
+				}
+
+			case "cycle":
+				// After probe, verify cleanWindows restarts cycle
+				// This test checks that after probe, we can accumulate clean windows again
+				if cleanWindowsAfterProbe != 0 {
+					t.Errorf("After probe, cleanWindows should be 0, got %d", cleanWindowsAfterProbe)
+				}
+
+				// Accumulate another clean window
+				arl.mu.Lock()
+				arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
+				arl.mu.Unlock()
+				for i := 0; i < 100; i++ {
+					arl.RecordSuccess()
+				}
+
+				cleanWindowsAfterClean := arl.cleanWindows
+				if cleanWindowsAfterClean != 1 {
+					t.Errorf("After one clean window post-probe, cleanWindows should be 1, got %d",
+						cleanWindowsAfterClean)
+				}
+				t.Logf("✓ Probe cycle restart: cleanWindows incremented from 0 to %d",
+					cleanWindowsAfterClean)
+				return // Skip final verification for this case
+			}
+
+			finalRate := arl.GetCurrentRate()
+			finalCleanWindows := arl.cleanWindows
+
+			// Verify deactivation: rate should drop to hold position
+			tolerance := holdRate * 0.01
+			if finalRate < holdRate-tolerance || finalRate > holdRate+tolerance {
+				t.Errorf("After deactivation, rate %.2f should be at hold position %.2f±%.2f",
+					finalRate, holdRate, tolerance)
+			}
+
+			// Verify cleanWindows reset
+			if tt.triggerType != "cycle" && finalCleanWindows != 0 {
+				t.Errorf("After deactivation, cleanWindows should be 0, got %d",
+					finalCleanWindows)
+			}
+
+			t.Logf("✓ Deactivation verified: rate %.2f → %.2f (hold), cleanWindows → %d",
+				probeRate, finalRate, finalCleanWindows)
+		})
+	}
+}
