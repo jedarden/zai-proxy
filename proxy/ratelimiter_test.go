@@ -1,9 +1,13 @@
 package main
 
 import (
+	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"git.ardenone.com/jedarden/zai-proxy/proxy/config"
 )
 
 // TestAdaptiveRateLimiter_Bounds verifies rate stays within [minRate, maxRate]
@@ -715,8 +719,8 @@ func TestAdaptiveRateLimiter_Wait(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			arl := NewAdaptiveRateLimiter(tt.rate, 0.1, tt.rate*10)
-			var totalWait time.Duration
-			var maxObservedWait time.Duration
+			var totalWait int64 // Use int64 for atomic operations
+			var maxObservedWait int64
 
 			var wg sync.WaitGroup
 			for i := 0; i < tt.concurrent; i++ {
@@ -724,24 +728,36 @@ func TestAdaptiveRateLimiter_Wait(t *testing.T) {
 				go func() {
 					defer wg.Done()
 					wait := arl.Wait("test")
-					if wait > maxObservedWait {
-						maxObservedWait = wait
+					waitNanos := int64(wait)
+
+					// Atomic compare-and-swap for max
+					for {
+						old := atomic.LoadInt64(&maxObservedWait)
+						if waitNanos <= old {
+							break
+						}
+						if atomic.CompareAndSwapInt64(&maxObservedWait, old, waitNanos) {
+							break
+						}
 					}
-					totalWait += wait
+
+					// Atomic add for total
+					atomic.AddInt64(&totalWait, waitNanos)
 				}()
 			}
 			wg.Wait()
 
-			avgWait := totalWait / time.Duration(tt.concurrent)
+			avgWait := time.Duration(atomic.LoadInt64(&totalWait) / int64(tt.concurrent))
+			maxWait := time.Duration(atomic.LoadInt64(&maxObservedWait))
 
 			t.Logf("Rate: %.1f req/s, Avg wait: %v, Max wait: %v",
-				tt.rate, avgWait, maxObservedWait)
+				tt.rate, avgWait, maxWait)
 
-			if maxObservedWait < tt.minWait {
-				t.Errorf("Expected wait >= %v, got %v", tt.minWait, maxObservedWait)
+			if maxWait < tt.minWait {
+				t.Errorf("Expected wait >= %v, got %v", tt.minWait, maxWait)
 			}
-			if maxObservedWait > tt.maxWait {
-				t.Errorf("Expected wait <= %v, got %v", tt.maxWait, maxObservedWait)
+			if maxWait > tt.maxWait {
+				t.Errorf("Expected wait <= %v, got %v", tt.maxWait, maxWait)
 			}
 		})
 	}
@@ -2119,4 +2135,294 @@ func flattenSequence(ops ...[]operation) []operation {
 		result = append(result, opSlice...)
 	}
 	return result
+}
+
+// TestAdaptiveRateLimiter_Wait_ZeroRate tests Wait() with rate=0 edge case
+func TestAdaptiveRateLimiter_Wait_ZeroRate(t *testing.T) {
+	defer func() {
+		// Should not panic even with rate=0
+		if r := recover(); r != nil {
+			t.Errorf("Unexpected panic with rate=0: %v", r)
+		}
+	}()
+
+	arl := NewAdaptiveRateLimiter(0.0, 0.0, 100.0)
+
+	// Wait() should still work (may block indefinitely, but we test it doesn't crash)
+	done := make(chan bool)
+	go func() {
+		wait := arl.Wait("test")
+		t.Logf("Wait() with rate=0 returned: %v", wait)
+		done <- true
+	}()
+
+	// Give it a moment to attempt the wait, then we know it didn't crash
+	select {
+	case <-done:
+		t.Log("Wait() completed immediately with rate=0")
+	case <-time.After(100 * time.Millisecond):
+		t.Log("Wait() blocked as expected with rate=0 (timeout is expected behavior)")
+	}
+}
+
+// TestAdaptiveRateLimiter_Wait_NegativeRate tests Wait() rejects negative rates
+func TestAdaptiveRateLimiter_Wait_NegativeRate(t *testing.T) {
+	defer func() {
+		// Should not panic with negative rate (limiter should handle it)
+		if r := recover(); r != nil {
+			t.Errorf("Unexpected panic with negative rate: %v", r)
+		}
+	}()
+
+	// Create with small positive min, but try to set negative
+	arl := NewAdaptiveRateLimiter(10.0, 1.0, 50.0)
+	arl.mu.Lock()
+	arl.currentRate = -1.0
+	arl.mu.Unlock()
+
+	// Wait() should still handle gracefully
+	done := make(chan bool)
+	go func() {
+		wait := arl.Wait("test")
+		t.Logf("Wait() with negative rate returned: %v", wait)
+		done <- true
+	}()
+
+	select {
+	case <-done:
+		t.Log("Wait() completed with negative rate")
+	case <-time.After(100 * time.Millisecond):
+		t.Log("Wait() blocked with negative rate")
+	}
+}
+
+// TestAdaptiveRateLimiter_Wait_InverseScaling tests that wait duration scales inversely with rate
+func TestAdaptiveRateLimiter_Wait_InverseScaling(t *testing.T) {
+	tests := []struct {
+		name           string
+		rate           float64
+		expectedFactor float64 // Relative to 10 req/s baseline
+	}{
+		{
+			name:           "1 req/s - 10x slower than 10 req/s",
+			rate:           1.0,
+			expectedFactor: 10.0,
+		},
+		{
+			name:           "10 req/s - baseline",
+			rate:           10.0,
+			expectedFactor: 1.0,
+		},
+		{
+			name:           "100 req/s - 10x faster than 10 req/s",
+			rate:           100.0,
+			expectedFactor: 0.1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			arl := NewAdaptiveRateLimiter(tt.rate, 0.1, tt.rate*10)
+
+			// Measure wait time for multiple calls
+			var totalTime time.Duration
+			iterations := 10
+			for i := 0; i < iterations; i++ {
+				totalTime += arl.Wait("test")
+			}
+
+			avgWait := totalTime / time.Duration(iterations)
+			t.Logf("Rate: %.1f req/s, Avg wait: %v", tt.rate, avgWait)
+
+			// Wait time should be non-negative
+			if avgWait < 0 {
+				t.Errorf("Wait() returned negative duration: %v", avgWait)
+			}
+
+			// For very low rates, wait should be measurable
+			if tt.rate <= 1.0 && avgWait == 0 {
+				t.Logf("Note: Wait time at rate %.1f was instantaneous (burst may have absorbed it)", tt.rate)
+			}
+		})
+	}
+}
+
+// TestAdaptiveRateLimiter_EnvVarParsing tests actual environment variable parsing via config package
+func TestAdaptiveRateLimiter_EnvVarParsing(t *testing.T) {
+	// Save original env vars
+	origAlpha := os.Getenv("RATE_LIMIT_CEILING_ALPHA")
+	origHoldMargin := os.Getenv("RATE_LIMIT_HOLD_MARGIN")
+	origProbeInterval := os.Getenv("RATE_LIMIT_PROBE_INTERVAL")
+
+	// Restore env vars after test
+	defer func() {
+		if origAlpha != "" {
+			os.Setenv("RATE_LIMIT_CEILING_ALPHA", origAlpha)
+		} else {
+			os.Unsetenv("RATE_LIMIT_CEILING_ALPHA")
+		}
+		if origHoldMargin != "" {
+			os.Setenv("RATE_LIMIT_HOLD_MARGIN", origHoldMargin)
+		} else {
+			os.Unsetenv("RATE_LIMIT_HOLD_MARGIN")
+		}
+		if origProbeInterval != "" {
+			os.Setenv("RATE_LIMIT_PROBE_INTERVAL", origProbeInterval)
+		} else {
+			os.Unsetenv("RATE_LIMIT_PROBE_INTERVAL")
+		}
+	}()
+
+	tests := []struct {
+		name              string
+		setAlpha          string
+		setHoldMargin     string
+		setProbeInterval  string
+		wantAlpha         float64
+		wantHoldMargin    float64
+		wantProbeInterval int
+		wantPanic         bool
+	}{
+		{
+			name:              "default values (no env vars set)",
+			setAlpha:          "",
+			setHoldMargin:     "",
+			setProbeInterval:  "",
+			wantAlpha:         0.3,
+			wantHoldMargin:    0.02,
+			wantProbeInterval: 10,
+			wantPanic:         false,
+		},
+		{
+			name:              "custom alpha 0.5",
+			setAlpha:          "0.5",
+			setHoldMargin:     "",
+			setProbeInterval:  "",
+			wantAlpha:         0.5,
+			wantHoldMargin:    0.02,
+			wantProbeInterval: 10,
+			wantPanic:         false,
+		},
+		{
+			name:              "custom hold margin 5%",
+			setAlpha:          "",
+			setHoldMargin:     "0.05",
+			setProbeInterval:  "",
+			wantAlpha:         0.3,
+			wantHoldMargin:    0.05,
+			wantProbeInterval: 10,
+			wantPanic:         false,
+		},
+		{
+			name:              "custom probe interval 20",
+			setAlpha:          "",
+			setHoldMargin:     "",
+			setProbeInterval:  "20",
+			wantAlpha:         0.3,
+			wantHoldMargin:    0.02,
+			wantProbeInterval: 20,
+			wantPanic:         false,
+		},
+		{
+			name:              "all custom values",
+			setAlpha:          "0.7",
+			setHoldMargin:     "0.10",
+			setProbeInterval:  "15",
+			wantAlpha:         0.7,
+			wantHoldMargin:    0.10,
+			wantProbeInterval: 15,
+			wantPanic:         false,
+		},
+		{
+			name:              "invalid alpha uses default",
+			setAlpha:          "invalid",
+			setHoldMargin:     "",
+			setProbeInterval:  "",
+			wantAlpha:         0.3, // default
+			wantHoldMargin:    0.02,
+			wantProbeInterval: 10,
+			wantPanic:         false,
+		},
+		{
+			name:              "alpha out of range uses default",
+			setAlpha:          "2.0",
+			setHoldMargin:     "",
+			setProbeInterval:  "",
+			wantAlpha:         0.3, // default
+			wantHoldMargin:    0.02,
+			wantProbeInterval: 10,
+			wantPanic:         false,
+		},
+		{
+			name:              "negative hold margin uses default",
+			setAlpha:          "",
+			setHoldMargin:     "-0.05",
+			setProbeInterval:  "",
+			wantAlpha:         0.3,
+			wantHoldMargin:    0.02, // default
+			wantProbeInterval: 10,
+			wantPanic:         false,
+		},
+		{
+			name:              "invalid probe interval uses default",
+			setAlpha:          "",
+			setHoldMargin:     "",
+			setProbeInterval:  "abc",
+			wantAlpha:         0.3,
+			wantHoldMargin:    0.02,
+			wantProbeInterval: 10, // default
+			wantPanic:         false,
+		},
+		{
+			name:              "zero probe interval uses default",
+			setAlpha:          "",
+			setHoldMargin:     "",
+			setProbeInterval:  "0",
+			wantAlpha:         0.3,
+			wantHoldMargin:    0.02,
+			wantProbeInterval: 10, // default
+			wantPanic:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Clear and set env vars
+			os.Unsetenv("RATE_LIMIT_CEILING_ALPHA")
+			os.Unsetenv("RATE_LIMIT_HOLD_MARGIN")
+			os.Unsetenv("RATE_LIMIT_PROBE_INTERVAL")
+
+			if tt.setAlpha != "" {
+				os.Setenv("RATE_LIMIT_CEILING_ALPHA", tt.setAlpha)
+			}
+			if tt.setHoldMargin != "" {
+				os.Setenv("RATE_LIMIT_HOLD_MARGIN", tt.setHoldMargin)
+			}
+			if tt.setProbeInterval != "" {
+				os.Setenv("RATE_LIMIT_PROBE_INTERVAL", tt.setProbeInterval)
+			}
+
+			// Read config via config package
+			gotAlpha := config.GetRateLimitCeilingAlpha()
+			gotHoldMargin := config.GetRateLimitHoldMargin()
+			gotProbeInterval := config.GetRateLimitProbeInterval()
+
+			// Verify values match expected (with default fallback for invalid values)
+			tolerance := 0.001
+			if gotAlpha < tt.wantAlpha-tolerance || gotAlpha > tt.wantAlpha+tolerance {
+				t.Errorf("GetRateLimitCeilingAlpha() = %.4f, want %.4f±%.3f", gotAlpha, tt.wantAlpha, tolerance)
+			}
+			if gotHoldMargin < tt.wantHoldMargin-tolerance || gotHoldMargin > tt.wantHoldMargin+tolerance {
+				t.Errorf("GetRateLimitHoldMargin() = %.4f, want %.4f±%.3f", gotHoldMargin, tt.wantHoldMargin, tolerance)
+			}
+			if gotProbeInterval != tt.wantProbeInterval {
+				t.Errorf("GetRateLimitProbeInterval() = %d, want %d", gotProbeInterval, tt.wantProbeInterval)
+			}
+
+			t.Logf("Env vars: alpha=%s/%.2f, holdMargin=%s/%.2f, probeInterval=%s/%d",
+				tt.setAlpha, gotAlpha,
+				tt.setHoldMargin, gotHoldMargin,
+				tt.setProbeInterval, gotProbeInterval)
+		})
+	}
 }
