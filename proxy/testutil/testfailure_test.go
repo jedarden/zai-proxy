@@ -3,6 +3,8 @@ package testutil
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -729,5 +731,412 @@ FAIL`)
 	}
 	if failures[2].FilePath != "" {
 		t.Errorf("TestFour file should be empty, got %q", failures[2].FilePath)
+	}
+}
+
+func TestExportFailuresJSON_Success(t *testing.T) {
+	// Create valid test failures
+	failures := []TestFailure{
+		{
+			TestName:    "TestExampleFunction",
+			FilePath:    "proxy/handlers_test.go",
+			LineNumber:  42,
+			ErrorMessage: "expected 200, got 500",
+			StackTrace: "goroutine 1 [running]:\ntestExampleFunction()\n\t/proxy/handlers_test.go:42",
+		},
+		{
+			TestName:    "TestAnotherFunction",
+			FilePath:    "proxy/ratelimiter_test.go",
+			LineNumber:  15,
+			ErrorMessage: "rate limit exceeded",
+		},
+	}
+
+	// Create temp file for output
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "failures.json")
+
+	// Export to JSON
+	err := ExportFailuresJSON(failures, outputPath)
+	if err != nil {
+		t.Fatalf("ExportFailuresJSON returned error: %v", err)
+	}
+
+	// Verify file was created
+	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
+		t.Fatal("Output file was not created")
+	}
+
+	// Read and verify JSON content
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("Failed to read output file: %v", err)
+	}
+
+	// Verify it's valid JSON
+	var imported []TestFailure
+	if err := json.Unmarshal(data, &imported); err != nil {
+		t.Fatalf("Output is not valid JSON: %v", err)
+	}
+
+	// Verify all failures were exported
+	if len(imported) != len(failures) {
+		t.Errorf("Expected %d failures, got %d", len(failures), len(imported))
+	}
+
+	// Verify first failure matches
+	if imported[0].TestName != failures[0].TestName {
+		t.Errorf("TestName mismatch: got %q, want %q", imported[0].TestName, failures[0].TestName)
+	}
+	if imported[0].FilePath != failures[0].FilePath {
+		t.Errorf("FilePath mismatch: got %q, want %q", imported[0].FilePath, failures[0].FilePath)
+	}
+	if imported[0].ErrorMessage != failures[0].ErrorMessage {
+		t.Errorf("ErrorMessage mismatch: got %q, want %q", imported[0].ErrorMessage, failures[0].ErrorMessage)
+	}
+
+	// Verify JSON is formatted (indented) for readability
+	jsonStr := string(data)
+	if !strings.Contains(jsonStr, "  ") {
+		t.Error("JSON should be indented for readability")
+	}
+	if !strings.Contains(jsonStr, "\n") {
+		t.Error("JSON should contain newlines for readability")
+	}
+}
+
+func TestExportFailuresJSON_MissingTestName(t *testing.T) {
+	// Create failure with missing TestName
+	failures := []TestFailure{
+		{
+			TestName:    "", // Missing required field
+			FilePath:    "proxy/handlers_test.go",
+			LineNumber:  42,
+			ErrorMessage: "expected 200, got 500",
+		},
+	}
+
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "failures.json")
+
+	err := ExportFailuresJSON(failures, outputPath)
+	if err == nil {
+		t.Fatal("Expected validation error for missing TestName, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "missing required field TestName") {
+		t.Errorf("Error message should mention missing TestName, got: %v", err)
+	}
+
+	// Verify no file was created
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Error("Output file should not be created when validation fails")
+	}
+}
+
+func TestExportFailuresJSON_MissingFilePath(t *testing.T) {
+	// Create failure with missing FilePath
+	failures := []TestFailure{
+		{
+			TestName:    "TestExampleFunction",
+			FilePath:    "", // Missing required field
+			LineNumber:  42,
+			ErrorMessage: "expected 200, got 500",
+		},
+	}
+
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "failures.json")
+
+	err := ExportFailuresJSON(failures, outputPath)
+	if err == nil {
+		t.Fatal("Expected validation error for missing FilePath, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "missing required field FilePath") {
+		t.Errorf("Error message should mention missing FilePath, got: %v", err)
+	}
+
+	// Verify no file was created
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Error("Output file should not be created when validation fails")
+	}
+}
+
+func TestExportFailuresJSON_MissingErrorMessage(t *testing.T) {
+	// Create failure with missing ErrorMessage
+	failures := []TestFailure{
+		{
+			TestName:    "TestExampleFunction",
+			FilePath:    "proxy/handlers_test.go",
+			LineNumber:  42,
+			ErrorMessage: "", // Missing required field
+		},
+	}
+
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "failures.json")
+
+	err := ExportFailuresJSON(failures, outputPath)
+	if err == nil {
+		t.Fatal("Expected validation error for missing ErrorMessage, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "missing required field ErrorMessage") {
+		t.Errorf("Error message should mention missing ErrorMessage, got: %v", err)
+	}
+
+	// Verify no file was created
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Error("Output file should not be created when validation fails")
+	}
+}
+
+func TestExportFailuresJSON_EmptyFailures(t *testing.T) {
+	// Export empty failures slice (should succeed)
+	failures := []TestFailure{}
+
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "empty_failures.json")
+
+	err := ExportFailuresJSON(failures, outputPath)
+	if err != nil {
+		t.Fatalf("ExportFailuresJSON with empty slice should succeed, got error: %v", err)
+	}
+
+	// Verify file was created
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("Failed to read output file: %v", err)
+	}
+
+	// Verify it's valid empty JSON array
+	var imported []TestFailure
+	if err := json.Unmarshal(data, &imported); err != nil {
+		t.Fatalf("Output is not valid JSON: %v", err)
+	}
+
+	if len(imported) != 0 {
+		t.Errorf("Expected 0 failures, got %d", len(imported))
+	}
+
+	// Verify JSON contains empty array
+	jsonStr := string(data)
+	if jsonStr != "[]" {
+		t.Errorf("Expected empty JSON array '[]', got: %s", jsonStr)
+	}
+}
+
+func TestExportFailuresJSON_MultipleValidationErrors(t *testing.T) {
+	// Create multiple failures with different validation errors
+	failures := []TestFailure{
+		{
+			TestName:    "TestValidOne",
+			FilePath:    "proxy/test_one.go",
+			LineNumber:  10,
+			ErrorMessage: "error one",
+		},
+		{
+			TestName:    "", // Missing TestName - should fail here
+			FilePath:    "proxy/test_two.go",
+			LineNumber:  20,
+			ErrorMessage: "error two",
+		},
+		{
+			TestName:    "TestValidThree",
+			FilePath:    "",
+			LineNumber:  30,
+			ErrorMessage: "error three",
+		},
+	}
+
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "failures.json")
+
+	err := ExportFailuresJSON(failures, outputPath)
+	if err == nil {
+		t.Fatal("Expected validation error, got nil")
+	}
+
+	// Should fail on the first failure (index 1) with missing TestName
+	if !strings.Contains(err.Error(), "index 1") {
+		t.Errorf("Error should mention index 1, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "TestName") {
+		t.Errorf("Error should mention TestName, got: %v", err)
+	}
+
+	// Verify no file was created
+	if _, err := os.Stat(outputPath); !os.IsNotExist(err) {
+		t.Error("Output file should not be created when validation fails")
+	}
+}
+
+func TestExportFailuresJSON_WithoutStackTrace(t *testing.T) {
+	// Test that optional StackTrace field is not required
+	failures := []TestFailure{
+		{
+			TestName:    "TestNoStackTrace",
+			FilePath:    "proxy/simple_test.go",
+			LineNumber:  10,
+			ErrorMessage: "assertion failed",
+			// StackTrace intentionally omitted
+		},
+	}
+
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "no_trace.json")
+
+	err := ExportFailuresJSON(failures, outputPath)
+	if err != nil {
+		t.Fatalf("ExportFailuresJSON should succeed without StackTrace, got error: %v", err)
+	}
+
+	// Read and verify
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("Failed to read output file: %v", err)
+	}
+
+	var imported []TestFailure
+	if err := json.Unmarshal(data, &imported); err != nil {
+		t.Fatalf("Output is not valid JSON: %v", err)
+	}
+
+	if len(imported) != 1 {
+		t.Fatalf("Expected 1 failure, got %d", len(imported))
+	}
+
+	if imported[0].StackTrace != "" {
+		t.Errorf("StackTrace should be empty when not provided, got: %q", imported[0].StackTrace)
+	}
+}
+
+func TestValidateFailures_SeparateValidation(t *testing.T) {
+	// Test the separate ValidateFailures function
+	validFailures := []TestFailure{
+		{
+			TestName:    "TestValid",
+			FilePath:    "proxy/valid_test.go",
+			LineNumber:  10,
+			ErrorMessage: "valid error",
+		},
+	}
+
+	err := ValidateFailures(validFailures)
+	if err != nil {
+		t.Errorf("ValidateFailures should succeed for valid failures, got: %v", err)
+	}
+
+	// Test invalid failures
+	invalidFailures := []TestFailure{
+		{
+			TestName:    "", // Missing
+			FilePath:    "proxy/invalid_test.go",
+			LineNumber:  10,
+			ErrorMessage: "invalid error",
+		},
+	}
+
+	err = ValidateFailures(invalidFailures)
+	if err == nil {
+		t.Fatal("ValidateFailures should return error for invalid failures")
+	}
+
+	if !strings.Contains(err.Error(), "TestName") {
+		t.Errorf("Error should mention TestName, got: %v", err)
+	}
+}
+
+func TestExportFailuresJSON_RoundTrip(t *testing.T) {
+	// Test complete round-trip: parse → export → import → verify
+	// Using same format as TestParseTestFailures_MultipleFailures
+	originalOutput := []byte(`=== RUN   TestRateLimit
+	    ratelimiter_test.go:45: assertion failed: expected 200, got 500
+--- FAIL: TestRateLimit (0.05s)
+=== RUN   TestTokenBucket
+	    ratelimiter_test.go:78: bucket not empty after reset
+--- FAIL: TestTokenBucket (0.02s)
+FAIL`)
+
+	// Parse failures
+	failures, err := ParseTestFailures(originalOutput)
+	if err != nil {
+		t.Fatalf("ParseTestFailures failed: %v", err)
+	}
+
+	if len(failures) != 2 {
+		t.Fatalf("Expected 2 failures, got %d", len(failures))
+	}
+
+	// Export to JSON
+	tmpDir := t.TempDir()
+	outputPath := filepath.Join(tmpDir, "roundtrip.json")
+	err = ExportFailuresJSON(failures, outputPath)
+	if err != nil {
+		t.Fatalf("ExportFailuresJSON failed: %v", err)
+	}
+
+	// Import from JSON
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("Failed to read exported file: %v", err)
+	}
+
+	var imported []TestFailure
+	if err := json.Unmarshal(data, &imported); err != nil {
+		t.Fatalf("Failed to import JSON: %v", err)
+	}
+
+	// Verify round-trip integrity
+	if len(imported) != len(failures) {
+		t.Fatalf("Round-trip failed: expected %d failures, got %d", len(failures), len(imported))
+	}
+
+	for i := range failures {
+		if imported[i].TestName != failures[i].TestName {
+			t.Errorf("Round-trip TestName mismatch at index %d: got %q, want %q",
+				i, imported[i].TestName, failures[i].TestName)
+		}
+		if imported[i].FilePath != failures[i].FilePath {
+			t.Errorf("Round-trip FilePath mismatch at index %d: got %q, want %q",
+				i, imported[i].FilePath, failures[i].FilePath)
+		}
+		if imported[i].LineNumber != failures[i].LineNumber {
+			t.Errorf("Round-trip LineNumber mismatch at index %d: got %d, want %d",
+				i, imported[i].LineNumber, failures[i].LineNumber)
+		}
+		if imported[i].ErrorMessage != failures[i].ErrorMessage {
+			t.Errorf("Round-trip ErrorMessage mismatch at index %d: got %q, want %q",
+				i, imported[i].ErrorMessage, failures[i].ErrorMessage)
+		}
+		if imported[i].StackTrace != failures[i].StackTrace {
+			t.Errorf("Round-trip StackTrace mismatch at index %d: got %q, want %q",
+				i, imported[i].StackTrace, failures[i].StackTrace)
+		}
+	}
+}
+
+func TestExportFailuresJSON_FileWriteError(t *testing.T) {
+	// Test error handling when file write fails
+	failures := []TestFailure{
+		{
+			TestName:    "TestFunction",
+			FilePath:    "proxy/test.go",
+			LineNumber:  10,
+			ErrorMessage: "test error",
+		},
+	}
+
+	// Try to write to an invalid path (directory that doesn't exist)
+	invalidPath := "/nonexistent/directory/subdir/failures.json"
+
+	err := ExportFailuresJSON(failures, invalidPath)
+	if err == nil {
+		t.Fatal("Expected error when writing to nonexistent directory, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "failed to write") {
+		t.Errorf("Error message should mention write failure, got: %v", err)
 	}
 }

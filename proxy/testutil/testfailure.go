@@ -3,7 +3,10 @@ package testutil
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"log"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -225,4 +228,72 @@ func ParseTestFailures(output []byte) ([]TestFailure, error) {
 	}
 
 	return failures, nil
+}
+
+// ExportFailuresJSON validates and exports test failures to a JSON file.
+// It validates that all required fields (TestName, FilePath, ErrorMessage) are populated,
+// writes formatted JSON to the output file, and returns an error if validation fails.
+//
+// Parameters:
+//   - failures: List of test failures to export
+//   - outputPath: Path to the output JSON file
+//
+// Returns:
+//   - error: Validation error if required fields are missing, or file write error
+//
+// Example usage:
+//   failures, _ := testutil.ParseTestFailures(data)
+//   err := testutil.ExportFailuresJSON(failures, "failures.json")
+//   if err != nil {
+//       log.Fatalf("Failed to export failures: %v", err)
+//   }
+func ExportFailuresJSON(failures []TestFailure, outputPath string) error {
+	// Validate all failures have required fields
+	for i, failure := range failures {
+		if failure.TestName == "" {
+			return fmt.Errorf("failure at index %d: missing required field TestName", i)
+		}
+		if failure.FilePath == "" {
+			return fmt.Errorf("failure at index %d (%s): missing required field FilePath", i, failure.TestName)
+		}
+		if failure.ErrorMessage == "" {
+			return fmt.Errorf("failure at index %d (%s): missing required field ErrorMessage", i, failure.TestName)
+		}
+	}
+
+	// Marshal to JSON with indentation for readability
+	data, err := json.MarshalIndent(failures, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal failures to JSON: %w", err)
+	}
+
+	// Write to output file
+	if err := os.WriteFile(outputPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write to %s: %w", outputPath, err)
+	}
+
+	return nil
+}
+
+// ValidateFailures checks that all required fields are populated in each failure.
+// This is a separate validation function that can be used independently of export.
+//
+// Parameters:
+//   - failures: List of test failures to validate
+//
+// Returns:
+//   - error: Validation error if required fields are missing, nil otherwise
+func ValidateFailures(failures []TestFailure) error {
+	for i, failure := range failures {
+		if failure.TestName == "" {
+			return fmt.Errorf("failure at index %d: missing required field TestName", i)
+		}
+		if failure.FilePath == "" {
+			return fmt.Errorf("failure at index %d (%s): missing required field FilePath", i, failure.TestName)
+		}
+		if failure.ErrorMessage == "" {
+			return fmt.Errorf("failure at index %d (%s): missing required field ErrorMessage", i, failure.TestName)
+		}
+	}
+	return nil
 }
