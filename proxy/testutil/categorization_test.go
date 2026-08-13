@@ -66,7 +66,7 @@ func TestCategorizeFailure_AssertionError(t *testing.T) {
 			if cat.Category != tt.expectedCat {
 				t.Errorf("Category: got %q, want %q", cat.Category, tt.expectedCat)
 			}
-			if cat.Confidence < tt.minConf {
+			if cat.Confidence.Float64() < tt.minConf {
 				t.Errorf("Confidence: got %.2f, want >= %.2f", cat.Confidence, tt.minConf)
 			}
 			if cat.Reasoning == "" {
@@ -124,7 +124,7 @@ func TestCategorizeFailure_Timeout(t *testing.T) {
 			if cat.Category != tt.expectedCat {
 				t.Errorf("Category: got %q, want %q", cat.Category, tt.expectedCat)
 			}
-			if cat.Confidence < tt.minConf {
+			if cat.Confidence.Float64() < tt.minConf {
 				t.Errorf("Confidence: got %.2f, want >= %.2f", cat.Confidence, tt.minConf)
 			}
 		})
@@ -185,7 +185,7 @@ func TestCategorizeFailure_Panic(t *testing.T) {
 			if cat.Category != tt.expectedCat {
 				t.Errorf("Category: got %q, want %q", cat.Category, tt.expectedCat)
 			}
-			if cat.Confidence < tt.minConf {
+			if cat.Confidence.Float64() < tt.minConf {
 				t.Errorf("Confidence: got %.2f, want >= %.2f", cat.Confidence, tt.minConf)
 			}
 		})
@@ -214,7 +214,7 @@ Read at 0x... by main goroutine:
 	if cat.Category != CategoryDataRace {
 		t.Errorf("Category: got %q, want %q", cat.Category, CategoryDataRace)
 	}
-	if cat.Confidence < 0.9 {
+	if cat.Confidence.Float64() < 0.9 {
 		t.Errorf("Confidence: got %.2f, want >= 0.9", cat.Confidence)
 	}
 }
@@ -257,7 +257,7 @@ func TestCategorizeFailure_NilPointer(t *testing.T) {
 			if cat.Category != tt.expectedCat {
 				t.Errorf("Category: got %q, want %q", cat.Category, tt.expectedCat)
 			}
-			if cat.Confidence < 0.9 {
+			if cat.Confidence.Float64() < 0.9 {
 				t.Errorf("Confidence: got %.2f, want >= 0.9", cat.Confidence)
 			}
 		})
@@ -302,7 +302,7 @@ func TestCategorizeFailure_TypeMismatch(t *testing.T) {
 			if cat.Category != tt.expectedCat {
 				t.Errorf("Category: got %q, want %q", cat.Category, tt.expectedCat)
 			}
-			if cat.Confidence < 0.8 {
+			if cat.Confidence.Float64() < 0.8 {
 				t.Errorf("Confidence: got %.2f, want >= 0.8", cat.Confidence)
 			}
 		})
@@ -342,7 +342,7 @@ func TestCategorizeFailure_IndexOutOfRange(t *testing.T) {
 			if cat.Category != tt.expectedCat {
 				t.Errorf("Category: got %q, want %q", cat.Category, tt.expectedCat)
 			}
-			if cat.Confidence < 0.9 {
+			if cat.Confidence.Float64() < 0.9 {
 				t.Errorf("Confidence: got %.2f, want >= 0.9", cat.Confidence)
 			}
 		})
@@ -382,7 +382,7 @@ func TestCategorizeFailure_MapKey(t *testing.T) {
 			if cat.Category != tt.expectedCat {
 				t.Errorf("Category: got %q, want %q", cat.Category, tt.expectedCat)
 			}
-			if cat.Confidence < 0.8 {
+			if cat.Confidence.Float64() < 0.8 {
 				t.Errorf("Confidence: got %.2f, want >= 0.8", cat.Confidence)
 			}
 		})
@@ -427,7 +427,7 @@ func TestCategorizeFailure_Channel(t *testing.T) {
 			if cat.Category != tt.expectedCat {
 				t.Errorf("Category: got %q, want %q", cat.Category, tt.expectedCat)
 			}
-			if cat.Confidence < 0.9 {
+			if cat.Confidence.Float64() < 0.9 {
 				t.Errorf("Confidence: got %.2f, want >= 0.9", cat.Confidence)
 			}
 		})
@@ -472,7 +472,7 @@ func TestCategorizeFailure_IOError(t *testing.T) {
 			if cat.Category != tt.expectedCat {
 				t.Errorf("Category: got %q, want %q", cat.Category, tt.expectedCat)
 			}
-			if cat.Confidence < 0.8 {
+			if cat.Confidence.Float64() < 0.8 {
 				t.Errorf("Confidence: got %.2f, want >= 0.8", cat.Confidence)
 			}
 		})
@@ -517,7 +517,7 @@ func TestCategorizeFailure_HTTPError(t *testing.T) {
 			if cat.Category != tt.expectedCat {
 				t.Errorf("Category: got %q, want %q", cat.Category, tt.expectedCat)
 			}
-			if cat.Confidence < 0.8 {
+			if cat.Confidence.Float64() < 0.8 {
 				t.Errorf("Confidence: got %.2f, want >= 0.8", cat.Confidence)
 			}
 		})
@@ -731,7 +731,7 @@ assertion failed: expected true, got false`
 	if cat.Category != CategoryDataRace {
 		t.Errorf("Category: got %q, want %q (higher priority pattern should match first)", cat.Category, CategoryDataRace)
 	}
-	if cat.Confidence < 0.9 {
+	if cat.Confidence.Float64() < 0.9 {
 		t.Errorf("Confidence: got %.2f, want >= 0.9", cat.Confidence)
 	}
 }
@@ -913,7 +913,7 @@ func TestCategorizeFailure_ComprehensiveRealWorld(t *testing.T) {
 			if cat.Category != tt.expectedCat {
 				t.Errorf("Category: got %q, want %q", cat.Category, tt.expectedCat)
 			}
-			if cat.Confidence < tt.minConf {
+			if cat.Confidence.Float64() < tt.minConf {
 				t.Errorf("Confidence: got %.2f, want >= %.2f", cat.Confidence, tt.minConf)
 			}
 			if cat.Reasoning == "" {
