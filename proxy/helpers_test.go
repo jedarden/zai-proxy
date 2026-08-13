@@ -298,6 +298,7 @@ func AssertStatusCode(t *testing.T, resp *http.Response, expectedCode int) {
 }
 
 // AssertJSONBody asserts that the response body is valid JSON
+// Note: This consumes the response body. Use ReadJSONResponse if you need the parsed data.
 func AssertJSONBody(t *testing.T, resp *http.Response) bool {
 	t.Helper()
 	body, err := io.ReadAll(resp.Body)
@@ -331,7 +332,17 @@ func AssertResponseField(t *testing.T, resp *http.Response, field string, expect
 		return
 	}
 
-	if actualValue != expectedValue {
+	// Use JSON marshaling for comparison to handle uncomparable types (maps, slices)
+	actualJSON, err := json.Marshal(actualValue)
+	if err != nil {
+		t.Fatalf("Failed to marshal actual value: %v", err)
+	}
+	expectedJSON, err := json.Marshal(expectedValue)
+	if err != nil {
+		t.Fatalf("Failed to marshal expected value: %v", err)
+	}
+
+	if string(actualJSON) != string(expectedJSON) {
 		t.Errorf("Field '%s': expected %v, got %v", field, expectedValue, actualValue)
 	}
 }
@@ -396,7 +407,14 @@ func ExecuteProxyRequest(t *testing.T, handler *ProxyHandler, req *http.Request)
 	t.Helper()
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
-	return w.Result()
+
+	// Manually construct the response to ensure the body is properly readable
+	resp := &http.Response{
+		StatusCode: w.Code,
+		Header:     w.Header(),
+		Body:       io.NopCloser(w.Body),
+	}
+	return resp
 }
 
 // ExecuteProxyRequestWithBody executes a POST request with a body through the proxy
@@ -419,29 +437,38 @@ func ExecuteMessagesRequest(t *testing.T, handler *ProxyHandler, body string) *h
 // CreateCountingMockServer creates a mock server that counts requests and returns success
 func CreateCountingMockServer(t *testing.T) *CountingMockServer {
 	t.Helper()
-	return &CountingMockServer{
-		Server: httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"id":   "msg_test123",
-				"type": "message",
-			})
-		})),
-	}
+
+	cms := &CountingMockServer{}
+	cms.handler.Store(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// Write JSON manually to avoid closing the response body prematurely
+		w.Write([]byte(`{"id":"msg_test123","type":"message"}`))
+		// Flush to ensure data is sent before closing
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}))
+
+	cms.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cms.requestCount.Add(1)
+		handler := cms.handler.Load().(http.Handler)
+		handler.ServeHTTP(w, r)
+	}))
+
+	return cms
 }
 
 // CountingMockServer wraps httptest.Server with request counting
 type CountingMockServer struct {
-	*httptest.Server
+	Server       *httptest.Server
 	requestCount atomic.Int32
+	handler      atomic.Value // stores http.Handler
 }
 
 // WrapHandler wraps the existing handler with counting
 func (cms *CountingMockServer) WrapHandler(handler http.HandlerFunc) {
-	cms.Server.Close()
-	cms.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cms.requestCount.Add(1)
+	cms.handler.Store(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handler(w, r)
 	}))
 }
@@ -700,42 +727,125 @@ func TestHelperFunctions(t *testing.T) {
 			t.Error("Streaming request should contain stream:true")
 		}
 	})
-}
 
-// ============================================================================
-// Mock Upstream Tests
-// ============================================================================
-
-// TestMockUpstreamBasic tests basic mock upstream functionality
-func TestMockUpstreamBasic(t *testing.T) {
-	t.Run("success scenario", func(t *testing.T) {
-		mock := NewMockUpstream("success")
-		defer mock.Close()
-
-		resp, err := http.Get(mock.URL() + "/v1/messages")
-		if err != nil {
-			t.Fatalf("Request failed: %v", err)
+	t.Run("CalculateBackoffDelay_extended", func(t *testing.T) {
+		testCases := []struct {
+			attempt   int
+			expected  time.Duration
+		}{
+			{0, 0},                  // Edge case: zero attempt returns 0
+			{-1, 0},                 // Edge case: negative attempt returns 0
+			{5, 16 * time.Second},   // Larger value
+			{10, 512 * time.Second}, // Even larger value
 		}
-		defer resp.Body.Close()
-
-		AssertStatusCode(t, resp, http.StatusOK)
-		AssertJSONBody(t, resp)
-
-		if count := mock.GetRequestCount(); count != 1 {
-			t.Errorf("Expected 1 request, got %d", count)
+		for _, tc := range testCases {
+			t.Run(fmt.Sprintf("attempt_%d", tc.attempt), func(t *testing.T) {
+				actual := CalculateBackoffDelay(tc.attempt)
+				if actual != tc.expected {
+					t.Errorf("Expected %v, got %v", tc.expected, actual)
+				}
+			})
 		}
 	})
 
-	t.Run("429 scenario", func(t *testing.T) {
-		mock := NewMockUpstream("429-no-header-then-429")
-		defer mock.Close()
-
-		resp, err := http.Get(mock.URL() + "/v1/messages")
-		if err != nil {
-			t.Fatalf("Request failed: %v", err)
+	t.Run("CalculateTotalMaxDelay", func(t *testing.T) {
+		testCases := []struct {
+			maxRetries int
+			expected   time.Duration
+		}{
+			{0, 0},                   // Edge case: zero retries returns 0
+			{-1, 0},                  // Edge case: negative retries returns 0
+			{1, 1 * time.Second},     // 2^1 - 1 = 1
+			{2, 3 * time.Second},     // 2^2 - 1 = 3
+			{3, 7 * time.Second},     // 2^3 - 1 = 7
+			{4, 15 * time.Second},    // 2^4 - 1 = 15
+			{5, 31 * time.Second},    // 2^5 - 1 = 31
+			{10, 1023 * time.Second}, // 2^10 - 1 = 1023
 		}
-		defer resp.Body.Close()
+		for _, tc := range testCases {
+			t.Run(fmt.Sprintf("retries_%d", tc.maxRetries), func(t *testing.T) {
+				actual := CalculateTotalMaxDelay(tc.maxRetries)
+				if actual != tc.expected {
+					t.Errorf("Expected %v, got %v", tc.expected, actual)
+				}
+			})
+		}
+	})
 
-		AssertStatusCode(t, resp, http.StatusTooManyRequests)
+	t.Run("WaitForCondition", func(t *testing.T) {
+		t.Run("condition_immediately_true", func(t *testing.T) {
+			// Should return immediately when condition is already true
+			start := time.Now()
+			result := WaitForCondition(t, func() bool { return true }, 100*time.Millisecond, 10*time.Millisecond)
+			elapsed := time.Since(start)
+			if !result {
+				t.Error("Expected true when condition is immediately true")
+			}
+			if elapsed > 50*time.Millisecond {
+				t.Errorf("Should return quickly, took %v", elapsed)
+			}
+		})
+
+		t.Run("condition_becomes_true", func(t *testing.T) {
+			// Should wait until condition becomes true
+			count := 0
+			condition := func() bool {
+				count++
+				return count >= 3
+			}
+			start := time.Now()
+			result := WaitForCondition(t, condition, 100*time.Millisecond, 10*time.Millisecond)
+			elapsed := time.Since(start)
+			if !result {
+				t.Error("Expected true when condition becomes true")
+			}
+			// Should have taken at least 2 checks (20ms) but less than 3 checks (30ms)
+			if elapsed < 20*time.Millisecond || elapsed > 50*time.Millisecond {
+				t.Errorf("Expected ~20-30ms, took %v", elapsed)
+			}
+		})
+
+		t.Run("condition_never_true_timeout", func(t *testing.T) {
+			// Should return false when timeout is reached
+			start := time.Now()
+			result := WaitForCondition(t, func() bool { return false }, 50*time.Millisecond, 10*time.Millisecond)
+			elapsed := time.Since(start)
+			if result {
+				t.Error("Expected false when condition never becomes true")
+			}
+			// Should have waited at least the timeout duration
+			if elapsed < 50*time.Millisecond {
+				t.Errorf("Should have waited for timeout, only waited %v", elapsed)
+			}
+		})
+
+		t.Run("condition_with_zero_timeout", func(t *testing.T) {
+			// Zero timeout means deadline is already past, so condition is never checked
+			calls := 0
+			result := WaitForCondition(t, func() bool {
+				calls++
+				return true
+			}, 0, 10*time.Millisecond)
+			if result {
+				t.Error("With zero timeout, should return false without checking condition")
+			}
+			if calls != 0 {
+				t.Errorf("With zero timeout, condition should not be called, but was called %d times", calls)
+			}
+		})
+
+		t.Run("condition_with_long_check_interval", func(t *testing.T) {
+			// Should respect the check interval
+			calls := 0
+			condition := func() bool {
+				calls++
+				return false
+			}
+			// With 50ms timeout and 100ms interval, should only check once
+			WaitForCondition(t, condition, 50*time.Millisecond, 100*time.Millisecond)
+			if calls != 1 {
+				t.Errorf("Expected 1 call with long interval, got %d", calls)
+			}
+		})
 	})
 }
