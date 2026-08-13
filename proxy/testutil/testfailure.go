@@ -3,6 +3,7 @@ package testutil
 import (
 	"bufio"
 	"bytes"
+	"log"
 	"regexp"
 	"strconv"
 	"strings"
@@ -32,13 +33,16 @@ type TestFailure struct {
 // - FAIL lines marking failed tests
 // - File:line error messages
 // - Stack traces
+// - Parallel test output (intermixed RUN/PASS/FAIL lines)
+// - t.Helper() failures (nested stack frames)
+// - Malformed or incomplete output (logs warnings, continues parsing)
 //
 // Parameters:
 //   - output: The raw test output bytes
 //
 // Returns:
 //   - []TestFailure: List of parsed test failures (empty if none found)
-//   - error: An error if parsing fails (not for "no failures" case)
+//   - error: An error if parsing fails catastrophically (not for partial parsing)
 //
 // Example usage:
 //   data, _ := testutil.ReadTestOutput("testdata/failures.txt")
@@ -50,30 +54,62 @@ type TestFailure struct {
 //       fmt.Printf("%s failed at %s:%d: %s\n", failure.TestName, failure.FilePath, failure.LineNumber, failure.ErrorMessage)
 //   }
 func ParseTestFailures(output []byte) ([]TestFailure, error) {
+	// Handle empty or nil input gracefully
+	if len(output) == 0 {
+		return []TestFailure{}, nil
+	}
+
 	var failures []TestFailure
 	var currentFailure *TestFailure
 	var pendingFile, pendingLine, pendingMessage string
 	var pendingStackTrace strings.Builder
 	var inStackTrace bool
+	var currentTestName string
+	var lineNum int
 
 	scanner := bufio.NewScanner(bytes.NewReader(output))
+	// Increase buffer size for long lines (e.g., stack traces)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
 
 	// Regex patterns
-	// Matches: --- FAIL: TestName (0.05s)
-	failLinePattern := regexp.MustCompile(`^--- FAIL:\s+(\S+)\s+\(`)
+	// Matches: --- FAIL: TestName (0.05s) or --- FAIL: TestName
+	failLinePattern := regexp.MustCompile(`^--- FAIL:\s+(\S+)`)
+	// Matches: === RUN   TestName
+	runLinePattern := regexp.MustCompile(`^=== RUN\s+(\S+)`)
+	// Matches: --- PASS: TestName (0.05s)
+	passLinePattern := regexp.MustCompile(`^--- PASS:\s+(\S+)`)
 	// Matches:    file_test.go:45: error message
 	fileLinePattern := regexp.MustCompile(`^\s+(\S+\.go):(\d+):\s*(.*)`)
-	// Matches: goroutine N [running]:
-	stackTracePattern := regexp.MustCompile(`^goroutine \d+ \[`)
+	// Matches: goroutine N [running]: (or other states)
+	// Allows leading whitespace/tabs
+	stackTracePattern := regexp.MustCompile(`^\s*goroutine \d+\s+\[`)
 
 	for scanner.Scan() {
+		lineNum++
 		line := scanner.Text()
 
-		// Check for file:line pattern (comes before FAIL line in Go output)
-		if matches := fileLinePattern.FindStringSubmatch(line); matches != nil {
-			pendingFile = matches[1]
-			pendingLine = matches[2]
-			pendingMessage = matches[3]
+		// Skip completely empty lines early
+		if line == "" {
+			continue
+		}
+
+		// Track current test being run (for parallel test disambiguation)
+		if matches := runLinePattern.FindStringSubmatch(line); matches != nil {
+			currentTestName = matches[1]
+			continue
+		}
+
+		// Handle PASS lines - clear state for passed tests
+		if matches := passLinePattern.FindStringSubmatch(line); matches != nil {
+			// If we have pending info for a test that passed, discard it
+			if currentTestName == matches[1] {
+				pendingFile = ""
+				pendingLine = ""
+				pendingMessage = ""
+				pendingStackTrace.Reset()
+				inStackTrace = false
+			}
 			continue
 		}
 
@@ -86,46 +122,87 @@ func ParseTestFailures(output []byte) ([]TestFailure, error) {
 		}
 
 		// Continue collecting stack trace lines
+		// Stack traces end when we see a FAIL line or an empty line
 		if inStackTrace {
-			// Stop at empty line or next section marker
-			if line == "" || strings.HasPrefix(line, "===") || strings.HasPrefix(line, "---") {
+			// Check if this is a FAIL line - stop collecting and process it below
+			if failLinePattern.MatchString(line) || strings.HasPrefix(line, "--- FAIL:") {
 				inStackTrace = false
+				// Continue to process the FAIL line below
+			} else if line == "" {
+				// Empty line ends the stack trace section
+				inStackTrace = false
+				continue
 			} else {
+				// Still in stack trace - collect this line
 				pendingStackTrace.WriteString(line)
 				pendingStackTrace.WriteString("\n")
 				continue
 			}
 		}
 
+		// Check for file:line pattern (comes before FAIL line in Go output)
+		// Use a more lenient pattern first: file:something (even if not a number)
+		if matches := fileLinePattern.FindStringSubmatch(line); matches != nil {
+			pendingFile = matches[1]
+			pendingLine = matches[2]
+			pendingMessage = matches[3]
+			continue
+		}
+
+		// Try a more lenient pattern for malformed line numbers: file:non-number: message
+		lenientPattern := regexp.MustCompile(`^\s+(\S+\.go):\s*([^\s:]+):\s*(.*)`)
+		if matches := lenientPattern.FindStringSubmatch(line); matches != nil && pendingFile == "" {
+			pendingFile = matches[1]
+			pendingLine = matches[2]
+			pendingMessage = matches[3]
+			continue
+		}
+
 		// Check for FAIL line
 		if matches := failLinePattern.FindStringSubmatch(line); matches != nil {
+			testName := matches[1]
+
 			// Save any previous failure
 			if currentFailure != nil {
 				failures = append(failures, *currentFailure)
+				currentFailure = nil
 			}
 
 			// Start new failure with test name from FAIL line
 			currentFailure = &TestFailure{
-				TestName: matches[1],
+				TestName: testName,
 			}
 
 			// If we had pending file:line info, add it now
 			if pendingFile != "" {
 				currentFailure.FilePath = pendingFile
-				lineNum, _ := strconv.Atoi(pendingLine)
-				currentFailure.LineNumber = lineNum
+
+				// Parse line number with error handling
+				if lineNum, err := strconv.Atoi(pendingLine); err == nil {
+					currentFailure.LineNumber = lineNum
+				} else {
+					// Log warning but don't fail - keep line number as 0
+					log.Printf("Warning: Failed to parse line number %q at line %d: %v", pendingLine, lineNum, err)
+				}
+
 				currentFailure.ErrorMessage = pendingMessage
-				// Clear pending info
-				pendingFile = ""
-				pendingLine = ""
-				pendingMessage = ""
+			} else {
+				// No file:line info found - this is unusual but not fatal
+				log.Printf("Warning: No file:line information found for test failure %s at line %d", testName, lineNum)
 			}
 
 			// If we collected a stack trace, add it now
 			if pendingStackTrace.Len() > 0 {
 				currentFailure.StackTrace = strings.TrimSpace(pendingStackTrace.String())
-				pendingStackTrace.Reset()
 			}
+
+			// Clear pending state for next failure
+			pendingFile = ""
+			pendingLine = ""
+			pendingMessage = ""
+			pendingStackTrace.Reset()
+			inStackTrace = false
+			currentTestName = ""
 			continue
 		}
 	}
@@ -135,7 +212,10 @@ func ParseTestFailures(output []byte) ([]TestFailure, error) {
 		failures = append(failures, *currentFailure)
 	}
 
+	// Check for scanner errors (e.g., buffer overflow)
 	if err := scanner.Err(); err != nil {
+		// Log the error but return what we have so far
+		log.Printf("Warning: Scanner error while parsing test output at line %d: %v", lineNum, err)
 		return failures, err
 	}
 
