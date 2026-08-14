@@ -34,3 +34,9 @@ bd-*.md
 
 # Misc
 .DS_Store
+
+# bead-rs store: the durable artefact is the checkpoint plus config.json.
+# (`beads.db` stays ignored — it is per-machine live state.)
+!.beads/checkpoint/
+!.beads/checkpoint/**
+!.beads/config.json
