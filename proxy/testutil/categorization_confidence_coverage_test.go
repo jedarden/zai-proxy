@@ -1,6 +1,7 @@
 package testutil
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -274,6 +275,241 @@ func TestGetSuggestedSubcategoryMissing(t *testing.T) {
 	}
 }
 
+// TestGetSuggestedSubcategoryComprehensive provides complete coverage for all implemented paths
+func TestGetSuggestedSubcategoryComprehensive(t *testing.T) {
+	tests := []struct {
+		name        string
+		category    FailureCategory
+		subcategory string // If set, should be returned as-is
+		errorMsg    string
+		stackTrace  string
+		expected    string
+		description string // Documents what this test covers
+	}{
+		// Early return case - when subcategory is already set
+		{
+			name:        "already set subcategory returned as-is",
+			category:    CategoryHTTPError,
+			subcategory: "existing",
+			errorMsg:    "connection refused",
+			expected:    "existing",
+			description: "Tests early return when Subcategory field is already populated",
+		},
+
+		// CategoryHTTPError paths
+		{
+			name:     "HTTP error with timeout keyword",
+			category: CategoryHTTPError,
+			errorMsg: "request timeout after 30 seconds",
+			expected: "timeout",
+			description: "Tests HTTP timeout detection via 'timeout' keyword",
+		},
+		{
+			name:     "HTTP error with deadline keyword",
+			category: CategoryHTTPError,
+			errorMsg: "context deadline exceeded",
+			expected: "timeout",
+			description: "Tests HTTP timeout detection via 'deadline' keyword",
+		},
+		{
+			name:     "HTTP error with refused keyword",
+			category: CategoryHTTPError,
+			errorMsg: "connection refused",
+			expected: "connection",
+			description: "Tests HTTP connection error detection via 'refused' keyword",
+		},
+		{
+			name:     "HTTP error with reset keyword",
+			category: CategoryHTTPError,
+			errorMsg: "connection reset by peer",
+			expected: "connection",
+			description: "Tests HTTP connection error detection via 'reset' keyword",
+		},
+		{
+			name:     "HTTP error with status code",
+			category: CategoryHTTPError,
+			errorMsg: "server returned status code 500",
+			expected: "status",
+			description: "Tests HTTP status error detection via 'status code' phrase",
+		},
+		{
+			name:     "HTTP error with 500 code",
+			category: CategoryHTTPError,
+			errorMsg: "internal server error 500",
+			expected: "status",
+			description: "Tests HTTP status error detection via '500' code",
+		},
+		{
+			name:     "HTTP error with 404 code",
+			category: CategoryHTTPError,
+			errorMsg: "page not found 404",
+			expected: "status",
+			description: "Tests HTTP status error detection via '404' code",
+		},
+		{
+			name:     "HTTP error default network",
+			category: CategoryHTTPError,
+			errorMsg: "network unreachable",
+			expected: "network",
+			description: "Tests default HTTP network subcategory when no specific pattern matches",
+		},
+
+		// CategoryIOError paths
+		{
+			name:     "IO error with permission keyword",
+			category: CategoryIOError,
+			errorMsg: "permission denied",
+			expected: "permission",
+			description: "Tests IO permission error detection",
+		},
+		{
+			name:     "IO error with no such file",
+			category: CategoryIOError,
+			errorMsg: "no such file or directory",
+			expected: "not_found",
+			description: "Tests IO file not found error via 'no such file' phrase",
+		},
+		{
+			name:     "IO error with not found keyword",
+			category: CategoryIOError,
+			errorMsg: "file not found",
+			expected: "not_found",
+			description: "Tests IO file not found error via 'not found' phrase",
+		},
+		{
+			name:     "IO error with broken pipe",
+			category: CategoryIOError,
+			errorMsg: "broken pipe",
+			expected: "connection",
+			description: "Tests IO connection error detection via 'broken pipe' phrase",
+		},
+		{
+			name:     "IO error with connection keyword",
+			category: CategoryIOError,
+			errorMsg: "connection lost during write",
+			expected: "connection",
+			description: "Tests IO connection error detection via 'connection' keyword",
+		},
+		{
+			name:     "IO error default filesystem",
+			category: CategoryIOError,
+			errorMsg: "disk full",
+			expected: "filesystem",
+			description: "Tests default IO filesystem subcategory when no specific pattern matches",
+		},
+
+		// CategoryPanic paths
+		{
+			name:     "Panic with nil pointer",
+			category: CategoryPanic,
+			errorMsg: "panic: nil pointer dereference",
+			expected: "nil_pointer",
+			description: "Tests panic nil pointer subcategory detection",
+		},
+		{
+			name:     "Panic with index keyword",
+			category: CategoryPanic,
+			errorMsg: "panic: index out of range",
+			expected: "bounds",
+			description: "Tests panic bounds error detection via 'index' keyword",
+		},
+		{
+			name:     "Panic with slice keyword",
+			category: CategoryPanic,
+			errorMsg: "panic: slice bounds out of range",
+			expected: "bounds",
+			description: "Tests panic bounds error detection via 'slice' keyword",
+		},
+		{
+			name:     "Panic with bounds keyword",
+			category: CategoryPanic,
+			errorMsg: "panic: array bounds error",
+			expected: "bounds",
+			description: "Tests panic bounds error detection via 'bounds' keyword",
+		},
+		{
+			name:     "Panic with interface keyword",
+			category: CategoryPanic,
+			errorMsg: "panic: interface conversion",
+			expected: "type",
+			description: "Tests panic type error detection via 'interface' keyword",
+		},
+		{
+			name:     "Panic with conversion keyword",
+			category: CategoryPanic,
+			errorMsg: "panic: type conversion error",
+			expected: "type",
+			description: "Tests panic type error detection via 'conversion' keyword",
+		},
+		{
+			name:     "Panic default runtime",
+			category: CategoryPanic,
+			errorMsg: "panic: runtime error",
+			expected: "runtime",
+			description: "Tests default panic runtime subcategory when no specific pattern matches",
+		},
+
+		// CategoryTimeout paths
+		{
+			name:     "Timeout with context keyword",
+			category: CategoryTimeout,
+			errorMsg: "context deadline exceeded",
+			expected: "context",
+			description: "Tests timeout context subcategory detection",
+		},
+		{
+			name:     "Timeout with test keyword",
+			category: CategoryTimeout,
+			errorMsg: "test timeout after 5s",
+			expected: "test",
+			description: "Tests timeout test subcategory detection",
+		},
+		{
+			name:     "Timeout default operation",
+			category: CategoryTimeout,
+			errorMsg: "operation timed out",
+			expected: "operation",
+			description: "Tests default timeout operation subcategory when no specific pattern matches",
+		},
+
+		// Stack trace contributions
+		{
+			name:        "keyword found in stack trace",
+			category:    CategoryHTTPError,
+			errorMsg:    "error occurred",
+			stackTrace:  "caused by: connection refused",
+			expected:    "connection",
+			description: "Tests that patterns are searched in both ErrorMessage and StackTrace",
+		},
+
+		// Default case for unknown categories
+		{
+			name:     "unknown category returns empty",
+			category: CategoryDataRace,
+			errorMsg: "data race detected",
+			expected: "",
+			description: "Tests default case for unsupported categories returns empty string",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cat := CategorizedFailure{
+				TestFailure: TestFailure{
+					ErrorMessage: tt.errorMsg,
+					StackTrace:   tt.stackTrace,
+				},
+				Category:    tt.category,
+				Subcategory: tt.subcategory,
+			}
+			result := GetSuggestedSubcategory(cat)
+			if result != tt.expected {
+				t.Errorf("GetSuggestedSubcategory() = %q, want %q\nDescription: %s", result, tt.expected, tt.description)
+			}
+		})
+	}
+}
+
 // TestGetCategoryDescriptionMissing tests missing coverage for GetCategoryDescription
 func TestGetCategoryDescriptionMissing(t *testing.T) {
 	// Test the nonexistent category case (returns default message)
@@ -513,6 +749,553 @@ func TestCategorizeFailureEdgeCases(t *testing.T) {
 			conf := cat.Confidence.Float64()
 			if conf < tt.minConfidence || conf > tt.maxConfidence {
 				t.Errorf("CategorizeFailure() confidence = %.2f, want [%.2f, %.2f]", conf, tt.minConfidence, tt.maxConfidence)
+			}
+		})
+	}
+}
+
+// TestApplyEdgeCaseAdjustmentsComprehensive provides complete coverage for all edge case paths
+// This tests the private applyEdgeCaseAdjustments function directly since it's only accessible within the package
+func TestApplyEdgeCaseAdjustmentsComprehensive(t *testing.T) {
+	tests := []struct {
+		name         string
+		fullText     string
+		category     FailureCategory
+		baseConf     float64
+		minExpected  float64
+		maxExpected  float64
+		description  string
+	}{
+		// Panic with interface conversion
+		{
+			name:        "panic with interface conversion reduces confidence",
+			fullText:    "panic: interface conversion",
+			category:    CategoryPanic,
+			baseConf:    0.9,
+			minExpected: 0.5,
+			maxExpected: 0.75,
+			description: "Tests panic category with interface conversion text reduces confidence by 0.15, minimum 0.5",
+		},
+		{
+			name:        "panic with interface conversion low base floors at 0.5",
+			fullText:    "panic: interface conversion",
+			category:    CategoryPanic,
+			baseConf:    0.55,
+			minExpected: 0.5,
+			maxExpected: 0.5,
+			description: "Tests panic interface conversion floors at minimum 0.5 confidence",
+		},
+
+		// Assignment to entry in nil map
+		{
+			name:        "map key with nil map assignment reduces confidence heavily",
+			fullText:    "assignment to entry in nil map",
+			category:    CategoryMapKey,
+			baseConf:    0.9,
+			minExpected: 0.3,
+			maxExpected: 0.5,
+			description: "Tests map category with nil map assignment reduces confidence by 0.4, minimum 0.3",
+		},
+		{
+			name:        "map key with nil map assignment low base floors at 0.3",
+			fullText:    "assignment to entry in nil map",
+			category:    CategoryMapKey,
+			baseConf:    0.35,
+			minExpected: 0.3,
+			maxExpected: 0.3,
+			description: "Tests map nil map assignment floors at minimum 0.3 confidence",
+		},
+
+		// Explicit "panic on nil pointer"
+		{
+			name:        "explicit panic on nil pointer sets maximum confidence",
+			fullText:    "panic on nil pointer dereference",
+			category:    CategoryNilPointer,
+			baseConf:    0.7,
+			minExpected: 1.0,
+			maxExpected: 1.0,
+			description: "Tests nil pointer category with 'panic on nil pointer' sets confidence to 1.0",
+		},
+
+		// Multiple panics
+		{
+			name:        "multiple panics in same error reduces confidence",
+			fullText:    "panic during panic recovery",
+			category:    CategoryPanic,
+			baseConf:    0.9,
+			minExpected: 0.85,
+			maxExpected: 0.85,
+			description: "Tests panic category with multiple 'panic' keywords reduces confidence by 0.05",
+		},
+		{
+			name:        "multiple panics low base floors at 0.7",
+			fullText:    "panic and another panic occurred",
+			category:    CategoryPanic,
+			baseConf:    0.72,
+			minExpected: 0.7,
+			maxExpected: 0.7,
+			description: "Tests multiple panics floors at minimum 0.7 confidence",
+		},
+		{
+			name:        "single panic does not reduce confidence",
+			fullText:    "panic: runtime error",
+			category:    CategoryPanic,
+			baseConf:    0.95,
+			minExpected: 0.95,
+			maxExpected: 0.95,
+			description: "Tests single panic does not trigger multiple panic reduction",
+		},
+
+		// Connection timeout with dial tcp
+		{
+			name:        "timeout with dial tcp reduces confidence",
+			fullText:    "connection timeout dialing tcp: connection refused",
+			category:    CategoryTimeout,
+			baseConf:    0.9,
+			minExpected: 0.5,
+			maxExpected: 0.7,
+			description: "Tests timeout with both 'connection timeout' and 'dial tcp' reduces confidence by 0.2",
+		},
+		{
+			name:        "timeout with dial tcp low base floors at 0.5",
+			fullText:    "connection timeout dial tcp",
+			category:    CategoryTimeout,
+			baseConf:    0.55,
+			minExpected: 0.5,
+			maxExpected: 0.5,
+			description: "Tests timeout dial tcp floors at minimum 0.5 confidence",
+		},
+		{
+			name:        "timeout without dial tcp no reduction",
+			fullText:    "connection timeout after 30s",
+			category:    CategoryTimeout,
+			baseConf:    0.95,
+			minExpected: 0.95,
+			maxExpected: 0.95,
+			description: "Tests timeout without 'dial tcp' does not trigger reduction",
+		},
+
+		// Close of closed channel (race condition)
+		{
+			name:        "close of closed channel reduces confidence slightly",
+			fullText:    "close of closed channel",
+			category:    CategoryChannel,
+			baseConf:    0.95,
+			minExpected: 0.8,
+			maxExpected: 0.85,
+			description: "Tests channel category with 'close of closed channel' reduces confidence by 0.1",
+		},
+		{
+			name:        "close of closed channel low base floors at 0.8",
+			fullText:    "close of closed channel",
+			category:    CategoryChannel,
+			baseConf:    0.82,
+			minExpected: 0.8,
+			maxExpected: 0.8,
+			description: "Tests close of closed channel floors at minimum 0.8 confidence",
+		},
+
+		// Context cancellation
+		{
+			name:        "context canceled sets maximum confidence",
+			fullText:    "context canceled",
+			category:    CategoryTimeout,
+			baseConf:    0.7,
+			minExpected: 1.0,
+			maxExpected: 1.0,
+			description: "Tests timeout with 'context canceled' sets confidence to 1.0",
+		},
+
+		// Nil pointer in test with mock/fake
+		{
+			name:        "nil pointer in test mock reduces confidence",
+			fullText:    "nil pointer dereference in test with mock",
+			category:    CategoryNilPointer,
+			baseConf:    0.95,
+			minExpected: 0.8,
+			maxExpected: 0.85,
+			description: "Tests nil pointer with 'test' and 'mock' reduces confidence by 0.1",
+		},
+		{
+			name:        "nil pointer in test with fake reduces confidence",
+			fullText:    "nil pointer in fake test setup",
+			category:    CategoryNilPointer,
+			baseConf:    0.9,
+			minExpected: 0.8,
+			maxExpected: 0.8,
+			description: "Tests nil pointer with 'test' and 'fake' reduces confidence by 0.1",
+		},
+		{
+			name:        "nil pointer in test mock low base floors at 0.8",
+			fullText:    "nil pointer in mock test",
+			category:    CategoryNilPointer,
+			baseConf:    0.82,
+			minExpected: 0.8,
+			maxExpected: 0.8,
+			description: "Tests nil pointer mock floors at minimum 0.8 confidence",
+		},
+
+		// Type assertion with ok pattern
+		{
+			name:        "type assertion with ok pattern sets maximum confidence",
+			fullText:    "type assertion failed, ok: false",
+			category:    CategoryTypeMismatch,
+			baseConf:    0.75,
+			minExpected: 1.0,
+			maxExpected: 1.0,
+			description: "Tests type mismatch with ', ok' pattern sets confidence to 1.0",
+		},
+
+		// Index out of range with slice bounds
+		{
+			name:        "slice bounds error sets maximum confidence",
+			fullText:    "slice bounds out of range",
+			category:    CategoryIndexOutOfRange,
+			baseConf:    0.85,
+			minExpected: 1.0,
+			maxExpected: 1.0,
+			description: "Tests index out of range with 'slice bounds' sets confidence to 1.0",
+		},
+
+		// Multiple goroutines in panic
+		{
+			name:        "multiple goroutines reduces confidence",
+			fullText:    "goroutine 1 panic, goroutine 2 panic, goroutine 3 panic, goroutine 4 panic",
+			category:    CategoryGoroutinePanic,
+			baseConf:    0.95,
+			minExpected: 0.7,
+			maxExpected: 0.85,
+			description: "Tests goroutine panic with >3 'goroutine' occurrences reduces confidence by 0.1",
+		},
+		{
+			name:        "multiple goroutines low base floors at 0.7",
+			fullText:    "goroutine 1, goroutine 2, goroutine 3, goroutine 4, goroutine 5",
+			category:    CategoryGoroutinePanic,
+			baseConf:    0.72,
+			minExpected: 0.7,
+			maxExpected: 0.7,
+			description: "Tests multiple goroutines floors at minimum 0.7 confidence",
+		},
+		{
+			name:        "few goroutines does not reduce confidence",
+			fullText:    "goroutine 1 panic, goroutine 2 panic",
+			category:    CategoryGoroutinePanic,
+			baseConf:    0.95,
+			minExpected: 0.95,
+			maxExpected: 0.95,
+			description: "Tests goroutine panic with ≤3 'goroutine' occurrences does not trigger reduction",
+		},
+
+		// Deadlock with channel
+		{
+			name:        "deadlock with channel sets maximum confidence",
+			fullText:    "potential deadlock on channel operation",
+			category:    CategoryDeadlock,
+			baseConf:    0.8,
+			minExpected: 1.0,
+			maxExpected: 1.0,
+			description: "Tests deadlock with 'channel' keyword sets confidence to 1.0",
+		},
+
+		// I/O error with broken pipe
+		{
+			name:        "IO error with broken pipe reduces confidence",
+			fullText:    "broken pipe during write",
+			category:    CategoryIOError,
+			baseConf:    0.95,
+			minExpected: 0.7,
+			maxExpected: 0.8,
+			description: "Tests IO error with 'broken pipe' reduces confidence by 0.15",
+		},
+		{
+			name:        "IO error with broken pipe low base floors at 0.7",
+			fullText:    "broken pipe",
+			category:    CategoryIOError,
+			baseConf:    0.72,
+			minExpected: 0.7,
+			maxExpected: 0.7,
+			description: "Tests IO broken pipe floors at minimum 0.7 confidence",
+		},
+
+		// HTTP error with status code in assertion
+		{
+			name:        "HTTP error with status code and expected reduces confidence",
+			fullText:    "expected status code 200 but got 500",
+			category:    CategoryHTTPError,
+			baseConf:    0.95,
+			minExpected: 0.6,
+			maxExpected: 0.75,
+			description: "Tests HTTP error with 'status code' and 'expected' reduces confidence by 0.2",
+		},
+		{
+			name:        "HTTP error with status code and want reduces confidence",
+			fullText:    "want status code 404",
+			category:    CategoryHTTPError,
+			baseConf:    0.9,
+			minExpected: 0.6,
+			maxExpected: 0.7,
+			description: "Tests HTTP error with 'status code' and 'want' reduces confidence by 0.2",
+		},
+		{
+			name:        "HTTP error with status code assertion low base floors at 0.6",
+			fullText:    "expected status code 200",
+			category:    CategoryHTTPError,
+			baseConf:    0.62,
+			minExpected: 0.6,
+			maxExpected: 0.6,
+			description: "Tests HTTP status code assertion floors at minimum 0.6 confidence",
+		},
+
+		// Map key error with zero map key
+		{
+			name:        "zero map key sets maximum confidence",
+			fullText:    "zero map key in assignment",
+			category:    CategoryMapKey,
+			baseConf:    0.7,
+			minExpected: 1.0,
+			maxExpected: 1.0,
+			description: "Tests map key with 'zero map key' sets confidence to 1.0",
+		},
+
+		// Unknown error with very short message
+		{
+			name:        "unknown with very short message sets very low confidence",
+			fullText:    "unknown error",
+			category:    CategoryUnknown,
+			baseConf:    0.9,
+			minExpected: 0.05,
+			maxExpected: 0.05,
+			description: "Tests unknown category with message <20 chars sets confidence to 0.05",
+		},
+		{
+			name:        "unknown with longer message not affected",
+			fullText:    "this is a longer unknown error message that exceeds twenty characters",
+			category:    CategoryUnknown,
+			baseConf:    0.85,
+			minExpected: 0.85,
+			maxExpected: 0.85,
+			description: "Tests unknown category with message ≥20 chars keeps base confidence",
+		},
+
+		// Minimum confidence enforcement
+		{
+			name:        "very low base confidence floors at 0.05",
+			fullText:    "some text",
+			category:    CategoryPanic,
+			baseConf:    0.01,
+			minExpected: 0.05,
+			maxExpected: 0.05,
+			description: "Tests minimum confidence enforcement floors at 0.05",
+		},
+		{
+			name:        "confidence above 1.0 capped at 1.0",
+			fullText:    "panic on nil pointer", // This sets to 1.0
+			category:    CategoryNilPointer,
+			baseConf:    1.5, // Invalid input
+			minExpected: 1.0,
+			maxExpected: 1.0,
+			description: "Tests maximum confidence cap at 1.0",
+		},
+
+		// No edge cases matched
+		{
+			name:        "no edge cases matched returns base confidence",
+			fullText:    "generic error message",
+			category:    CategoryAssertionError,
+			baseConf:    0.8,
+			minExpected: 0.8,
+			maxExpected: 0.8,
+			description: "Tests when no edge case patterns match, returns base confidence unchanged",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := applyEdgeCaseAdjustments(tt.fullText, tt.category, tt.baseConf)
+			if result < tt.minExpected || result > tt.maxExpected {
+				t.Errorf("applyEdgeCaseAdjustments() = %.2f, want [%.2f, %.2f]\nDescription: %s",
+					result, tt.minExpected, tt.maxExpected, tt.description)
+			}
+		})
+	}
+}
+
+// TestValidateFailuresComprehensive provides complete coverage for all validation paths
+func TestValidateFailuresComprehensive(t *testing.T) {
+	tests := []struct {
+		name        string
+		failures    []TestFailure
+		expectError bool
+		errorSubstr string // Substring to check in error message
+		description string
+	}{
+		{
+			name: "all valid failures",
+			failures: []TestFailure{
+				{
+					TestName:     "TestOne",
+					FilePath:     "test_file.go",
+					ErrorMessage: "test failed",
+				},
+				{
+					TestName:     "TestTwo",
+					FilePath:     "another_test.go",
+					ErrorMessage: "assertion failed",
+				},
+			},
+			expectError: false,
+			description: "Tests validation passes when all required fields are present",
+		},
+		{
+			name: "missing TestName at index 0",
+			failures: []TestFailure{
+				{
+					TestName:     "",
+					FilePath:     "test.go",
+					ErrorMessage: "error",
+				},
+			},
+			expectError: true,
+			errorSubstr: "failure at index 0: missing required field TestName",
+			description: "Tests validation fails when TestName is empty at index 0",
+		},
+		{
+			name: "missing TestName at later index",
+			failures: []TestFailure{
+				{
+					TestName:     "ValidTest",
+					FilePath:     "test.go",
+					ErrorMessage: "error",
+				},
+				{
+					TestName:     "",
+					FilePath:     "test.go",
+					ErrorMessage: "error",
+				},
+			},
+			expectError: true,
+			errorSubstr: "failure at index 1: missing required field TestName",
+			description: "Tests validation fails when TestName is empty at non-zero index",
+		},
+		{
+			name: "missing FilePath with TestName",
+			failures: []TestFailure{
+				{
+					TestName:     "MyTest",
+					FilePath:     "",
+					ErrorMessage: "error",
+				},
+			},
+			expectError: true,
+			errorSubstr: "failure at index 0 (MyTest): missing required field FilePath",
+			description: "Tests validation fails when FilePath is empty and includes TestName in error",
+		},
+		{
+			name: "missing FilePath at index 1",
+			failures: []TestFailure{
+				{
+					TestName:     "TestOne",
+					FilePath:     "file.go",
+					ErrorMessage: "error",
+				},
+				{
+					TestName:     "TestTwo",
+					FilePath:     "",
+					ErrorMessage: "error",
+				},
+			},
+			expectError: true,
+			errorSubstr: "failure at index 1 (TestTwo): missing required field FilePath",
+			description: "Tests validation fails when FilePath is empty at non-zero index with TestName",
+		},
+		{
+			name: "missing ErrorMessage with TestName",
+			failures: []TestFailure{
+				{
+					TestName:     "TestFail",
+					FilePath:     "file.go",
+					ErrorMessage: "",
+				},
+			},
+			expectError: true,
+			errorSubstr: "failure at index 0 (TestFail): missing required field ErrorMessage",
+			description: "Tests validation fails when ErrorMessage is empty and includes TestName in error",
+		},
+		{
+			name: "missing ErrorMessage at index 2",
+			failures: []TestFailure{
+				{
+					TestName:     "Test1",
+					FilePath:     "file1.go",
+					ErrorMessage: "error1",
+				},
+				{
+					TestName:     "Test2",
+					FilePath:     "file2.go",
+					ErrorMessage: "error2",
+				},
+				{
+					TestName:     "Test3",
+					FilePath:     "file3.go",
+					ErrorMessage: "",
+				},
+			},
+			expectError: true,
+			errorSubstr: "failure at index 2 (Test3): missing required field ErrorMessage",
+			description: "Tests validation fails when ErrorMessage is empty at later index",
+		},
+		{
+			name:        "empty failures slice",
+			failures:    []TestFailure{},
+			expectError: false,
+			description: "Tests validation passes with empty failures slice (nothing to validate)",
+		},
+		{
+			name: "multiple fields missing at same index",
+			failures: []TestFailure{
+				{
+					TestName:     "",
+					FilePath:     "",
+					ErrorMessage: "",
+				},
+			},
+			expectError: true,
+			errorSubstr: "failure at index 0: missing required field TestName",
+			description: "Tests validation fails on first missing field (TestName) even when multiple are missing",
+		},
+		{
+			name: "multiple fields missing across different failures",
+			failures: []TestFailure{
+				{
+					TestName:     "",
+					FilePath:     "file.go",
+					ErrorMessage: "error",
+				},
+				{
+					TestName:     "Test2",
+					FilePath:     "",
+					ErrorMessage: "error",
+				},
+			},
+			expectError: true,
+			errorSubstr: "failure at index 0: missing required field TestName",
+			description: "Tests validation fails on first encountered error and stops",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateFailures(tt.failures)
+			if tt.expectError && err == nil {
+				t.Errorf("ValidateFailures() expected error containing %q, but got nil", tt.errorSubstr)
+			}
+			if !tt.expectError && err != nil {
+				t.Errorf("ValidateFailures() expected no error, but got: %v", err)
+			}
+			if tt.expectError && err != nil && tt.errorSubstr != "" {
+				if !strings.Contains(err.Error(), tt.errorSubstr) {
+					t.Errorf("ValidateFailures() error = %q, want error containing %q", err.Error(), tt.errorSubstr)
+				}
 			}
 		})
 	}

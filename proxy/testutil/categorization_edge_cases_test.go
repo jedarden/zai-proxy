@@ -143,21 +143,21 @@ func TestCategorizeFailure_EdgeCase_NilMapAssignment(t *testing.T) {
 
 	cat := CategorizeFailure(failure)
 
-	// This should match map key pattern but with very low confidence
-	// because it's actually a nil pointer issue
-	if cat.Category != CategoryMapKey && cat.Category != CategoryNilPointer {
-		t.Errorf("Category: got %q, want %q or %q (nil map assignment is nil pointer, not map key)",
-			cat.Category, CategoryMapKey, CategoryNilPointer)
+	// This should match nil pointer pattern with high confidence
+	// because the pattern explicitly includes "assignment to entry in nil map"
+	if cat.Category != CategoryNilPointer {
+		t.Errorf("Category: got %q, want %q (nil map assignment is nil pointer, not map key)",
+			cat.Category, CategoryNilPointer)
 	}
 
-	// If categorized as map_key_error, confidence should be very low
-	if cat.Category == CategoryMapKey && cat.Confidence.Float64() > 0.6 {
-		t.Errorf("Confidence for nil map as map_key_error: got %.2f, want < 0.6 (this is actually nil pointer)", cat.Confidence)
+	// Confidence should be high (1.0) since this is an explicit pattern match
+	if cat.Confidence.Float64() < 0.95 {
+		t.Errorf("Confidence for nil map assignment: got %.2f, want >= 0.95 (this should be explicit match)", cat.Confidence)
 	}
 
-	// Check for edge case reasoning
-	if cat.Category == CategoryMapKey && !strings.Contains(cat.Reasoning, "assignment to entry") {
-		t.Error("Reasoning should mention nil map assignment edge case")
+	// Reasoning should indicate nil pointer pattern match
+	if !strings.Contains(cat.Reasoning, "nil pointer") {
+		t.Error("Reasoning should mention nil pointer pattern match")
 	}
 }
 

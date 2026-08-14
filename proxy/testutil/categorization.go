@@ -19,6 +19,44 @@ import (
 // checked before general patterns (assertion errors), providing consistent
 // categorization even for ambiguous cases.
 //
+// UNCERTAINTY DETECTION:
+// The system includes an uncertainty threshold (0.7) that identifies categorizations
+// that may need manual review. Categorizations with confidence at or below this
+// threshold are flagged as uncertain.
+//
+// Example usage - Basic categorization with uncertainty check:
+//
+//	failures := []TestFailure{ /* ... */ }
+//	categorized, stats := CategorizeFailures(failures)
+//
+//	for _, cat := range categorized {
+//	    if cat.Uncertain {
+//	        log.Printf("Uncertain categorization: %s (confidence: %.0f%%)",
+//	            cat.Category, cat.Confidence.Float64()*100)
+//	        // Flag for manual review or apply additional analysis
+//	    }
+//	}
+//
+// Example usage - Filter uncertain failures:
+//
+//	uncertainFailures := GetUncertainFailures(categorized)
+//	if len(uncertainFailures) > 0 {
+//	    log.Printf("Found %d uncertain categorizations requiring review", len(uncertainFailures))
+//	}
+//
+// Example usage - Check uncertainty using Confidence method:
+//
+//	confidence := NewConfidence(0.65)
+//	if confidence.IsUncertain() {
+//	    // Confidence is 65%, below uncertainty threshold of 70%
+//	    log.Printf("Low confidence: %.0f%%", confidence.Float64()*100)
+//	}
+//
+// Example usage - Filter by custom uncertainty threshold:
+//
+//	// Use 0.8 as threshold instead of default 0.7
+//	uncertainAt80 := GetUncertainFailures(categorized, 0.8)
+//
 // See docs/notes/CATEGORIZATION_DECISION_TREE.md for:
 // - Complete decision tree logic with step-by-step explanations
 // - Category definitions with extensive examples
@@ -28,6 +66,7 @@ import (
 // Key features:
 // - Priority-based pattern matching (handles ambiguous cases)
 // - Confidence scoring (0.0 to 1.0) indicates categorization certainty
+// - Uncertainty detection (threshold 0.7) flags low-confidence categorizations
 // - Automatic reasoning generation explains why each category was chosen
 // - Subcategories provide additional specificity (e.g., HTTP/network errors)
 // - Comprehensive statistics and reporting for analysis
@@ -229,6 +268,55 @@ func CalculateConfidence(params ConfidenceCalculationParams) Confidence {
 }
 
 // Confidence represents a confidence score with bounded validation (0.0 to 1.0).
+//
+// CONFIDENCE SCORING APPROACH:
+//
+// The confidence scoring system quantifies categorization certainty using a weighted
+// signal algorithm that considers multiple factors:
+//
+// 1. Base Confidence: Each category starts with a base confidence (0.0 to 1.0)
+//    representing the inherent specificity of its patterns. Examples:
+//    - Data race: 1.0 (unambiguous "WARNING: DATA RACE" marker)
+//    - Timeout: 0.95 (clear terminology but various contexts)
+//    - Assertion error: 0.7 (general patterns, high ambiguity)
+//
+// 2. Signal Weighting: Match signals contribute to confidence based on type:
+//    - ExactMatch: 1.0 (strongest - "panic:", "DATA RACE")
+//    - KeywordMatch: 0.9 (strong - "timeout", "refused")
+//    - ContextualMatch: 0.8 (moderate-strong - pattern with supporting context)
+//    - PartialMatch: 0.6 (weak - generic patterns)
+//    - Inferred: 0.4 (very weak - inference from context only)
+//
+// 3. Ambiguity Penalty: When multiple patterns match, confidence is reduced based
+//    on predefined ambiguity handlers. This prevents overconfidence in ambiguous cases.
+//
+// 4. Context Boost: Strong supporting context can increase confidence, but never
+//    above 1.0 (the formula: boost * (1.0 - confidence) ensures this).
+//
+// 5. Normalization: Signal contributions are normalized using a sigmoid-like function
+//    (contribution / (1.0 + contribution)) to prevent any single signal from dominating.
+//
+// INTERPRETING CONFIDENCE VALUES:
+//
+// - 0.95 - 1.0 (Very High): Unambiguous categorization, manual review not needed
+// - 0.80 - 0.94 (High): High confidence, reliable for automation
+// - 0.70 - 0.79 (Moderate): Acceptable confidence, flag for review if critical
+// - 0.50 - 0.69 (Low): Uncertain, manual review recommended
+// - 0.00 - 0.49 (Very Low): Very uncertain, manual review required
+//
+// The uncertainty threshold (0.7) was chosen because:
+// - It captures cases where ambiguity penalties have significantly reduced confidence
+// - It excludes high-confidence matches (0.8+) that are reliable for automation
+// - It aligns with the "Moderate" level, providing clear semantic meaning
+//
+// Example usage:
+//
+//	conf := NewConfidence(0.65)
+//	if conf.IsUncertain() {
+//	    // Log warning: categorization confidence is 65%, below uncertainty threshold
+//	    // Flag for manual review or apply additional analysis
+//	}
+//
 // This type ensures that confidence values are always within valid range and
 // provides type safety for confidence-based operations.
 type Confidence float64
@@ -239,6 +327,11 @@ const (
 	ConfidenceMax      Confidence = 1.0  // Maximum possible confidence (unambiguous)
 	ConfidenceLow      Confidence = 0.5  // Low confidence threshold
 	ConfidenceModerate Confidence = 0.7  // Moderate confidence threshold (uncertain below this)
+	// UncertainThreshold is the confidence level below which categorizations
+	// are considered uncertain and may need manual review. A value of 0.7
+	// means categorizations with 70% confidence or less are flagged.
+	// This threshold balances false positives (low threshold) vs missed issues (high threshold).
+	UncertainThreshold Confidence = 0.7
 	ConfidenceHigh     Confidence = 0.8  // High confidence threshold
 	ConfidenceVeryHigh Confidence = 0.95 // Very high confidence threshold
 )
@@ -260,15 +353,46 @@ func (c Confidence) Float64() float64 {
 	return float64(c)
 }
 
-// IsCertain returns true if confidence is above the uncertainty threshold (0.7).
-// Categorizations below this threshold may need manual review.
+// IsCertain returns true if confidence is at or above the uncertainty threshold (0.7).
+//
+// Use this method to identify categorizations that are reliable for automation.
+// Categorizations with confidence at or above 0.7 are considered certain enough to use
+// without manual review in most scenarios.
+//
+// Example usage:
+//
+//	confidence := NewConfidence(0.85)
+//	if confidence.IsCertain() {
+//	    // Confidence is 85%, at or above uncertainty threshold of 70%
+//	    // Safe to use for automation without manual review
+//	}
+//
+// This method uses >= (greater than or equal), so a confidence of exactly 0.7 is
+// considered certain. This provides an inclusive boundary where the threshold value
+// itself is acceptable for automation.
 func (c Confidence) IsCertain() bool {
-	return c >= ConfidenceModerate
+	return c >= UncertainThreshold
 }
 
 // IsUncertain returns true if confidence is at or below the uncertainty threshold (0.7).
+//
+// Use this method to identify categorizations that may need manual review or additional
+// analysis. The uncertainty threshold balances between catching potential issues and
+// avoiding excessive false positives.
+//
+// Example usage:
+//
+//	confidence := NewConfidence(0.65)
+//	if confidence.IsUncertain() {
+//	    // Confidence is 65%, below uncertainty threshold of 70%
+//	    // Flag for manual review or apply additional analysis
+//	    log.Printf("Low confidence categorization: %.0f%%", confidence.Float64()*100)
+//	}
+//
+// The method uses <= (less than or equal) so a confidence of exactly 0.7 is considered
+// uncertain. This ensures borderline cases are flagged for review.
 func (c Confidence) IsUncertain() bool {
-	return c <= ConfidenceModerate
+	return c <= UncertainThreshold
 }
 
 // NeedsManualReview returns true if confidence suggests manual review is needed (<= 0.5).
@@ -292,14 +416,37 @@ func (c Confidence) Level() string {
 	}
 }
 
-// CategorizedFailure represents a test failure with its category and confidence.
+// CategorizedFailure represents a test failure with its category, confidence,
+// and uncertainty flag. This is the primary result type returned by the
+// categorization system.
+//
+// Example usage:
+//
+//	failure := CategorizeFailure(testFailure)
+//	if failure.Uncertain {
+//	    log.Printf("Uncertain categorization: %s (%.0f%% confidence)",
+//	        failure.Category, failure.Confidence.Float64()*100)
+//	    // Consider manual review or additional analysis
+//	}
+//
+//	if failure.Confidence.IsUncertain() {
+//	    // Alternative: Check uncertainty using the Confidence method
+//	    // This is equivalent to checking the Uncertain field
+//	}
 type CategorizedFailure struct {
 	TestFailure
-	Category      FailureCategory `json:"category"`
-	Subcategory   string           `json:"subcategory,omitempty"`
-	Confidence    Confidence       `json:"confidence"` // 0.0 to 1.0 with type safety
-	Uncertain     bool             `json:"uncertain"`   // true if confidence < 0.7
-	Reasoning     string           `json:"reasoning,omitempty"`
+	Category    FailureCategory `json:"category"`           // Categorized failure type
+	Subcategory string           `json:"subcategory,omitempty"` // Optional subcategory for specificity
+	// Confidence is the categorization confidence score (0.0 to 1.0).
+	// Use the IsUncertain() method to check if this score is below the
+	// uncertainty threshold (0.7), or access the Uncertain field directly.
+	Confidence Confidence `json:"confidence"`
+	// Uncertain is true if confidence is at or below the uncertainty threshold (0.7).
+	// This field is automatically computed during categorization.
+	// Categorizations with Uncertain=true may need manual review.
+	// Use Confidence.IsUncertain() for the same check in a fluent style.
+	Uncertain bool   `json:"uncertain"` // true if confidence <= 0.7
+	Reasoning string `json:"reasoning,omitempty"` // Human-readable explanation of categorization
 }
 
 // CategorizationRule defines how to categorize failures.
@@ -361,7 +508,7 @@ var categorizationRules = []CategorizationRule{
 	// Checked before specific error types to catch timeout-related issues early
 	{
 		Category:       CategoryTimeout,
-		Pattern:        regexp.MustCompile(`(?i)context deadline exceeded|timeout.*exceeded|timed out|timeout waiting for|test timed out|exceeded.*timeout`),
+		Pattern:        regexp.MustCompile(`(?i)context deadline exceeded|context canceled|timeout.*exceeded|timed out|timeout waiting for|test timed out|exceeded.*timeout`),
 		Priority:       70,
 		BaseConfidence: 0.95,
 		AmbiguityHandlers: map[FailureCategory]ConfidenceAdjustment{
@@ -375,7 +522,7 @@ var categorizationRules = []CategorizationRule{
 	// Checked before general panics to provide specific categorization
 	{
 		Category:       CategoryNilPointer,
-		Pattern:        regexp.MustCompile(`(?i)null pointer|nil pointer dereference|panic on nil pointer`),
+		Pattern:        regexp.MustCompile(`(?i)null pointer|nil pointer dereference|panic on nil pointer|assignment to entry in nil map`),
 		Priority:       65,
 		BaseConfidence: 1.0,
 		AmbiguityHandlers: map[FailureCategory]ConfidenceAdjustment{

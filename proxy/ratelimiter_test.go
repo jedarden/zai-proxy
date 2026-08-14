@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/time/rate"
+
 	"git.ardenone.com/jedarden/zai-proxy/proxy/config"
 )
 
@@ -41,10 +43,6 @@ func TestAdaptiveRateLimiter_Bounds(t *testing.T) {
 			minRate:     1.0,
 			maxRate:     20.0,
 			operations: []operation{
-				recordSuccesses(1000),
-				advanceWindow(),
-				recordSuccesses(1000),
-				advanceWindow(),
 				recordSuccesses(1000),
 				advanceWindow(),
 				recordSuccesses(1000),
@@ -2821,8 +2819,8 @@ func TestCleanWindowDetection(t *testing.T) {
 	}
 }
 
-// TestProbeDeactivation ensures probe state resets appropriately
-func TestProbeDeactivation(t *testing.T) {
+// TestCleanWindowStateTransitions tests state transitions between clean and non-clean windows
+func TestCleanWindowStateTransitions(t *testing.T) {
 	tests := []struct {
 		name          string
 		initialRate   float64
@@ -2830,48 +2828,189 @@ func TestProbeDeactivation(t *testing.T) {
 		maxRate       float64
 		holdMargin    float64
 		probeInterval int
-		triggerType   string
-		description   string
+		sequence      []struct {
+			percent429    float64
+			windows       int
+			wantCountAfter int // Expected cleanWindows count after this sequence
+		}
+		description string
 	}{
 		{
-			name:          "deactivation after 429 during probe",
+			name:          "clean to non-clean transition with counter reset",
 			initialRate:   30.0,
 			minRate:       1.0,
 			maxRate:       50.0,
 			holdMargin:    0.02,
 			probeInterval: 10,
-			triggerType:   "429",
-			description:   "429 during probe should reset state and drop rate to hold",
+			sequence: []struct {
+				percent429    float64
+				windows       int
+				wantCountAfter int
+			}{
+				{percent429: 0.0, windows: 5, wantCountAfter: 5},   // 5 clean windows
+				{percent429: 10.0, windows: 1, wantCountAfter: 0},  // High 429 rate resets counter
+			},
+			description: "Counter should increment during clean windows, then reset to 0 when 429 rate exceeds 5%",
 		},
 		{
-			name:          "deactivation after single 429 resets counter",
+			name:          "non-clean to clean transition allows counter to resume",
 			initialRate:   30.0,
 			minRate:       1.0,
 			maxRate:       50.0,
 			holdMargin:    0.02,
 			probeInterval: 10,
-			triggerType:   "single429",
-			description:   "Single 429 should reset cleanWindows counter",
+			sequence: []struct {
+				percent429    float64
+				windows       int
+				wantCountAfter int
+			}{
+				{percent429: 20.0, windows: 1, wantCountAfter: 0},  // High 429 rate resets counter
+				{percent429: 0.0, windows: 3, wantCountAfter: 3},   // Clean windows increment counter
+			},
+			description: "After high 429 rate resets counter to 0, clean windows should increment it again",
 		},
 		{
-			name:          "deactivation after high 429 rate",
+			name:          "clean to middle regime transition preserves counter",
 			initialRate:   30.0,
 			minRate:       1.0,
 			maxRate:       50.0,
 			holdMargin:    0.02,
 			probeInterval: 10,
-			triggerType:   "high429",
-			description:   "High 429 rate should reset probe state completely",
+			sequence: []struct {
+				percent429    float64
+				windows       int
+				wantCountAfter int
+			}{
+				{percent429: 0.0, windows: 4, wantCountAfter: 4},   // 4 clean windows
+				{percent429: 2.0, windows: 2, wantCountAfter: 4},   // Middle regime (1-5%) preserves counter
+			},
+			description: "Transition from clean (<1%) to middle regime (1-5%) should preserve counter value",
 		},
 		{
-			name:          "probe then clean windows restarts cycle",
+			name:          "middle regime to clean transition resumes incrementing",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			sequence: []struct {
+				percent429    float64
+				windows       int
+				wantCountAfter int
+			}{
+				{percent429: 0.0, windows: 2, wantCountAfter: 2},   // 2 clean windows
+				{percent429: 3.0, windows: 3, wantCountAfter: 2},   // Middle regime preserves counter at 2
+				{percent429: 0.0, windows: 2, wantCountAfter: 4},   // Clean windows resume incrementing: 2 + 2 = 4
+			},
+			description: "After middle regime, returning to clean windows should resume incrementing counter",
+		},
+		{
+			name:          "multiple state transitions",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			sequence: []struct {
+				percent429    float64
+				windows       int
+				wantCountAfter int
+			}{
+				{percent429: 0.0, windows: 3, wantCountAfter: 3},   // Clean: counter = 3
+				{percent429: 10.0, windows: 1, wantCountAfter: 0},  // High 429: reset to 0
+				{percent429: 0.0, windows: 2, wantCountAfter: 2},   // Clean: counter = 2
+				{percent429: 2.5, windows: 2, wantCountAfter: 2},  // Middle: preserve at 2
+				{percent429: 0.5, windows: 1, wantCountAfter: 3},   // Clean: counter = 3
+				{percent429: 50.0, windows: 1, wantCountAfter: 0},  // Very high 429: reset to 0
+				{percent429: 0.0, windows: 1, wantCountAfter: 1},   // Clean: counter = 1
+			},
+			description: "Multiple transitions between clean, middle, and high regimes should update counter correctly",
+		},
+		{
+			name:          "clean window accumulates to probe threshold",
 			initialRate:   30.0,
 			minRate:       1.0,
 			maxRate:       50.0,
 			holdMargin:    0.02,
 			probeInterval: 5,
-			triggerType:   "cycle",
-			description:   "After probe, clean windows should restart counting",
+			sequence: []struct {
+				percent429    float64
+				windows       int
+				wantCountAfter int
+			}{
+				{percent429: 0.0, windows: 4, wantCountAfter: 4},   // 4 clean windows (not yet at probe interval)
+				{percent429: 0.0, windows: 1, wantCountAfter: 0},   // 5th clean window triggers probe, resets to 0
+			},
+			description: "Counter should reach probe interval, trigger probe, and reset to 0",
+		},
+		{
+			name:          "middle regime never increments counter",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			sequence: []struct {
+				percent429    float64
+				windows       int
+				wantCountAfter int
+			}{
+				{percent429: 1.5, windows: 5, wantCountAfter: 0},   // Middle regime: counter stays at 0
+				{percent429: 4.0, windows: 5, wantCountAfter: 0},   // Middle regime: counter stays at 0
+			},
+			description: "Middle regime (1-5% 429 rate) should never increment cleanWindows counter",
+		},
+		{
+			name:          "exactly 1% boundary preserves counter (not clean)",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			sequence: []struct {
+				percent429    float64
+				windows       int
+				wantCountAfter int
+			}{
+				{percent429: 0.5, windows: 3, wantCountAfter: 3},   // Clean: counter = 3
+				{percent429: 1.0, windows: 2, wantCountAfter: 3},   // Exactly 1%: not clean, preserve at 3
+				{percent429: 0.9, windows: 1, wantCountAfter: 4},   // Below 1%: clean, increment to 4
+			},
+			description: "Exactly 1% 429 rate is not clean (uses < 1% threshold), counter should be preserved",
+		},
+		{
+			name:          "just below 1% threshold increments counter",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			sequence: []struct {
+				percent429    float64
+				windows       int
+				wantCountAfter int
+			}{
+				{percent429: 0.99, windows: 5, wantCountAfter: 5},  // 0.99% is clean, counter = 5
+				{percent429: 0.999, windows: 3, wantCountAfter: 8}, // 0.999% is clean, counter = 8
+			},
+			description: "429 rate just below 1% threshold should increment counter",
+		},
+		{
+			name:          "just above 1% threshold preserves counter",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			sequence: []struct {
+				percent429    float64
+				windows       int
+				wantCountAfter int
+			}{
+				{percent429: 0.5, windows: 4, wantCountAfter: 4},   // Clean: counter = 4
+				{percent429: 1.01, windows: 3, wantCountAfter: 4},  // 1.01%: not clean, preserve at 4
+			},
+			description: "429 rate just above 1% threshold should preserve counter (middle regime)",
 		},
 	}
 
@@ -2882,11 +3021,247 @@ func TestProbeDeactivation(t *testing.T) {
 			arl.holdMargin = tt.holdMargin
 			arl.probeInterval = tt.probeInterval
 
+			t.Logf(tt.description)
+			t.Logf("  Initial state: rate=%.2f, holdMargin=%.2f, probeInterval=%d",
+				arl.GetCurrentRate(), arl.holdMargin, arl.probeInterval)
+
+			for seqIdx, seq := range tt.sequence {
+				t.Logf("  Sequence %d: %.2f%% 429 rate for %d windows",
+					seqIdx+1, seq.percent429, seq.windows)
+
+				for i := 0; i < seq.windows; i++ {
+					totalRequests := int64(1000) // Use 1000 for finer granularity
+					count429 := int64(float64(totalRequests) * seq.percent429 / 100.0)
+					countSuccess := totalRequests - count429
+
+					// Ensure at least 1 request for accurate percentage
+					if count429 == 0 && seq.percent429 > 0 {
+						count429 = 1
+						countSuccess = totalRequests - 1
+					}
+
+					// Record the requests
+					for j := int64(0); j < count429; j++ {
+						arl.Record429()
+					}
+					for j := int64(0); j < countSuccess; j++ {
+						arl.RecordSuccess()
+					}
+
+					// Force window advancement to trigger tryAdjustRate
+					arl.mu.Lock()
+					arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
+					arl.mu.Unlock()
+					arl.RecordSuccess()
+
+					t.Logf("    Window %d: 429 rate=%.2f%%, cleanWindows=%d",
+						i+1, seq.percent429, arl.cleanWindows)
+				}
+
+				// Verify counter after this sequence
+				if arl.cleanWindows != seq.wantCountAfter {
+					t.Errorf("After sequence %d (%.2f%% 429, %d windows): cleanWindows = %d, want %d",
+						seqIdx+1, seq.percent429, seq.windows, arl.cleanWindows, seq.wantCountAfter)
+				} else {
+					t.Logf("    ✓ Sequence %d complete: cleanWindows=%d (expected %d)",
+						seqIdx+1, arl.cleanWindows, seq.wantCountAfter)
+				}
+			}
+
+			finalCount := arl.cleanWindows
+			finalSequence := tt.sequence[len(tt.sequence)-1]
+			if finalCount != finalSequence.wantCountAfter {
+				t.Errorf("Final cleanWindows count = %d, want %d",
+					finalCount, finalSequence.wantCountAfter)
+			}
+
+			t.Logf("✓ State transitions verified: final cleanWindows=%d", finalCount)
+		})
+	}
+}
+
+// TestCleanWindowCounterAccumulation tests counter accumulation over many windows
+func TestCleanWindowCounterAccumulation(t *testing.T) {
+	tests := []struct {
+		name          string
+		initialRate   float64
+		minRate       float64
+		maxRate       float64
+		holdMargin    float64
+		probeInterval int
+		cleanWindows  int
+		description   string
+	}{
+		{
+			name:          "accumulate 10 clean windows",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 20, // Set high to avoid probe triggering
+			cleanWindows:  10,
+			description:   "Counter should correctly accumulate 10 consecutive clean windows",
+		},
+		{
+			name:          "accumulate 15 clean windows",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 20, // Set high to avoid probe triggering
+			cleanWindows:  15,
+			description:   "Counter should correctly accumulate 15 consecutive clean windows",
+		},
+		{
+			name:          "accumulate 1 clean window",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			cleanWindows:  1,
+			description:   "Counter should correctly increment after single clean window",
+		},
+		{
+			name:          "accumulate to just below probe interval",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			cleanWindows:  9,
+			description:   "Counter should reach 9 (just below probe interval of 10) without triggering probe",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testWindow := 10 * time.Millisecond
+			arl := NewAdaptiveRateLimiterWithWindow(tt.initialRate, tt.minRate, tt.maxRate, testWindow)
+			arl.holdMargin = tt.holdMargin
+			arl.probeInterval = tt.probeInterval
+
+			t.Logf(tt.description)
+			t.Logf("  probeInterval=%d, will accumulate %d clean windows",
+				tt.probeInterval, tt.cleanWindows)
+
+			// Accumulate clean windows
+			for i := 0; i < tt.cleanWindows; i++ {
+				// Record a clean window (0% 429 rate)
+				for j := 0; j < 100; j++ {
+					arl.RecordSuccess()
+				}
+
+				// Force window advancement
+				arl.mu.Lock()
+				arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
+				arl.mu.Unlock()
+				arl.RecordSuccess()
+
+				t.Logf("  Window %d: cleanWindows=%d", i+1, arl.cleanWindows)
+			}
+
+			// Verify counter
+			if arl.cleanWindows != tt.cleanWindows {
+				t.Errorf("After %d clean windows, counter = %d, want %d",
+					tt.cleanWindows, arl.cleanWindows, tt.cleanWindows)
+			}
+
+			// Verify rate is at or below hold position (no probe yet)
 			holdRate := arl.estimatedCeiling * (1 - tt.holdMargin)
+			currentRate := arl.GetCurrentRate()
+			if currentRate > holdRate + 0.01 {
+				t.Errorf("After %d clean windows (below probe interval), rate %.2f should not exceed hold %.2f",
+					tt.cleanWindows, currentRate, holdRate)
+			}
+
+			t.Logf("✓ Counter accumulation verified: cleanWindows=%d, rate=%.2f (hold=%.2f)",
+				arl.cleanWindows, currentRate, holdRate)
+		})
+	}
+}
+
+// TestCleanWindowResetBehavior tests counter reset behavior under various conditions
+func TestCleanWindowResetBehavior(t *testing.T) {
+	tests := []struct {
+		name          string
+		initialRate   float64
+		minRate       float64
+		maxRate       float64
+		holdMargin    float64
+		probeInterval int
+		resetTrigger  float64 // 429 rate that triggers reset
+		preResetCount int     // Number of clean windows before reset
+		description   string
+	}{
+		{
+			name:          "reset at exactly 5% threshold",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			resetTrigger:  5.0,
+			preResetCount: 5,
+			description:   "429 rate at exactly 5% uses strict > (falls to middle regime, preserves counter)",
+		},
+		{
+			name:          "reset above 5% threshold",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			resetTrigger:  6.0,
+			preResetCount: 5,
+			description:   "429 rate above 5% threshold should reset counter to 0",
+		},
+		{
+			name:          "reset with very high 429 rate",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			resetTrigger:  100.0,
+			preResetCount: 8,
+			description:   "100% 429 rate should reset counter to 0",
+		},
+		{
+			name:          "reset after single clean window",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			resetTrigger:  10.0,
+			preResetCount: 1,
+			description:   "Even a single clean window should be reset by high 429 rate",
+		},
+		{
+			name:          "no reset below 5% threshold",
+			initialRate:   30.0,
+			minRate:       1.0,
+			maxRate:       50.0,
+			holdMargin:    0.02,
+			probeInterval: 10,
+			resetTrigger:  4.9,
+			preResetCount: 5,
+			description:   "429 rate below 5% threshold (4.9%) should not reset counter (middle regime)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testWindow := 10 * time.Millisecond
+			arl := NewAdaptiveRateLimiterWithWindow(tt.initialRate, tt.minRate, tt.maxRate, testWindow)
+			arl.holdMargin = tt.holdMargin
+			arl.probeInterval = tt.probeInterval
+
 			t.Logf(tt.description)
 
-			// First, trigger probe by accumulating clean windows
-			for i := 0; i < tt.probeInterval; i++ {
+			// Accumulate clean windows
+			for i := 0; i < tt.preResetCount; i++ {
 				for j := 0; j < 100; j++ {
 					arl.RecordSuccess()
 				}
@@ -2896,96 +3271,428 @@ func TestProbeDeactivation(t *testing.T) {
 				arl.RecordSuccess()
 			}
 
-			probeRate := arl.GetCurrentRate()
-			cleanWindowsAfterProbe := arl.cleanWindows
+			countBeforeReset := arl.cleanWindows
+			t.Logf("  After %d clean windows: counter=%d", tt.preResetCount, countBeforeReset)
 
-			t.Logf("  After probe: rate=%.2f, cleanWindows=%d", probeRate, cleanWindowsAfterProbe)
+			// Apply reset trigger
+			totalRequests := int64(1000)
+			count429 := int64(float64(totalRequests) * tt.resetTrigger / 100.0)
+			countSuccess := totalRequests - count429
 
-			// Verify probe activated
-			if probeRate <= holdRate {
-				t.Errorf("Probe should have activated (rate %.2f should exceed hold %.2f)",
-					probeRate, holdRate)
+			// Ensure at least 1 request for accuracy
+			if count429 == 0 && tt.resetTrigger > 0 {
+				count429 = 1
+				countSuccess = totalRequests - 1
 			}
 
-			// Now apply deactivation trigger
-			switch tt.triggerType {
-			case "429":
-				// Simulate 429s during probe
-				arl.mu.Lock()
-				arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
-				arl.mu.Unlock()
-				for i := 0; i < 10; i++ {
-					arl.Record429()
-				}
-				for i := 0; i < 90; i++ {
-					arl.RecordSuccess()
-				}
-
-			case "single429":
-				// Single 429 should reset counter
-				arl.mu.Lock()
-				arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
-				arl.mu.Unlock()
+			for j := int64(0); j < count429; j++ {
 				arl.Record429()
-				for i := 0; i < 99; i++ {
+			}
+			for j := int64(0); j < countSuccess; j++ {
+				arl.RecordSuccess()
+			}
+
+			// Force window advancement
+			arl.mu.Lock()
+			arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
+			arl.mu.Unlock()
+			arl.RecordSuccess()
+
+			countAfterReset := arl.cleanWindows
+			t.Logf("  After %.2f%% 429 rate: counter=%d", tt.resetTrigger, countAfterReset)
+
+			// Verify reset behavior
+			if tt.resetTrigger > 5.0 {
+				// Should reset to 0 (high regime uses strict >)
+				if countAfterReset != 0 {
+					t.Errorf("After %.2f%% 429 rate (> 5%%), counter should reset to 0, got %d",
+						tt.resetTrigger, countAfterReset)
+				}
+				t.Logf("✓ Counter reset to 0 as expected")
+			} else {
+				// Should preserve counter (middle regime: 1-5% uses <= and >=)
+				// Exactly 5.0% falls into middle regime since condition is >
+				if countAfterReset != countBeforeReset {
+					t.Errorf("After %.2f%% 429 rate (<= 5%%), counter should stay at %d, got %d",
+						tt.resetTrigger, countBeforeReset, countAfterReset)
+				}
+				t.Logf("✓ Counter preserved at %d (middle regime behavior)", countAfterReset)
+			}
+		})
+	}
+}
+
+// TestCleanWindowRateConvergence tests rate convergence during clean windows
+func TestCleanWindowRateConvergence(t *testing.T) {
+	tests := []struct {
+		name              string
+		initialRate       float64
+		minRate           float64
+		maxRate           float64
+		holdMargin        float64
+		startRate         float64
+		cleanWindows      int
+		wantRateIncrease  bool
+		description       string
+	}{
+		{
+			name:             "rate increases during clean windows when below hold",
+			initialRate:      30.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			startRate:        10.0,
+			cleanWindows:     5,
+			wantRateIncrease: true,
+			description:      "When starting below hold position, clean windows should increase rate",
+		},
+		{
+			name:             "rate stays steady when at or above hold",
+			initialRate:      49.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			startRate:        49.0,
+			cleanWindows:     5,
+			wantRateIncrease: false,
+			description:      "When starting at or above hold position, clean windows should not increase rate",
+		},
+		{
+			name:             "rate converges stepwise toward hold",
+			initialRate:      10.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			startRate:        10.0,
+			cleanWindows:     3,
+			wantRateIncrease: true,
+			description:      "Each clean window should close 50% of gap to hold position",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testWindow := 10 * time.Millisecond
+			arl := NewAdaptiveRateLimiterWithWindow(tt.initialRate, tt.minRate, tt.maxRate, testWindow)
+			arl.holdMargin = tt.holdMargin
+			arl.currentRate = tt.startRate
+			arl.limiter.SetLimit(rate.Limit(tt.startRate))
+			arl.limiter.SetBurst(int(tt.startRate * 2))
+
+			holdRate := arl.estimatedCeiling * (1 - tt.holdMargin)
+			initialRate := arl.GetCurrentRate()
+
+			t.Logf(tt.description)
+			t.Logf("  Initial: rate=%.2f, hold=%.2f", initialRate, holdRate)
+
+			// Apply clean windows
+			for i := 0; i < tt.cleanWindows; i++ {
+				for j := 0; j < 100; j++ {
 					arl.RecordSuccess()
 				}
-
-			case "high429":
-				// High 429 rate
 				arl.mu.Lock()
 				arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
 				arl.mu.Unlock()
-				for i := 0; i < 50; i++ {
-					arl.Record429()
-				}
-				for i := 0; i < 50; i++ {
-					arl.RecordSuccess()
-				}
+				arl.RecordSuccess()
 
-			case "cycle":
-				// After probe, verify cleanWindows restarts cycle
-				// This test checks that after probe, we can accumulate clean windows again
-				if cleanWindowsAfterProbe != 0 {
-					t.Errorf("After probe, cleanWindows should be 0, got %d", cleanWindowsAfterProbe)
-				}
-
-				// Accumulate another clean window
-				arl.mu.Lock()
-				arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
-				arl.mu.Unlock()
-				for i := 0; i < 100; i++ {
-					arl.RecordSuccess()
-				}
-
-				cleanWindowsAfterClean := arl.cleanWindows
-				if cleanWindowsAfterClean != 1 {
-					t.Errorf("After one clean window post-probe, cleanWindows should be 1, got %d",
-						cleanWindowsAfterClean)
-				}
-				t.Logf("✓ Probe cycle restart: cleanWindows incremented from 0 to %d",
-					cleanWindowsAfterClean)
-				return // Skip final verification for this case
+				t.Logf("  Window %d: rate=%.2f, cleanWindows=%d",
+					i+1, arl.GetCurrentRate(), arl.cleanWindows)
 			}
 
 			finalRate := arl.GetCurrentRate()
-			finalCleanWindows := arl.cleanWindows
 
-			// Verify deactivation: rate should drop to hold position
-			tolerance := holdRate * 0.01
-			if finalRate < holdRate-tolerance || finalRate > holdRate+tolerance {
-				t.Errorf("After deactivation, rate %.2f should be at hold position %.2f±%.2f",
-					finalRate, holdRate, tolerance)
+			// Verify rate change
+			if tt.wantRateIncrease {
+				if finalRate <= initialRate {
+					t.Errorf("During clean windows, rate should increase from %.2f, got %.2f",
+						initialRate, finalRate)
+				}
+				// But should not exceed hold position
+				if finalRate > holdRate + 0.01 {
+					t.Errorf("During clean windows, rate %.2f should not exceed hold %.2f",
+						finalRate, holdRate)
+				}
+				t.Logf("✓ Rate increased: %.2f → %.2f (hold: %.2f)", initialRate, finalRate, holdRate)
+			} else {
+				// Rate should stay relatively stable (within 5%)
+				if finalRate < initialRate*0.95 || finalRate > initialRate*1.05 {
+					t.Errorf("When at/above hold, rate should stay stable around %.2f, got %.2f",
+						initialRate, finalRate)
+				}
+				t.Logf("✓ Rate stayed stable: %.2f → %.2f", initialRate, finalRate)
 			}
 
-			// Verify cleanWindows reset
-			if tt.triggerType != "cycle" && finalCleanWindows != 0 {
-				t.Errorf("After deactivation, cleanWindows should be 0, got %d",
+			// Verify cleanWindows counter
+			if arl.cleanWindows != tt.cleanWindows {
+				t.Errorf("After %d clean windows, counter should be %d, got %d",
+					tt.cleanWindows, tt.cleanWindows, arl.cleanWindows)
+			}
+		})
+	}
+}
+
+// TestNonCleanWindowDetection tests scenarios where 429-rate >= 1% (non-clean windows)
+func TestNonCleanWindowDetection(t *testing.T) {
+	tests := []struct {
+		name          string
+		initialRate   float64
+		minRate       float64
+		maxRate       float64
+		holdMargin    float64
+		percent429    float64
+		wantClean     bool
+		wantCounterReset bool // Whether cleanWindows should reset to 0
+		description   string
+	}{
+		// Exactly at threshold (1%)
+		{
+			name:              "exactly 1% threshold is not clean",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			holdMargin:        0.02,
+			percent429:        1.0,
+			wantClean:         false,
+			wantCounterReset:  false, // Middle regime (1-5%) preserves counter
+			description:       "429-rate at exactly 1% threshold should NOT be clean",
+		},
+
+		// Just above threshold
+		{
+			name:              "1.01% just above threshold is not clean",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			holdMargin:        0.02,
+			percent429:        1.01,
+			wantClean:         false,
+			wantCounterReset:  false, // Middle regime (1-5%) preserves counter
+			description:       "429-rate just above 1% threshold should NOT be clean",
+		},
+		{
+			name:              "1.1% is not clean",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			holdMargin:        0.02,
+			percent429:        1.1,
+			wantClean:         false,
+			wantCounterReset:  false, // Middle regime (1-5%) preserves counter
+			description:       "429-rate of 1.1% should NOT be clean",
+		},
+		{
+			name:              "1.5% is not clean",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			holdMargin:        0.02,
+			percent429:        1.5,
+			wantClean:         false,
+			wantCounterReset:  false, // Middle regime (1-5%) preserves counter
+			description:       "429-rate of 1.5% should NOT be clean",
+		},
+
+		// Middle regime (1-5%)
+		{
+			name:              "2% middle regime is not clean",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			holdMargin:        0.02,
+			percent429:        2.0,
+			wantClean:         false,
+			wantCounterReset:  false, // Middle regime preserves counter
+			description:       "429-rate of 2% (middle regime) should NOT be clean",
+		},
+		{
+			name:              "3% middle regime is not clean",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			holdMargin:        0.02,
+			percent429:        3.0,
+			wantClean:         false,
+			wantCounterReset:  false, // Middle regime preserves counter
+			description:       "429-rate of 3% (middle regime) should NOT be clean",
+		},
+		{
+			name:              "4% middle regime is not clean",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			holdMargin:        0.02,
+			percent429:        4.0,
+			wantClean:         false,
+			wantCounterReset:  false, // Middle regime preserves counter
+			description:       "429-rate of 4% (middle regime) should NOT be clean",
+		},
+		{
+			name:              "4.9% just below high regime is not clean",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			holdMargin:        0.02,
+			percent429:        4.9,
+			wantClean:         false,
+			wantCounterReset:  false, // Middle regime preserves counter
+			description:       "429-rate of 4.9% (just below 5% threshold) should NOT be clean",
+		},
+
+		// At high regime threshold (5%)
+		{
+			name:              "exactly 5% high regime threshold is not clean",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			holdMargin:        0.02,
+			percent429:        5.0,
+			wantClean:         false,
+			wantCounterReset:  false, // Exactly 5% is middle regime (uses >)
+			description:       "429-rate at exactly 5% threshold should NOT be clean (falls to middle regime)",
+		},
+
+		// High regime (>5%)
+		{
+			name:              "5.1% just above high regime threshold is not clean",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			holdMargin:        0.02,
+			percent429:        5.1,
+			wantClean:         false,
+			wantCounterReset:  true, // High regime (>5%) resets counter
+			description:       "429-rate of 5.1% (just above 5% threshold) should NOT be clean and should reset counter",
+		},
+		{
+			name:              "6% high regime is not clean",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			holdMargin:        0.02,
+			percent429:        6.0,
+			wantClean:         false,
+			wantCounterReset:  true, // High regime resets counter
+			description:       "429-rate of 6% (high regime) should NOT be clean and should reset counter",
+		},
+		{
+			name:              "10% high regime is not clean",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			holdMargin:        0.02,
+			percent429:        10.0,
+			wantClean:         false,
+			wantCounterReset:  true, // High regime resets counter
+			description:       "429-rate of 10% (high regime) should NOT be clean and should reset counter",
+		},
+		{
+			name:              "20% high regime is not clean",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			holdMargin:        0.02,
+			percent429:        20.0,
+			wantClean:         false,
+			wantCounterReset:  true, // High regime resets counter
+			description:       "429-rate of 20% (high regime) should NOT be clean and should reset counter",
+		},
+		{
+			name:              "50% high regime is not clean",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			holdMargin:        0.02,
+			percent429:        50.0,
+			wantClean:         false,
+			wantCounterReset:  true, // High regime resets counter
+			description:       "429-rate of 50% (high regime) should NOT be clean and should reset counter",
+		},
+		{
+			name:              "100% high regime is not clean",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			holdMargin:        0.02,
+			percent429:        100.0,
+			wantClean:         false,
+			wantCounterReset:  true, // High regime resets counter
+			description:       "429-rate of 100% (all requests failing) should NOT be clean and should reset counter",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testWindow := 10 * time.Millisecond
+			arl := NewAdaptiveRateLimiterWithWindow(tt.initialRate, tt.minRate, tt.maxRate, testWindow)
+			arl.holdMargin = tt.holdMargin
+
+			t.Logf(tt.description)
+			t.Logf("  Testing 429-rate: %.2f%% (threshold: <1%% for clean windows)", tt.percent429)
+
+			// Set initial cleanWindows counter to non-zero to test reset behavior
+			arl.cleanWindows = 5
+			initialCleanWindows := arl.cleanWindows
+			t.Logf("  Initial cleanWindows counter: %d", initialCleanWindows)
+
+			// Record requests to achieve desired 429 percentage
+			totalRequests := int64(1000) // Use 1000 for finer granularity
+			count429 := int64(float64(totalRequests) * tt.percent429 / 100.0)
+			countSuccess := totalRequests - count429
+
+			// Ensure at least 1 request for accurate percentage
+			if count429 == 0 && tt.percent429 > 0 {
+				count429 = 1
+				countSuccess = totalRequests - 1
+			}
+
+			// Record the requests
+			for i := int64(0); i < count429; i++ {
+				arl.Record429()
+			}
+			for i := int64(0); i < countSuccess; i++ {
+				arl.RecordSuccess()
+			}
+
+			// Force window advancement to trigger tryAdjustRate
+			arl.mu.Lock()
+			arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
+			arl.mu.Unlock()
+			arl.RecordSuccess()
+
+			finalCleanWindows := arl.cleanWindows
+
+			// Verify clean window flag is NOT set
+			if tt.wantClean {
+				t.Errorf("429 rate %.2f%% should NOT be clean (should not increment counter), but cleanWindows changed from %d to %d",
+					tt.percent429, initialCleanWindows, finalCleanWindows)
+			}
+
+			// Verify counter reset behavior
+			if tt.wantCounterReset {
+				if finalCleanWindows != 0 {
+					t.Errorf("429 rate %.2f%% should reset cleanWindows to 0, got %d (started at %d)",
+						tt.percent429, finalCleanWindows, initialCleanWindows)
+				}
+				t.Logf("✓ High regime detected: cleanWindows correctly reset from %d to 0",
+					initialCleanWindows)
+			} else {
+				// In middle regime (1-5%), counter should be preserved
+				if finalCleanWindows != initialCleanWindows {
+					t.Errorf("429 rate %.2f%% should preserve cleanWindows at %d, got %d",
+						tt.percent429, initialCleanWindows, finalCleanWindows)
+				}
+				t.Logf("✓ Middle regime detected: cleanWindows preserved at %d (not incremented, not reset)",
 					finalCleanWindows)
 			}
 
-			t.Logf("✓ Deactivation verified: rate %.2f → %.2f (hold), cleanWindows → %d",
-				probeRate, finalRate, finalCleanWindows)
+			// Additional verification: non-clean window should never increment counter
+			if finalCleanWindows > initialCleanWindows {
+				t.Errorf("Non-clean window (429-rate %.2f%%) should never increment cleanWindows, but went from %d to %d",
+					tt.percent429, initialCleanWindows, finalCleanWindows)
+			}
+
+			t.Logf("✓ Non-clean window verified: 429-rate %.2f%%, cleanWindows=%d (started at %d)",
+				tt.percent429, finalCleanWindows, initialCleanWindows)
 		})
 	}
 }

@@ -1,0 +1,221 @@
+=== RUN   TestResponseValidation_EmptyJSONNonStreaming
+=== RUN   TestResponseValidation_EmptyJSONNonStreaming/MAX_RETRIES=1
+2026/08/13 01:28:46 Malformed response from upstream (empty=true, size=0), retrying (attempt 1/2)
+2026/08/13 01:28:46 Retry attempt 1/1 after 1s
+2026/08/13 01:28:47 Malformed response from upstream (empty=true, size=0), retrying (attempt 2/2)
+2026/08/13 01:28:47 Malformed response from upstream, max retries exceeded - returning 502
+    response_validation_test.go:85: PASS: Empty JSON body triggered 1 retries, 2 upstream calls in 1.001025258s, returned 502
+=== RUN   TestResponseValidation_EmptyJSONNonStreaming/MAX_RETRIES=2
+2026/08/13 01:28:47 Malformed response from upstream (empty=true, size=0), retrying (attempt 1/3)
+2026/08/13 01:28:47 Retry attempt 1/2 after 1s
+2026/08/13 01:28:48 Malformed response from upstream (empty=true, size=0), retrying (attempt 2/3)
+2026/08/13 01:28:48 Retry attempt 2/2 after 2s
+2026/08/13 01:28:50 Malformed response from upstream (empty=true, size=0), retrying (attempt 3/3)
+2026/08/13 01:28:50 Malformed response from upstream, max retries exceeded - returning 502
+    response_validation_test.go:85: PASS: Empty JSON body triggered 2 retries, 3 upstream calls in 3.002222101s, returned 502
+=== RUN   TestResponseValidation_EmptyJSONNonStreaming/MAX_RETRIES=5
+2026/08/13 01:28:50 Malformed response from upstream (empty=true, size=0), retrying (attempt 1/6)
+2026/08/13 01:28:50 Retry attempt 1/5 after 1s
+2026/08/13 01:28:51 Malformed response from upstream (empty=true, size=0), retrying (attempt 2/6)
+2026/08/13 01:28:51 Retry attempt 2/5 after 2s
+2026/08/13 01:28:53 Malformed response from upstream (empty=true, size=0), retrying (attempt 3/6)
+2026/08/13 01:28:53 Retry attempt 3/5 after 4s
+2026/08/13 01:28:57 Malformed response from upstream (empty=true, size=0), retrying (attempt 4/6)
+2026/08/13 01:28:57 Retry attempt 4/5 after 8s
+2026/08/13 01:29:05 Malformed response from upstream (empty=true, size=0), retrying (attempt 5/6)
+2026/08/13 01:29:05 Retry attempt 5/5 after 16s
+2026/08/13 01:29:21 Malformed response from upstream (empty=true, size=0), retrying (attempt 6/6)
+2026/08/13 01:29:21 Malformed response from upstream, max retries exceeded - returning 502
+    response_validation_test.go:85: PASS: Empty JSON body triggered 5 retries, 6 upstream calls in 31.02498672s, returned 502
+--- PASS: TestResponseValidation_EmptyJSONNonStreaming (35.03s)
+    --- PASS: TestResponseValidation_EmptyJSONNonStreaming/MAX_RETRIES=1 (1.00s)
+    --- PASS: TestResponseValidation_EmptyJSONNonStreaming/MAX_RETRIES=2 (3.00s)
+    --- PASS: TestResponseValidation_EmptyJSONNonStreaming/MAX_RETRIES=5 (31.03s)
+=== RUN   TestResponseValidation_InvalidJSONNonStreaming
+=== RUN   TestResponseValidation_InvalidJSONNonStreaming/MAX_RETRIES=1_with_malformed_JSON
+2026/08/13 01:29:21 Malformed response from upstream (empty=false, size=13), retrying (attempt 1/2)
+2026/08/13 01:29:21 Retry attempt 1/1 after 1s
+2026/08/13 01:29:22 Malformed response from upstream (empty=false, size=13), retrying (attempt 2/2)
+2026/08/13 01:29:22 Malformed response from upstream, max retries exceeded - returning 502
+    response_validation_test.go:154: PASS: Invalid JSON body triggered 1 retries, 2 upstream calls in 1.000845091s, returned 502
+=== RUN   TestResponseValidation_InvalidJSONNonStreaming/MAX_RETRIES=2_with_truncated_JSON
+2026/08/13 01:29:22 Malformed response from upstream (empty=false, size=28), retrying (attempt 1/3)
+2026/08/13 01:29:22 Retry attempt 1/2 after 1s
+2026/08/13 01:29:23 Malformed response from upstream (empty=false, size=28), retrying (attempt 2/3)
+2026/08/13 01:29:23 Retry attempt 2/2 after 2s
+2026/08/13 01:29:25 Malformed response from upstream (empty=false, size=28), retrying (attempt 3/3)
+2026/08/13 01:29:25 Malformed response from upstream, max retries exceeded - returning 502
+    response_validation_test.go:154: PASS: Invalid JSON body triggered 2 retries, 3 upstream calls in 3.001776977s, returned 502
+=== RUN   TestResponseValidation_InvalidJSONNonStreaming/MAX_RETRIES=3_with_garbage_data
+2026/08/13 01:29:25 Malformed response from upstream (empty=false, size=18), retrying (attempt 1/4)
+2026/08/13 01:29:25 Retry attempt 1/3 after 1s
+2026/08/13 01:29:26 Malformed response from upstream (empty=false, size=18), retrying (attempt 2/4)
+2026/08/13 01:29:26 Retry attempt 2/3 after 2s
+2026/08/13 01:29:28 Malformed response from upstream (empty=false, size=18), retrying (attempt 3/4)
+2026/08/13 01:29:28 Retry attempt 3/3 after 4s
+2026/08/13 01:29:32 Malformed response from upstream (empty=false, size=18), retrying (attempt 4/4)
+2026/08/13 01:29:32 Malformed response from upstream, max retries exceeded - returning 502
+    response_validation_test.go:154: PASS: Invalid JSON body triggered 3 retries, 4 upstream calls in 7.002034576s, returned 502
+--- PASS: TestResponseValidation_InvalidJSONNonStreaming (11.01s)
+    --- PASS: TestResponseValidation_InvalidJSONNonStreaming/MAX_RETRIES=1_with_malformed_JSON (1.00s)
+    --- PASS: TestResponseValidation_InvalidJSONNonStreaming/MAX_RETRIES=2_with_truncated_JSON (3.00s)
+    --- PASS: TestResponseValidation_InvalidJSONNonStreaming/MAX_RETRIES=3_with_garbage_data (7.00s)
+=== RUN   TestResponseValidation_EmptyStreaming
+=== RUN   TestResponseValidation_EmptyStreaming/MAX_RETRIES=1
+2026/08/13 01:29:32 Empty streaming response from upstream, retrying (attempt 1/2)
+2026/08/13 01:29:32 Retry attempt 1/1 after 1s
+2026/08/13 01:29:33 Empty streaming response from upstream, retrying (attempt 2/2)
+2026/08/13 01:29:33 Empty streaming response, max retries exceeded - returning 502
+    response_validation_test.go:226: PASS: Empty streaming triggered 1 retries, 2 upstream calls in 1.000877608s, returned 502
+=== RUN   TestResponseValidation_EmptyStreaming/MAX_RETRIES=2
+2026/08/13 01:29:33 Empty streaming response from upstream, retrying (attempt 1/3)
+2026/08/13 01:29:33 Retry attempt 1/2 after 1s
+2026/08/13 01:29:34 Empty streaming response from upstream, retrying (attempt 2/3)
+2026/08/13 01:29:34 Retry attempt 2/2 after 2s
+2026/08/13 01:29:36 Empty streaming response from upstream, retrying (attempt 3/3)
+2026/08/13 01:29:36 Empty streaming response, max retries exceeded - returning 502
+    response_validation_test.go:226: PASS: Empty streaming triggered 2 retries, 3 upstream calls in 3.002928742s, returned 502
+=== RUN   TestResponseValidation_EmptyStreaming/MAX_RETRIES=4
+2026/08/13 01:29:36 Empty streaming response from upstream, retrying (attempt 1/5)
+2026/08/13 01:29:36 Retry attempt 1/4 after 1s
+2026/08/13 01:29:37 Empty streaming response from upstream, retrying (attempt 2/5)
+2026/08/13 01:29:37 Retry attempt 2/4 after 2s
+2026/08/13 01:29:39 Empty streaming response from upstream, retrying (attempt 3/5)
+2026/08/13 01:29:39 Retry attempt 3/4 after 4s
+2026/08/13 01:29:43 Empty streaming response from upstream, retrying (attempt 4/5)
+2026/08/13 01:29:43 Retry attempt 4/4 after 8s
+2026/08/13 01:29:51 Empty streaming response from upstream, retrying (attempt 5/5)
+2026/08/13 01:29:51 Empty streaming response, max retries exceeded - returning 502
+    response_validation_test.go:226: PASS: Empty streaming triggered 4 retries, 5 upstream calls in 15.006207926s, returned 502
+--- PASS: TestResponseValidation_EmptyStreaming (19.01s)
+    --- PASS: TestResponseValidation_EmptyStreaming/MAX_RETRIES=1 (1.00s)
+    --- PASS: TestResponseValidation_EmptyStreaming/MAX_RETRIES=2 (3.00s)
+    --- PASS: TestResponseValidation_EmptyStreaming/MAX_RETRIES=4 (15.01s)
+=== RUN   TestResponseValidation_MetricsEmptyJSON
+2026/08/13 01:29:51 Malformed response from upstream (empty=true, size=0), retrying (attempt 1/3)
+2026/08/13 01:29:51 Retry attempt 1/2 after 1s
+2026/08/13 01:29:52 Malformed response from upstream (empty=true, size=0), retrying (attempt 2/3)
+2026/08/13 01:29:52 Retry attempt 2/2 after 2s
+2026/08/13 01:29:54 Malformed response from upstream (empty=true, size=0), retrying (attempt 3/3)
+2026/08/13 01:29:54 Malformed response from upstream, max retries exceeded - returning 502
+    response_validation_test.go:293: PASS: Metrics verified - upstream_errors=3.000000, retry_attempts=2.000000, calls=3, status=502
+--- PASS: TestResponseValidation_MetricsEmptyJSON (3.00s)
+=== RUN   TestResponseValidation_MetricsInvalidJSON
+2026/08/13 01:29:54 Malformed response from upstream (empty=false, size=23), retrying (attempt 1/4)
+2026/08/13 01:29:54 Retry attempt 1/3 after 1s
+2026/08/13 01:29:55 Malformed response from upstream (empty=false, size=23), retrying (attempt 2/4)
+2026/08/13 01:29:55 Retry attempt 2/3 after 2s
+2026/08/13 01:29:57 Malformed response from upstream (empty=false, size=23), retrying (attempt 3/4)
+2026/08/13 01:29:57 Retry attempt 3/3 after 4s
+2026/08/13 01:30:01 Malformed response from upstream (empty=false, size=23), retrying (attempt 4/4)
+2026/08/13 01:30:01 Malformed response from upstream, max retries exceeded - returning 502
+    response_validation_test.go:353: PASS: Metrics verified - upstream_errors=4.000000, retry_attempts=3.000000, calls=4, status=502
+--- PASS: TestResponseValidation_MetricsInvalidJSON (7.00s)
+=== RUN   TestResponseValidation_MetricsEmptyStreaming
+2026/08/13 01:30:01 Empty streaming response from upstream, retrying (attempt 1/3)
+2026/08/13 01:30:01 Retry attempt 1/2 after 1s
+2026/08/13 01:30:02 Empty streaming response from upstream, retrying (attempt 2/3)
+2026/08/13 01:30:02 Retry attempt 2/2 after 2s
+2026/08/13 01:30:04 Empty streaming response from upstream, retrying (attempt 3/3)
+2026/08/13 01:30:04 Empty streaming response, max retries exceeded - returning 502
+    response_validation_test.go:414: PASS: Metrics verified - upstream_errors=3.000000, retry_attempts=2.000000, calls=3, status=502
+--- PASS: TestResponseValidation_MetricsEmptyStreaming (3.00s)
+=== RUN   TestResponseValidation_ValidResponsePassesThrough
+=== RUN   TestResponseValidation_ValidResponsePassesThrough/valid_non-streaming_response
+2026/08/13 01:30:04 Error reading response: http: read on closed response body
+    response_validation_test.go:454: Response body is not valid JSON
+    response_validation_test.go:462: PASS: Valid non-streaming response passed through without retry
+=== RUN   TestResponseValidation_ValidResponsePassesThrough/valid_streaming_response
+    response_validation_test.go:497: PASS: Valid streaming response passed through without retry
+--- FAIL: TestResponseValidation_ValidResponsePassesThrough (0.00s)
+    --- FAIL: TestResponseValidation_ValidResponsePassesThrough/valid_non-streaming_response (0.00s)
+    --- PASS: TestResponseValidation_ValidResponsePassesThrough/valid_streaming_response (0.00s)
+=== RUN   TestResponseValidation_VariousInvalidBodies
+=== RUN   TestResponseValidation_VariousInvalidBodies/empty_body
+2026/08/13 01:30:04 Malformed response from upstream (empty=true, size=0), retrying (attempt 1/2)
+2026/08/13 01:30:04 Retry attempt 1/1 after 1s
+2026/08/13 01:30:05 Malformed response from upstream (empty=true, size=0), retrying (attempt 2/2)
+2026/08/13 01:30:05 Malformed response from upstream, max retries exceeded - returning 502
+    response_validation_test.go:593: PASS: empty body - status=502, calls=2
+=== RUN   TestResponseValidation_VariousInvalidBodies/single_opening_brace
+2026/08/13 01:30:05 Malformed response from upstream (empty=false, size=1), retrying (attempt 1/2)
+2026/08/13 01:30:05 Retry attempt 1/1 after 1s
+2026/08/13 01:30:06 Malformed response from upstream (empty=false, size=1), retrying (attempt 2/2)
+2026/08/13 01:30:06 Malformed response from upstream, max retries exceeded - returning 502
+    response_validation_test.go:593: PASS: single opening brace - status=502, calls=2
+=== RUN   TestResponseValidation_VariousInvalidBodies/unclosed_object
+2026/08/13 01:30:06 Malformed response from upstream (empty=false, size=15), retrying (attempt 1/2)
+2026/08/13 01:30:06 Retry attempt 1/1 after 1s
+2026/08/13 01:30:07 Malformed response from upstream (empty=false, size=15), retrying (attempt 2/2)
+2026/08/13 01:30:07 Malformed response from upstream, max retries exceeded - returning 502
+    response_validation_test.go:593: PASS: unclosed object - status=502, calls=2
+=== RUN   TestResponseValidation_VariousInvalidBodies/unclosed_array
+2026/08/13 01:30:07 Malformed response from upstream (empty=false, size=17), retrying (attempt 1/2)
+2026/08/13 01:30:07 Retry attempt 1/1 after 1s
+2026/08/13 01:30:08 Malformed response from upstream (empty=false, size=17), retrying (attempt 2/2)
+2026/08/13 01:30:08 Malformed response from upstream, max retries exceeded - returning 502
+    response_validation_test.go:593: PASS: unclosed array - status=502, calls=2
+=== RUN   TestResponseValidation_VariousInvalidBodies/random_text
+2026/08/13 01:30:08 Malformed response from upstream (empty=false, size=23), retrying (attempt 1/2)
+2026/08/13 01:30:08 Retry attempt 1/1 after 1s
+2026/08/13 01:30:09 Malformed response from upstream (empty=false, size=23), retrying (attempt 2/2)
+2026/08/13 01:30:09 Malformed response from upstream, max retries exceeded - returning 502
+    response_validation_test.go:593: PASS: random text - status=502, calls=2
+=== RUN   TestResponseValidation_VariousInvalidBodies/partial_JSON_with_trailing_comma
+2026/08/13 01:30:09 Malformed response from upstream (empty=false, size=36), retrying (attempt 1/2)
+2026/08/13 01:30:09 Retry attempt 1/1 after 1s
+2026/08/13 01:30:10 Malformed response from upstream (empty=false, size=36), retrying (attempt 2/2)
+2026/08/13 01:30:10 Malformed response from upstream, max retries exceeded - returning 502
+    response_validation_test.go:593: PASS: partial JSON with trailing comma - status=502, calls=2
+=== RUN   TestResponseValidation_VariousInvalidBodies/valid_JSON_object
+2026/08/13 01:30:10 Error reading response: http: read on closed response body
+    response_validation_test.go:593: PASS: valid JSON object - status=200, calls=1
+=== RUN   TestResponseValidation_VariousInvalidBodies/valid_JSON_array
+2026/08/13 01:30:10 Error reading response: http: read on closed response body
+    response_validation_test.go:593: PASS: valid JSON array - status=200, calls=1
+--- PASS: TestResponseValidation_VariousInvalidBodies (6.01s)
+    --- PASS: TestResponseValidation_VariousInvalidBodies/empty_body (1.00s)
+    --- PASS: TestResponseValidation_VariousInvalidBodies/single_opening_brace (1.00s)
+    --- PASS: TestResponseValidation_VariousInvalidBodies/unclosed_object (1.00s)
+    --- PASS: TestResponseValidation_VariousInvalidBodies/unclosed_array (1.00s)
+    --- PASS: TestResponseValidation_VariousInvalidBodies/random_text (1.00s)
+    --- PASS: TestResponseValidation_VariousInvalidBodies/partial_JSON_with_trailing_comma (1.00s)
+    --- PASS: TestResponseValidation_VariousInvalidBodies/valid_JSON_object (0.00s)
+    --- PASS: TestResponseValidation_VariousInvalidBodies/valid_JSON_array (0.00s)
+=== RUN   TestResponseValidation_StreamingZeroBytesPeek
+=== RUN   TestResponseValidation_StreamingZeroBytesPeek/zero_bytes_on_first_peek
+2026/08/13 01:30:10 Empty streaming response from upstream, retrying (attempt 1/2)
+2026/08/13 01:30:10 Retry attempt 1/1 after 1s
+2026/08/13 01:30:11 Empty streaming response from upstream, retrying (attempt 2/2)
+2026/08/13 01:30:11 Empty streaming response, max retries exceeded - returning 502
+    response_validation_test.go:630: PASS: Zero bytes on first peek triggered retry, 2 calls, status 502
+=== RUN   TestResponseValidation_StreamingZeroBytesPeek/non-zero_bytes_on_first_peek_(no_retry)
+    response_validation_test.go:661: PASS: Non-zero bytes on first peek, no retry, status 200
+--- PASS: TestResponseValidation_StreamingZeroBytesPeek (1.00s)
+    --- PASS: TestResponseValidation_StreamingZeroBytesPeek/zero_bytes_on_first_peek (1.00s)
+    --- PASS: TestResponseValidation_StreamingZeroBytesPeek/non-zero_bytes_on_first_peek_(no_retry) (0.00s)
+=== RUN   TestResponseValidationNonStreaming
+=== RUN   TestResponseValidationNonStreaming/valid_non-streaming_response
+    retry_test.go:924: Response validated successfully: 167 bytes
+=== RUN   TestResponseValidationNonStreaming/empty_non-streaming_response
+    retry_test.go:944: Empty response detected (would trigger retry)
+--- PASS: TestResponseValidationNonStreaming (0.00s)
+    --- PASS: TestResponseValidationNonStreaming/valid_non-streaming_response (0.00s)
+    --- PASS: TestResponseValidationNonStreaming/empty_non-streaming_response (0.00s)
+=== RUN   TestResponseValidationStreaming
+=== RUN   TestResponseValidationStreaming/empty_streaming_response
+    retry_test.go:970: Empty streaming response detected (would trigger retry)
+--- PASS: TestResponseValidationStreaming (0.00s)
+    --- PASS: TestResponseValidationStreaming/empty_streaming_response (0.00s)
+FAIL
+FAIL	git.ardenone.com/jedarden/zai-proxy/proxy	85.067s
+?   	git.ardenone.com/jedarden/zai-proxy/proxy/cmd/demo-eval	[no test files]
+?   	git.ardenone.com/jedarden/zai-proxy/proxy/cmd/evaluate	[no test files]
+?   	git.ardenone.com/jedarden/zai-proxy/proxy/config	[no test files]
+testing: warning: no tests to run
+PASS
+ok  	git.ardenone.com/jedarden/zai-proxy/proxy/evaluation	(cached) [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	git.ardenone.com/jedarden/zai-proxy/proxy/testutil	0.002s [no tests to run]
+FAIL

@@ -133,3 +133,39 @@ func GetPositiveFloat64(key string, defaultValue float64) float64 {
 	}
 	return defaultValue
 }
+
+// GetFloat64RangeExclusiveMin retrieves an environment variable as a float64,
+// ensuring it's within (min, max] (exclusive min, inclusive max).
+// Returns the default value if parsing fails or the value is out of range.
+func GetFloat64RangeExclusiveMin(key string, defaultValue, min, max float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if parsed, err := strconv.ParseFloat(value, 64); err == nil && parsed > min && parsed <= max {
+			return parsed
+		}
+	}
+	return defaultValue
+}
+
+// GetFloat64RangeExclusiveMax retrieves an environment variable as a float64,
+// ensuring it's within [min, max) (inclusive min, exclusive max).
+// Returns the default value if parsing fails or the value is out of range.
+func GetFloat64RangeExclusiveMax(key string, defaultValue, min, max float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if parsed, err := strconv.ParseFloat(value, 64); err == nil && parsed >= min && parsed < max {
+			return parsed
+		}
+	}
+	return defaultValue
+}
+
+// GetFloat64RangeExclusiveBoth retrieves an environment variable as a float64,
+// ensuring it's within (min, max) (exclusive both ends).
+// Returns the default value if parsing fails or the value is out of range.
+func GetFloat64RangeExclusiveBoth(key string, defaultValue, min, max float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if parsed, err := strconv.ParseFloat(value, 64); err == nil && parsed > min && parsed < max {
+			return parsed
+		}
+	}
+	return defaultValue
+}

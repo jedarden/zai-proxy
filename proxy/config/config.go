@@ -111,13 +111,13 @@ func GetRateLimitMax() float64 {
 // GetRateLimitCeilingAlpha returns the ceiling smoothing factor from RATE_LIMIT_CEILING_ALPHA env var,
 // or the default value if not set/invalid. Must be in (0, 1].
 func GetRateLimitCeilingAlpha() float64 {
-	return configenv.GetFloat64Range("RATE_LIMIT_CEILING_ALPHA", DefaultRateLimitCeilingAlpha, 0, 1)
+	return configenv.GetFloat64RangeExclusiveMin("RATE_LIMIT_CEILING_ALPHA", DefaultRateLimitCeilingAlpha, 0, 1)
 }
 
 // GetRateLimitHoldMargin returns the hold margin from RATE_LIMIT_HOLD_MARGIN env var,
 // or the default value if not set/invalid. Must be in (0, 1).
 func GetRateLimitHoldMargin() float64 {
-	return configenv.GetFloat64Range("RATE_LIMIT_HOLD_MARGIN", DefaultRateLimitHoldMargin, 0, 1)
+	return configenv.GetFloat64RangeExclusiveBoth("RATE_LIMIT_HOLD_MARGIN", DefaultRateLimitHoldMargin, 0, 1)
 }
 
 // GetRateLimitProbeInterval returns the probe interval from RATE_LIMIT_PROBE_INTERVAL env var,
