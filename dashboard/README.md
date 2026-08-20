@@ -118,7 +118,7 @@ spec:
     spec:
       containers:
       - name: dashboard
-        image: ronaldraygun/zai-proxy-dashboard:1.1.1
+        image: ronaldraygun/zai-proxy-dashboard:1.1.2
         ports:
         - containerPort: 8080
           name: http
