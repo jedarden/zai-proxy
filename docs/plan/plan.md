@@ -1,7 +1,7 @@
 # ZAI Proxy Ecosystem — Plan
 
 **Last updated:** 2026-07-20
-**Version:** proxy/1.10.0, dashboard/1.1.2
+**Version:** proxy/1.10.0, dashboard/1.1.3
 
 ## Objective
 

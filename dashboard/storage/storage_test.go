@@ -175,6 +175,37 @@ func TestStorage_BoundsVariantStreamsAndStartsEmptyAfterRestart(t *testing.T) {
 	}
 }
 
+func TestStorageKeepsAndReturnsSnapshotCopies(t *testing.T) {
+	store := NewStorage(testConfig())
+	defer store.Close()
+
+	now := time.Now()
+	original := &model.MetricSnapshot{
+		Timestamp:       now.UnixMilli(),
+		Variant:         "production",
+		ReqRate:         5,
+		StatusCodeRates: map[string]float64{"200": 5},
+	}
+	store.Write(original)
+	original.ReqRate = 99
+	original.StatusCodeRates["200"] = 99
+
+	first, err := store.Query(now.Add(-time.Minute), now.Add(time.Minute), "production", false)
+	if err != nil {
+		t.Fatalf("first query: %v", err)
+	}
+	first[0].ReqRate = 88
+	first[0].StatusCodeRates["200"] = 88
+
+	second, err := store.Query(now.Add(-time.Minute), now.Add(time.Minute), "production", false)
+	if err != nil {
+		t.Fatalf("second query: %v", err)
+	}
+	if second[0].ReqRate != 5 || second[0].StatusCodeRates["200"] != 5 {
+		t.Errorf("storage leaked a mutable snapshot: %+v", second[0])
+	}
+}
+
 func TestStorage_ConcurrentWrites(t *testing.T) {
 	store := NewStorage(testConfig())
 	defer store.Close()
