@@ -103,9 +103,10 @@ func TestStorage_Downsampling(t *testing.T) {
 	now := time.Now().Truncate(time.Minute)
 	for i := 0; i < 12; i++ {
 		store.Write(&model.MetricSnapshot{
-			Timestamp: now.Add(-time.Minute + time.Duration(i)*5*time.Second).UnixMilli(),
-			Variant:   "production",
-			ReqRate:   float64(i),
+			Timestamp:       now.Add(-time.Minute + time.Duration(i)*5*time.Second).UnixMilli(),
+			Variant:         "production",
+			ReqRate:         float64(i),
+			StatusCodeRates: map[string]float64{"200": float64(i)},
 		})
 	}
 
@@ -121,6 +122,9 @@ func TestStorage_Downsampling(t *testing.T) {
 	}
 	if got := snapshots[0].ReqRate; got != 5.5 {
 		t.Errorf("expected average req_rate 5.5, got %v", got)
+	}
+	if got := snapshots[0].StatusCodeRates["200"]; got != 5.5 {
+		t.Errorf("expected average 200 rate 5.5, got %v", got)
 	}
 }
 
