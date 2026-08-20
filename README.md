@@ -22,12 +22,12 @@ See [proxy/README.md](proxy/README.md) for full configuration and deployment ins
 
 ### `dashboard/`
 
-Go backend + React frontend for live monitoring. Scrapes the proxy's Prometheus endpoint every 5 seconds, stores dual-resolution snapshots in SQLite, and streams updates to the browser via SSE.
+Go backend + React frontend for live monitoring. Scrapes the proxy's Prometheus endpoint every 5 seconds, keeps dual-resolution snapshots in bounded in-memory rings, and streams updates to the browser via SSE.
 
 ```
-proxy :8080/metrics  →  Collector  →  SQLite  →  SSE Hub  →  React UI
-                                       metrics_5s (24h)
-                                       metrics_1m (7d)
+proxy :8080/metrics  →  Collector  →  In-memory rings  →  SSE Hub  →  React UI
+                                            5s (24h)
+                                            1m (7d)
 ```
 
 Features: request throughput, latency percentiles, token usage totals, error rates, and per-variant comparison panels.

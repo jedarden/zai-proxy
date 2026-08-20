@@ -71,7 +71,7 @@ zai-proxy/
 ├── dashboard/                # Monitoring dashboard
 │   ├── api/                  # HTTP handlers and SSE
 │   ├── collector/            # Prometheus scraper
-│   ├── storage/              # SQLite database layer
+│   ├── storage/              # In-memory ring-buffer layer
 │   ├── logger/               # Structured logging
 │   ├── model/                # Data structures
 │   ├── frontend/             # React UI
@@ -219,7 +219,6 @@ go mod download
 export LISTEN_ADDR=":8081"           # Dashboard API port
 export SCRAPE_TARGETS="http://localhost:8080/metrics"
 export SCRAPE_INTERVAL="5s"
-export DB_PATH="/tmp/dashboard.db"
 
 # Run backend
 go run .

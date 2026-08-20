@@ -35,14 +35,13 @@ func main() {
 		"listen_addr", apiConfig.ListenAddr,
 	)
 
-	// Initialize storage
-	store, err := storage.NewStorage(storageConfig)
-	if err != nil {
-		log.Error("failed to initialize storage", "error", err)
-		os.Exit(1)
-	}
+	// Initialize dependency-free, process-local storage.
+	store := storage.NewStorage(storageConfig)
 	defer store.Close()
-	log.Info("storage initialized", "db_path", storageConfig.DBPath)
+	log.Info("in-memory storage initialized",
+		"retention_5s", storageConfig.Retention5s.String(),
+		"retention_1m", storageConfig.Retention1m.String(),
+	)
 
 	// Initialize collector
 	coll := collector.NewCollector(collectorConfig)

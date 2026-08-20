@@ -1,7 +1,7 @@
 # ZAI Proxy Dashboard - Multi-stage Dockerfile
 #
 # Real-time web dashboard for monitoring zai-proxy metrics.
-# Scrapes Prometheus endpoints, stores in SQLite, broadcasts via SSE.
+# Scrapes Prometheus endpoints, keeps a bounded in-memory history, and broadcasts via SSE.
 #
 # Build: docker build -t ronaldraygun/zai-proxy-dashboard:latest .
 # Run:   docker run -p 8080:8080 ronaldraygun/zai-proxy-dashboard:latest
@@ -44,7 +44,7 @@ RUN go mod tidy && go mod download
 # Copy frontend build from stage 1
 COPY --from=frontend /app/frontend/dist ./frontend/dist
 
-# Build static binary (CGO_ENABLED=0 works with modernc.org/sqlite pure Go)
+# Build static binary.
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /zai-proxy-dashboard .
 
 # =============================================================================
@@ -57,9 +57,6 @@ RUN apk add --no-cache ca-certificates tzdata
 
 # Create non-root user for security
 RUN adduser -D -u 1000 appuser
-
-# Create data directory for SQLite
-RUN mkdir -p /data && chown appuser:appuser /data
 
 WORKDIR /app
 
@@ -81,7 +78,6 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=3 \
 
 # Default environment variables
 ENV LISTEN_ADDR=:8080 \
-    DB_PATH=/data/dashboard.db \
     SCRAPE_INTERVAL=5s \
     SCRAPE_TIMEOUT=3s \
     RETENTION_5S=24h \

@@ -1,400 +1,204 @@
 package storage
 
 import (
-	"database/sql"
-	"path/filepath"
+	"sync"
 	"testing"
 	"time"
-
-	_ "modernc.org/sqlite"
 
 	"git.ardenone.com/jedarden/zai-proxy/dashboard/model"
 )
 
-func TestStorage_WriteAndRead(t *testing.T) {
-	// Create temporary database
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.db")
-
-	config := Config{
-		DBPath:      dbPath,
+func testConfig() Config {
+	return Config{
 		Retention5s: 24 * time.Hour,
 		Retention1m: 7 * 24 * time.Hour,
+		MaxVariants: 2,
 	}
+}
 
-	store, err := NewStorage(config)
-	if err != nil {
-		t.Fatalf("failed to create storage: %v", err)
-	}
+func TestStorage_WriteAndRead(t *testing.T) {
+	store := NewStorage(testConfig())
 	defer store.Close()
 
-	// Write a snapshot
-	snapshot := &model.MetricSnapshot{
-		Timestamp:          time.Now().UnixMilli(),
-		Variant:            "production",
-		Requests2xx:        100,
-		Requests4xx:        10,
-		Requests5xx:        5,
-		ReqRate:            2.5,
-		LatencyP50:         150.0,
-		WorkerUtilization:  0.75,
-	}
+	now := time.Now()
+	store.Write(&model.MetricSnapshot{
+		Timestamp:         now.UnixMilli(),
+		Variant:           "production",
+		Requests2xx:       100,
+		ReqRate:           2.5,
+		LatencyP50:        150,
+		WorkerUtilization: 0.75,
+	})
 
-	store.Write(snapshot)
-
-	// Wait for write to complete
-	time.Sleep(100 * time.Millisecond)
-
-	// Read it back
-	snapshots, err := store.QueryRange(1*time.Hour, "production")
+	snapshots, err := store.Query(now.Add(-time.Minute), now.Add(time.Minute), "production", false)
 	if err != nil {
-		t.Fatalf("failed to query: %v", err)
+		t.Fatalf("query: %v", err)
 	}
-
 	if len(snapshots) != 1 {
 		t.Fatalf("expected 1 snapshot, got %d", len(snapshots))
 	}
-
-	read := snapshots[0]
-	if read.Variant != "production" {
-		t.Errorf("variant mismatch: got %s", read.Variant)
-	}
-	if read.Requests2xx != 100 {
-		t.Errorf("requests_2xx mismatch: got %f", read.Requests2xx)
-	}
-	if read.ReqRate != 2.5 {
-		t.Errorf("req_rate mismatch: got %f", read.ReqRate)
+	if got := snapshots[0]; got.Requests2xx != 100 || got.ReqRate != 2.5 {
+		t.Errorf("unexpected snapshot: %+v", got)
 	}
 }
 
-func TestStorage_RangeQuery(t *testing.T) {
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.db")
-
-	config := Config{
-		DBPath:      dbPath,
-		Retention5s: 24 * time.Hour,
-		Retention1m: 7 * 24 * time.Hour,
-	}
-
-	store, err := NewStorage(config)
-	if err != nil {
-		t.Fatalf("failed to create storage: %v", err)
-	}
+func TestStorage_RangeQueryAndVariantFilter(t *testing.T) {
+	store := NewStorage(testConfig())
 	defer store.Close()
 
-	now := time.Now()
-
-	// Write multiple snapshots at different times
+	now := time.Now().Truncate(time.Second)
 	for i := 0; i < 10; i++ {
-		snapshot := &model.MetricSnapshot{
+		store.Write(&model.MetricSnapshot{
 			Timestamp: now.Add(-time.Duration(i) * time.Minute).UnixMilli(),
 			Variant:   "production",
 			ReqRate:   float64(10 - i),
-		}
-		store.Write(snapshot)
+		})
 	}
+	store.Write(&model.MetricSnapshot{Timestamp: now.UnixMilli(), Variant: "canary", ReqRate: 50})
 
-	time.Sleep(100 * time.Millisecond)
-
-	// Query for last 5 minutes
-	snapshots, err := store.QueryRange(5*time.Minute, "production")
+	production, err := store.Query(now.Add(-5*time.Minute), now, "production", false)
 	if err != nil {
-		t.Fatalf("failed to query: %v", err)
+		t.Fatalf("query production: %v", err)
 	}
-
-	// Should get snapshots from last 5 minutes (0-4 inclusive)
-	if len(snapshots) < 5 {
-		t.Errorf("expected at least 5 snapshots, got %d", len(snapshots))
+	if len(production) != 6 {
+		t.Fatalf("expected 6 production snapshots, got %d", len(production))
 	}
-}
-
-func TestStorage_VariantFilter(t *testing.T) {
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.db")
-
-	config := Config{
-		DBPath:      dbPath,
-		Retention5s: 24 * time.Hour,
-		Retention1m: 7 * 24 * time.Hour,
-	}
-
-	store, err := NewStorage(config)
-	if err != nil {
-		t.Fatalf("failed to create storage: %v", err)
-	}
-	defer store.Close()
-
-	now := time.Now()
-
-	// Write snapshots for both variants
-	store.Write(&model.MetricSnapshot{
-		Timestamp: now.UnixMilli(),
-		Variant:   "production",
-		ReqRate:   100,
-	})
-	store.Write(&model.MetricSnapshot{
-		Timestamp: now.UnixMilli(),
-		Variant:   "canary",
-		ReqRate:   50,
-	})
-
-	time.Sleep(100 * time.Millisecond)
-
-	// Query only production
-	prodSnapshots, err := store.QueryRange(1*time.Hour, "production")
-	if err != nil {
-		t.Fatalf("failed to query: %v", err)
-	}
-
-	for _, s := range prodSnapshots {
-		if s.Variant != "production" {
-			t.Errorf("expected only production variant, got %s", s.Variant)
+	for _, snapshot := range production {
+		if snapshot.Variant != "production" {
+			t.Errorf("expected production snapshot, got %q", snapshot.Variant)
 		}
 	}
 
-	// Query all variants
-	allSnapshots, err := store.QueryRange(1*time.Hour, "all")
+	all, err := store.Query(now.Add(-5*time.Minute), now, "all", false)
 	if err != nil {
-		t.Fatalf("failed to query: %v", err)
+		t.Fatalf("query all variants: %v", err)
 	}
-
-	if len(allSnapshots) < 2 {
-		t.Errorf("expected at least 2 snapshots for all variants, got %d", len(allSnapshots))
+	if len(all) != 7 {
+		t.Fatalf("expected 7 snapshots across variants, got %d", len(all))
 	}
 }
 
 func TestStorage_GetLatest(t *testing.T) {
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.db")
-
-	config := Config{
-		DBPath:      dbPath,
-		Retention5s: 24 * time.Hour,
-		Retention1m: 7 * 24 * time.Hour,
-	}
-
-	store, err := NewStorage(config)
-	if err != nil {
-		t.Fatalf("failed to create storage: %v", err)
-	}
+	store := NewStorage(testConfig())
 	defer store.Close()
 
-	now := time.Now()
-
-	// Write multiple snapshots with different timestamps
-	store.Write(&model.MetricSnapshot{
-		Timestamp: now.Add(-2 * time.Minute).UnixMilli(),
-		Variant:   "production",
-		ReqRate:   100,
-	})
-	store.Write(&model.MetricSnapshot{
-		Timestamp: now.Add(-1 * time.Minute).UnixMilli(),
-		Variant:   "production",
-		ReqRate:   200,
-	})
-	store.Write(&model.MetricSnapshot{
-		Timestamp: now.UnixMilli(),
-		Variant:   "production",
-		ReqRate:   300,
-	})
-
-	time.Sleep(100 * time.Millisecond)
+	now := time.Now().Truncate(time.Second)
+	store.Write(&model.MetricSnapshot{Timestamp: now.Add(-2 * time.Minute).UnixMilli(), Variant: "production", ReqRate: 100})
+	store.Write(&model.MetricSnapshot{Timestamp: now.Add(-time.Minute).UnixMilli(), Variant: "production", ReqRate: 200})
+	store.Write(&model.MetricSnapshot{Timestamp: now.UnixMilli(), Variant: "production", ReqRate: 300})
 
 	latest, err := store.GetLatest()
 	if err != nil {
-		t.Fatalf("failed to get latest: %v", err)
+		t.Fatalf("get latest: %v", err)
 	}
-
-	prod, ok := latest["production"]
-	if !ok {
-		t.Fatal("production variant not found")
-	}
-
-	if prod.ReqRate != 300 {
-		t.Errorf("expected latest req_rate 300, got %f", prod.ReqRate)
+	if latest["production"] == nil || latest["production"].ReqRate != 300 {
+		t.Errorf("unexpected latest production snapshot: %+v", latest["production"])
 	}
 }
 
 func TestStorage_Downsampling(t *testing.T) {
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.db")
-
-	config := Config{
-		DBPath:      dbPath,
-		Retention5s: 24 * time.Hour,
-		Retention1m: 7 * 24 * time.Hour,
-	}
-
-	store, err := NewStorage(config)
-	if err != nil {
-		t.Fatalf("failed to create storage: %v", err)
-	}
+	store := NewStorage(testConfig())
 	defer store.Close()
 
-	// Write snapshots that span multiple minutes
-	now := time.Now()
-	for i := 0; i < 120; i++ {
-		snapshot := &model.MetricSnapshot{
-			Timestamp: now.Add(-time.Duration(i) * time.Second).UnixMilli(),
+	now := time.Now().Truncate(time.Minute)
+	for i := 0; i < 12; i++ {
+		store.Write(&model.MetricSnapshot{
+			Timestamp: now.Add(-time.Minute + time.Duration(i)*5*time.Second).UnixMilli(),
 			Variant:   "production",
 			ReqRate:   float64(i),
-		}
-		store.Write(snapshot)
+		})
 	}
 
-	// Trigger downsampling manually
-	time.Sleep(100 * time.Millisecond)
 	if err := store.Downsample(); err != nil {
-		t.Fatalf("downsampling failed: %v", err)
+		t.Fatalf("downsample: %v", err)
 	}
-
-	// Query from 1m table
-	end := time.Now()
-	start := end.Add(-2 * time.Minute)
-	snapshots, err := store.Query(start, end, "production", true)
+	snapshots, err := store.Query(now.Add(-2*time.Minute), now, "production", true)
 	if err != nil {
-		t.Fatalf("failed to query 1m table: %v", err)
+		t.Fatalf("query downsampled data: %v", err)
 	}
-
-	// Should have downsampled data
-	if len(snapshots) < 1 {
-		t.Error("expected at least 1 downsampled snapshot")
+	if len(snapshots) != 1 {
+		t.Fatalf("expected 1 downsampled snapshot, got %d", len(snapshots))
+	}
+	if got := snapshots[0].ReqRate; got != 5.5 {
+		t.Errorf("expected average req_rate 5.5, got %v", got)
 	}
 }
 
-func TestStorage_Retention(t *testing.T) {
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.db")
-
-	config := Config{
-		DBPath:      dbPath,
-		Retention5s: 1 * time.Hour,
-		Retention1m: 24 * time.Hour,
-	}
-
-	store, err := NewStorage(config)
-	if err != nil {
-		t.Fatalf("failed to create storage: %v", err)
-	}
+func TestStorage_RetentionAndCapacity(t *testing.T) {
+	config := Config{Retention5s: 10 * time.Second, Retention1m: time.Hour, MaxVariants: 2}
+	store := NewStorage(config)
 	defer store.Close()
 
+	now := time.Now().Truncate(time.Second)
+	store.Write(&model.MetricSnapshot{Timestamp: now.Add(-time.Minute).UnixMilli(), Variant: "production"})
+	store.Write(&model.MetricSnapshot{Timestamp: now.UnixMilli(), Variant: "production", ReqRate: 1})
+	store.Write(&model.MetricSnapshot{Timestamp: now.Add(time.Second).UnixMilli(), Variant: "production", ReqRate: 2})
+	store.Write(&model.MetricSnapshot{Timestamp: now.Add(2 * time.Second).UnixMilli(), Variant: "production", ReqRate: 3})
+
+	snapshots, err := store.Query(now.Add(-time.Minute), now.Add(3*time.Second), "production", false)
+	if err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if len(snapshots) != 2 {
+		t.Fatalf("expected 2 snapshots from the fixed-size ring, got %d", len(snapshots))
+	}
+	if snapshots[0].ReqRate != 2 || snapshots[1].ReqRate != 3 {
+		t.Errorf("expected two newest snapshots, got %+v", snapshots)
+	}
+}
+
+func TestStorage_BoundsVariantStreamsAndStartsEmptyAfterRestart(t *testing.T) {
+	config := Config{Retention5s: time.Hour, Retention1m: time.Hour, MaxVariants: 2}
 	now := time.Now()
 
-	// Write old snapshot (should be deleted)
-	oldSnapshot := &model.MetricSnapshot{
-		Timestamp: now.Add(-2 * time.Hour).UnixMilli(),
-		Variant:   "production",
-		ReqRate:   50,
-	}
-	store.Write(oldSnapshot)
-
-	// Write recent snapshot (should be kept)
-	recentSnapshot := &model.MetricSnapshot{
-		Timestamp: now.Add(-30 * time.Minute).UnixMilli(),
-		Variant:   "production",
-		ReqRate:   100,
-	}
-	store.Write(recentSnapshot)
-
-	time.Sleep(100 * time.Millisecond)
-
-	// Trigger cleanup
-	if err := store.Cleanup(); err != nil {
-		t.Fatalf("cleanup failed: %v", err)
-	}
-
-	// Query all - should only have recent snapshot
-	snapshots, err := store.QueryRange(3*time.Hour, "production")
+	store := NewStorage(config)
+	store.Write(&model.MetricSnapshot{Timestamp: now.UnixMilli(), Variant: "production"})
+	store.Write(&model.MetricSnapshot{Timestamp: now.UnixMilli(), Variant: "canary"})
+	store.Write(&model.MetricSnapshot{Timestamp: now.UnixMilli(), Variant: "unexpected"})
+	all, err := store.Query(now.Add(-time.Minute), now.Add(time.Minute), "all", false)
+	store.Close()
 	if err != nil {
-		t.Fatalf("failed to query: %v", err)
+		t.Fatalf("query: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected two bounded variant streams, got %d snapshots", len(all))
 	}
 
-	if len(snapshots) != 1 {
-		t.Errorf("expected 1 snapshot after cleanup, got %d", len(snapshots))
+	restarted := NewStorage(config)
+	defer restarted.Close()
+	latest, err := restarted.GetLatest()
+	if err != nil {
+		t.Fatalf("get latest after restart: %v", err)
+	}
+	if len(latest) != 0 {
+		t.Errorf("expected empty in-memory storage after restart, got %+v", latest)
 	}
 }
 
 func TestStorage_ConcurrentWrites(t *testing.T) {
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.db")
-
-	config := Config{
-		DBPath:      dbPath,
-		Retention5s: 24 * time.Hour,
-		Retention1m: 7 * 24 * time.Hour,
-	}
-
-	store, err := NewStorage(config)
-	if err != nil {
-		t.Fatalf("failed to create storage: %v", err)
-	}
+	store := NewStorage(testConfig())
 	defer store.Close()
 
-	// Write many snapshots concurrently
-	done := make(chan bool)
+	now := time.Now().Truncate(time.Second)
+	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
-		go func(idx int) {
-			snapshot := &model.MetricSnapshot{
-				Timestamp: time.Now().Add(time.Duration(idx) * time.Second).UnixMilli(),
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			store.Write(&model.MetricSnapshot{
+				Timestamp: now.Add(time.Duration(index) * time.Second).UnixMilli(),
 				Variant:   "production",
-				ReqRate:   float64(idx),
-			}
-			store.Write(snapshot)
-			done <- true
+				ReqRate:   float64(index),
+			})
 		}(i)
 	}
+	wg.Wait()
 
-	// Wait for all writes
-	for i := 0; i < 100; i++ {
-		<-done
-	}
-
-	time.Sleep(500 * time.Millisecond)
-
-	// Should have all snapshots
-	snapshots, err := store.QueryRange(1*time.Hour, "production")
+	snapshots, err := store.Query(now.Add(-time.Second), now.Add(2*time.Minute), "production", false)
 	if err != nil {
-		t.Fatalf("failed to query: %v", err)
+		t.Fatalf("query: %v", err)
 	}
-
-	if len(snapshots) < 100 {
-		t.Errorf("expected at least 100 snapshots, got %d", len(snapshots))
-	}
-}
-
-func TestSchema_Initialize(t *testing.T) {
-	tmpDir := t.TempDir()
-	dbPath := filepath.Join(tmpDir, "test.db")
-
-	// Create database manually
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		t.Fatalf("failed to open database: %v", err)
-	}
-	defer db.Close()
-
-	schema := NewSchema(db)
-	if err := schema.Initialize(); err != nil {
-		t.Fatalf("failed to initialize schema: %v", err)
-	}
-
-	// Verify tables exist
-	var count int
-	err = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('metrics_5s', 'metrics_1m')`).Scan(&count)
-	if err != nil {
-		t.Fatalf("failed to query tables: %v", err)
-	}
-	if count != 2 {
-		t.Errorf("expected 2 tables, got %d", count)
-	}
-
-	// Verify indexes exist
-	err = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_5s_ts', 'idx_1m_ts')`).Scan(&count)
-	if err != nil {
-		t.Fatalf("failed to query indexes: %v", err)
-	}
-	if count != 2 {
-		t.Errorf("expected 2 indexes, got %d", count)
+	if len(snapshots) != 100 {
+		t.Fatalf("expected 100 snapshots, got %d", len(snapshots))
 	}
 }

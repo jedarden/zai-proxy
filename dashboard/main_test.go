@@ -20,10 +20,7 @@ func TestIndexRedirectLoopBug(t *testing.T) {
 	logger.Init(logger.DefaultConfig())
 
 	// Create test storage
-	store, err := storage.NewStorage(storage.DefaultConfig())
-	if err != nil {
-		t.Fatalf("failed to create storage: %v", err)
-	}
+	store := storage.NewStorage(storage.DefaultConfig())
 	defer store.Close()
 
 	// Initialize hub

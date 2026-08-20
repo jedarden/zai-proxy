@@ -1,174 +1,96 @@
-// Package storage implements SQLite-based metric storage.
+// Package storage implements bounded in-memory metric storage.
 package storage
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
-	"fmt"
-	"log"
+	"sort"
 	"sync"
 	"time"
 
 	"git.ardenone.com/jedarden/zai-proxy/dashboard/model"
 )
 
-// Storage provides SQLite-based metric persistence.
+// Storage keeps recent metric snapshots in two fixed-size, per-variant ring
+// buffers. It is process-local: a dashboard restart starts with an empty
+// history window instead of depending on a filesystem or database.
 type Storage struct {
-	db         *sql.DB
-	config     Config
-	writeCh    chan *model.MetricSnapshot
-	wg         sync.WaitGroup
-	ctx        context.Context
-	cancel     context.CancelFunc
+	mu          sync.RWMutex
+	config      Config
+	raw         bufferSet
+	downsampled bufferSet
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
 }
 
-// NewStorage creates a new Storage instance.
-func NewStorage(config Config) (*Storage, error) {
-	db, err := sql.Open("sqlite", config.DBPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
-	}
-
-	// Set connection pool settings for SQLite
-	db.SetMaxOpenConns(1) // SQLite doesn't support multiple writers
-	db.SetMaxIdleConns(1)
-
-	schema := NewSchema(db)
-	if err := schema.Initialize(); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to initialize schema: %w", err)
-	}
-
+// NewStorage creates a dependency-free in-memory store.
+func NewStorage(config Config) *Storage {
+	config = config.normalized()
 	ctx, cancel := context.WithCancel(context.Background())
-
 	s := &Storage{
-		db:      db,
-		config:  config,
-		writeCh: make(chan *model.MetricSnapshot, 1000),
-		ctx:     ctx,
-		cancel:  cancel,
+		config: config,
+		raw: newBufferSet(
+			capacityFor(config.Retention5s, rawResolution),
+			config.MaxVariants,
+		),
+		downsampled: newBufferSet(
+			capacityFor(config.Retention1m, downsampledResolution),
+			config.MaxVariants,
+		),
+		ctx:    ctx,
+		cancel: cancel,
 	}
-
-	s.wg.Add(1)
-	go s.writeLoop()
 
 	s.wg.Add(1)
 	go s.retentionLoop()
-
-	return s, nil
+	return s
 }
 
-// Close shuts down the storage.
-func (s *Storage) Close() error {
+// Close stops background maintenance. It does not persist data.
+func (s *Storage) Close() {
 	s.cancel()
 	s.wg.Wait()
-	return s.db.Close()
 }
 
-// Write queues a snapshot for writing.
+// Write stores a snapshot in the high-resolution buffer. Snapshots outside the
+// retention window are ignored so delayed collection cannot evict current data.
 func (s *Storage) Write(snapshot *model.MetricSnapshot) {
-	select {
-	case s.writeCh <- snapshot:
-	default:
-		log.Printf("storage: write channel full, dropping snapshot")
+	if snapshot == nil || snapshot.Timestamp/1000 < time.Now().Add(-s.config.Retention5s).Unix() {
+		return
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.raw.append(cloneSnapshot(snapshot))
 }
 
-// writeLoop processes write requests from the channel.
-func (s *Storage) writeLoop() {
-	defer s.wg.Done()
-
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		case snapshot := <-s.writeCh:
-			if err := s.writeSnapshot(snapshot); err != nil {
-				log.Printf("storage: failed to write snapshot: %v", err)
-			}
-		}
-	}
-}
-
-// writeSnapshot writes a snapshot to the 5s table.
-func (s *Storage) writeSnapshot(snapshot *model.MetricSnapshot) error {
-	data, err := json.Marshal(snapshot)
-	if err != nil {
-		return fmt.Errorf("failed to marshal snapshot: %w", err)
-	}
-
-	ts := snapshot.Timestamp / 1000 // Convert ms to seconds
-
-	_, err = s.db.Exec(
-		`INSERT OR REPLACE INTO metrics_5s (ts, variant, data) VALUES (?, ?, ?)`,
-		ts, snapshot.Variant, string(data),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to insert snapshot: %w", err)
-	}
-
-	return nil
-}
-
-// Query retrieves metrics for a time range.
+// Query retrieves metrics for a time range. use1m selects the downsampled
+// buffer; callers normally use QueryRange instead.
 func (s *Storage) Query(start, end time.Time, variant string, use1m bool) ([]*model.MetricSnapshot, error) {
-	var table string
+	startTs, endTs := start.Unix(), end.Unix()
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	buffers := s.raw
 	if use1m {
-		table = "metrics_1m"
-	} else {
-		table = "metrics_5s"
+		buffers = s.downsampled
 	}
 
-	startTs := start.Unix()
-	endTs := end.Unix()
-
-	var rows *sql.Rows
-	var err error
-
-	if variant == "" || variant == "all" {
-		rows, err = s.db.Query(
-			fmt.Sprintf(`SELECT data FROM %s WHERE ts >= ? AND ts <= ? ORDER BY ts`, table),
-			startTs, endTs,
-		)
-	} else {
-		rows, err = s.db.Query(
-			fmt.Sprintf(`SELECT data FROM %s WHERE ts >= ? AND ts <= ? AND variant = ? ORDER BY ts`, table),
-			startTs, endTs, variant,
-		)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to query metrics: %w", err)
-	}
-	defer rows.Close()
-
-	var snapshots []*model.MetricSnapshot
-	for rows.Next() {
-		var data string
-		if err := rows.Scan(&data); err != nil {
-			return nil, fmt.Errorf("failed to scan row: %w", err)
-		}
-
-		var snapshot model.MetricSnapshot
-		if err := json.Unmarshal([]byte(data), &snapshot); err != nil {
-			log.Printf("storage: failed to unmarshal snapshot: %v", err)
-			continue
-		}
-		snapshots = append(snapshots, &snapshot)
-	}
-
-	return snapshots, rows.Err()
+	snapshots := buffers.query(startTs, endTs, variant)
+	sortSnapshots(snapshots)
+	return snapshots, nil
 }
 
-// QueryRange is a convenience method that determines the appropriate table.
+// QueryRange selects high-resolution data for the live hour and downsampled
+// data for longer historical windows.
 func (s *Storage) QueryRange(d time.Duration, variant string) ([]*model.MetricSnapshot, error) {
 	end := time.Now()
-	start := end.Add(-d)
-	use1m := d > time.Hour
-	return s.Query(start, end, variant, use1m)
+	return s.Query(end.Add(-d), end, variant, d > time.Hour)
 }
 
-// retentionLoop handles downsampling and cleanup.
+// retentionLoop periodically refreshes minute aggregates and removes expired
+// samples. The operations are in-memory and cannot fail externally.
 func (s *Storage) retentionLoop() {
 	defer s.wg.Done()
 
@@ -180,212 +102,300 @@ func (s *Storage) retentionLoop() {
 		case <-s.ctx.Done():
 			return
 		case <-ticker.C:
-			if err := s.downsample(); err != nil {
-				log.Printf("storage: downsampling failed: %v", err)
-			}
-			if err := s.cleanup(); err != nil {
-				log.Printf("storage: cleanup failed: %v", err)
-			}
+			_ = s.Downsample()
+			_ = s.Cleanup()
 		}
 	}
 }
 
-// Downsample aggregates 5s data into 1m buckets (exported for testing).
+// Downsample aggregates high-resolution data into one-minute averages.
 func (s *Storage) Downsample() error {
-	return s.downsample()
-}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-// Cleanup removes old data based on retention policies (exported for testing).
-func (s *Storage) Cleanup() error {
-	return s.cleanup()
-}
-
-// downsample aggregates 5s data into 1m buckets.
-func (s *Storage) downsample() error {
-	// Find the last downsampled timestamp
-	var lastTs sql.NullInt64
-	err := s.db.QueryRow(`SELECT MAX(ts) FROM metrics_1m`).Scan(&lastTs)
-	if err != nil && err != sql.ErrNoRows {
-		return fmt.Errorf("failed to get last downsampled timestamp: %w", err)
-	}
-
-	// Get all data since last downsample
-	var rows *sql.Rows
-	if lastTs.Valid {
-		rows, err = s.db.Query(
-			`SELECT ts, variant, data FROM metrics_5s WHERE ts > ? ORDER BY ts, variant`,
-			lastTs.Int64,
-		)
-	} else {
-		rows, err = s.db.Query(`SELECT ts, variant, data FROM metrics_5s ORDER BY ts, variant`)
-	}
-	if err != nil {
-		return fmt.Errorf("failed to query for downsampling: %w", err)
-	}
-	defer rows.Close()
-
-	// Group by minute bucket and variant
 	type bucketKey struct {
-		ts      int64
-		variant string
+		timestamp int64
+		variant   string
 	}
 	buckets := make(map[bucketKey][]*model.MetricSnapshot)
-
-	for rows.Next() {
-		var ts int64
-		var variant, data string
-		if err := rows.Scan(&ts, &variant, &data); err != nil {
-			return fmt.Errorf("failed to scan row: %w", err)
-		}
-
-		var snapshot model.MetricSnapshot
-		if err := json.Unmarshal([]byte(data), &snapshot); err != nil {
-			continue
-		}
-
-		// Round down to minute
-		minuteTs := (ts / 60) * 60
-		key := bucketKey{ts: minuteTs, variant: variant}
-		buckets[key] = append(buckets[key], &snapshot)
-	}
-
-	// Compute averages and insert
-	for key, snapshots := range buckets {
-		if len(snapshots) == 0 {
-			continue
-		}
-
-		avg := computeAverage(snapshots)
-		avg.Timestamp = key.ts * 1000 // Convert back to ms
-
-		data, err := json.Marshal(avg)
-		if err != nil {
-			continue
-		}
-
-		_, err = s.db.Exec(
-			`INSERT OR REPLACE INTO metrics_1m (ts, variant, data) VALUES (?, ?, ?)`,
-			key.ts, key.variant, string(data),
-		)
-		if err != nil {
-			log.Printf("storage: failed to insert downsampled data: %v", err)
+	for variant, buffer := range s.raw.buffers {
+		for _, snapshot := range buffer.snapshots() {
+			minute := (snapshot.Timestamp / 1000 / 60) * 60
+			key := bucketKey{timestamp: minute, variant: variant}
+			buckets[key] = append(buckets[key], snapshot)
 		}
 	}
 
+	result := newBufferSet(s.downsampled.capacity, s.downsampled.maxVariants)
+	keys := make([]bucketKey, 0, len(buckets))
+	for key := range buckets {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].timestamp == keys[j].timestamp {
+			return keys[i].variant < keys[j].variant
+		}
+		return keys[i].timestamp < keys[j].timestamp
+	})
+
+	for _, key := range keys {
+		average := computeAverage(buckets[key])
+		average.Timestamp = key.timestamp * 1000
+		result.append(average)
+	}
+	s.downsampled = result
 	return nil
 }
 
-// computeAverage computes the average of multiple snapshots.
+// Cleanup removes samples outside their configured retention windows.
+func (s *Storage) Cleanup() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.raw.removeBefore(time.Now().Add(-s.config.Retention5s).Unix())
+	s.downsampled.removeBefore(time.Now().Add(-s.config.Retention1m).Unix())
+	return nil
+}
+
+// GetLatest retrieves the most recent high-resolution snapshot for each
+// retained variant.
+func (s *Storage) GetLatest() (map[string]*model.MetricSnapshot, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.raw.latest(), nil
+}
+
+// bufferSet bounds the number of metric streams as well as the number of
+// samples in each stream. The dashboard has production and canary streams.
+type bufferSet struct {
+	capacity    int
+	maxVariants int
+	buffers     map[string]*ringBuffer
+}
+
+func newBufferSet(capacity, maxVariants int) bufferSet {
+	return bufferSet{
+		capacity:    capacity,
+		maxVariants: maxVariants,
+		buffers:     make(map[string]*ringBuffer, maxVariants),
+	}
+}
+
+func (b *bufferSet) append(snapshot *model.MetricSnapshot) {
+	buffer, ok := b.buffers[snapshot.Variant]
+	if !ok {
+		if len(b.buffers) >= b.maxVariants {
+			return
+		}
+		buffer = newRingBuffer(b.capacity)
+		b.buffers[snapshot.Variant] = buffer
+	}
+	buffer.append(snapshot)
+}
+
+func (b bufferSet) query(startTs, endTs int64, variant string) []*model.MetricSnapshot {
+	var result []*model.MetricSnapshot
+	for name, buffer := range b.buffers {
+		if variant != "" && variant != "all" && variant != name {
+			continue
+		}
+		for _, snapshot := range buffer.snapshots() {
+			timestamp := snapshot.Timestamp / 1000
+			if timestamp >= startTs && timestamp <= endTs {
+				result = append(result, snapshot)
+			}
+		}
+	}
+	return result
+}
+
+func (b *bufferSet) removeBefore(cutoff int64) {
+	for variant, buffer := range b.buffers {
+		buffer.removeBefore(cutoff)
+		if buffer.size == 0 {
+			delete(b.buffers, variant)
+		}
+	}
+}
+
+func (b bufferSet) latest() map[string]*model.MetricSnapshot {
+	result := make(map[string]*model.MetricSnapshot, len(b.buffers))
+	for variant, buffer := range b.buffers {
+		if latest := buffer.latest(); latest != nil {
+			result[variant] = latest
+		}
+	}
+	return result
+}
+
+// ringBuffer is a fixed-size circular buffer ordered by insertion. Query
+// methods sort selected results by timestamp so delayed samples remain ordered.
+type ringBuffer struct {
+	values []model.MetricSnapshot
+	start  int
+	size   int
+}
+
+func newRingBuffer(capacity int) *ringBuffer {
+	return &ringBuffer{values: make([]model.MetricSnapshot, capacity)}
+}
+
+func (r *ringBuffer) append(snapshot *model.MetricSnapshot) {
+	if len(r.values) == 0 {
+		return
+	}
+
+	// Preserve the former SQLite primary-key behavior: one snapshot per
+	// variant and Unix-second bucket, with the newer value replacing it.
+	for i := 0; i < r.size; i++ {
+		index := (r.start + i) % len(r.values)
+		if r.values[index].Timestamp/1000 == snapshot.Timestamp/1000 {
+			r.values[index] = *cloneSnapshot(snapshot)
+			return
+		}
+	}
+
+	index := (r.start + r.size) % len(r.values)
+	if r.size == len(r.values) {
+		index = r.start
+		r.start = (r.start + 1) % len(r.values)
+	} else {
+		r.size++
+	}
+	r.values[index] = *cloneSnapshot(snapshot)
+}
+
+func (r *ringBuffer) snapshots() []*model.MetricSnapshot {
+	result := make([]*model.MetricSnapshot, 0, r.size)
+	for i := 0; i < r.size; i++ {
+		result = append(result, cloneSnapshot(&r.values[(r.start+i)%len(r.values)]))
+	}
+	return result
+}
+
+func (r *ringBuffer) removeBefore(cutoff int64) {
+	kept := make([]*model.MetricSnapshot, 0, r.size)
+	for _, snapshot := range r.snapshots() {
+		if snapshot.Timestamp/1000 >= cutoff {
+			kept = append(kept, snapshot)
+		}
+	}
+	r.start = 0
+	r.size = 0
+	for _, snapshot := range kept {
+		r.append(snapshot)
+	}
+}
+
+func (r *ringBuffer) latest() *model.MetricSnapshot {
+	var latest *model.MetricSnapshot
+	for _, snapshot := range r.snapshots() {
+		if latest == nil || snapshot.Timestamp > latest.Timestamp {
+			latest = snapshot
+		}
+	}
+	return latest
+}
+
+func sortSnapshots(snapshots []*model.MetricSnapshot) {
+	sort.Slice(snapshots, func(i, j int) bool {
+		if snapshots[i].Timestamp == snapshots[j].Timestamp {
+			return snapshots[i].Variant < snapshots[j].Variant
+		}
+		return snapshots[i].Timestamp < snapshots[j].Timestamp
+	})
+}
+
+func cloneSnapshot(snapshot *model.MetricSnapshot) *model.MetricSnapshot {
+	if snapshot == nil {
+		return nil
+	}
+	clone := *snapshot
+	if snapshot.StatusCodeRates != nil {
+		clone.StatusCodeRates = make(map[string]float64, len(snapshot.StatusCodeRates))
+		for status, rate := range snapshot.StatusCodeRates {
+			clone.StatusCodeRates[status] = rate
+		}
+	}
+	return &clone
+}
+
+// computeAverage computes an arithmetic mean for a minute bucket.
 func computeAverage(snapshots []*model.MetricSnapshot) *model.MetricSnapshot {
 	if len(snapshots) == 0 {
 		return nil
 	}
 
 	n := float64(len(snapshots))
-	avg := &model.MetricSnapshot{
-		Variant: snapshots[0].Variant,
-	}
+	average := &model.MetricSnapshot{Variant: snapshots[0].Variant}
+	statusCodeRates := make(map[string]float64)
 
-	for _, s := range snapshots {
-		avg.Requests2xx += s.Requests2xx
-		avg.Requests4xx += s.Requests4xx
-		avg.Requests5xx += s.Requests5xx
-		avg.TokensInput += s.TokensInput
-		avg.TokensOutput += s.TokensOutput
-		avg.ConcurrentRequests += s.ConcurrentRequests
-		avg.MaxWorkers += s.MaxWorkers
-		avg.RateLimitRps += s.RateLimitRps
-		avg.RateLimitRejections += s.RateLimitRejections
-		avg.RateLimitAdjIncrease += s.RateLimitAdjIncrease
-		avg.RateLimitAdjDecrease += s.RateLimitAdjDecrease
-		avg.UpstreamErrors += s.UpstreamErrors
-		avg.RetryAttempts += s.RetryAttempts
-		avg.LatencyP50 += s.LatencyP50
-		avg.LatencyP95 += s.LatencyP95
-		avg.LatencyP99 += s.LatencyP99
-		avg.RequestSizeAvg += s.RequestSizeAvg
-		avg.ResponseSizeAvg += s.ResponseSizeAvg
-		avg.TokenRateIn += s.TokenRateIn
-		avg.TokenRateOut += s.TokenRateOut
-		avg.ReqRate += s.ReqRate
-		avg.ErrorRatePct += s.ErrorRatePct
-		avg.WorkerUtilization += s.WorkerUtilization
-	}
-
-	avg.Requests2xx /= n
-	avg.Requests4xx /= n
-	avg.Requests5xx /= n
-	avg.TokensInput /= n
-	avg.TokensOutput /= n
-	avg.ConcurrentRequests /= n
-	avg.MaxWorkers /= n
-	avg.RateLimitRps /= n
-	avg.RateLimitRejections /= n
-	avg.RateLimitAdjIncrease /= n
-	avg.RateLimitAdjDecrease /= n
-	avg.UpstreamErrors /= n
-	avg.RetryAttempts /= n
-	avg.LatencyP50 /= n
-	avg.LatencyP95 /= n
-	avg.LatencyP99 /= n
-	avg.RequestSizeAvg /= n
-	avg.ResponseSizeAvg /= n
-	avg.TokenRateIn /= n
-	avg.TokenRateOut /= n
-	avg.ReqRate /= n
-	avg.ErrorRatePct /= n
-	avg.WorkerUtilization /= n
-
-	return avg
-}
-
-// cleanup removes old data based on retention policies.
-func (s *Storage) cleanup() error {
-	cutoff5s := time.Now().Add(-s.config.Retention5s).Unix()
-	cutoff1m := time.Now().Add(-s.config.Retention1m).Unix()
-
-	if _, err := s.db.Exec(`DELETE FROM metrics_5s WHERE ts < ?`, cutoff5s); err != nil {
-		return fmt.Errorf("failed to cleanup metrics_5s: %w", err)
-	}
-
-	if _, err := s.db.Exec(`DELETE FROM metrics_1m WHERE ts < ?`, cutoff1m); err != nil {
-		return fmt.Errorf("failed to cleanup metrics_1m: %w", err)
-	}
-
-	return nil
-}
-
-// GetLatest retrieves the most recent snapshot for each variant.
-func (s *Storage) GetLatest() (map[string]*model.MetricSnapshot, error) {
-	rows, err := s.db.Query(`
-		SELECT variant, data FROM metrics_5s
-		WHERE (variant, ts) IN (
-			SELECT variant, MAX(ts) FROM metrics_5s GROUP BY variant
-		)
-	`)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query latest: %w", err)
-	}
-	defer rows.Close()
-
-	result := make(map[string]*model.MetricSnapshot)
-	for rows.Next() {
-		var variant, data string
-		if err := rows.Scan(&variant, &data); err != nil {
-			return nil, fmt.Errorf("failed to scan row: %w", err)
+	for _, snapshot := range snapshots {
+		average.Requests2xx += snapshot.Requests2xx
+		average.Requests4xx += snapshot.Requests4xx
+		average.Requests5xx += snapshot.Requests5xx
+		average.TokensInput += snapshot.TokensInput
+		average.TokensOutput += snapshot.TokensOutput
+		average.TokensCacheRead += snapshot.TokensCacheRead
+		average.TokensCacheWrite += snapshot.TokensCacheWrite
+		average.ConcurrentRequests += snapshot.ConcurrentRequests
+		average.MaxWorkers += snapshot.MaxWorkers
+		average.RateLimitRps += snapshot.RateLimitRps
+		average.RateLimitRejections += snapshot.RateLimitRejections
+		average.RateLimitAdjIncrease += snapshot.RateLimitAdjIncrease
+		average.RateLimitAdjDecrease += snapshot.RateLimitAdjDecrease
+		average.UpstreamErrors += snapshot.UpstreamErrors
+		average.RetryAttempts += snapshot.RetryAttempts
+		average.LatencyP50 += snapshot.LatencyP50
+		average.LatencyP95 += snapshot.LatencyP95
+		average.LatencyP99 += snapshot.LatencyP99
+		average.RequestSizeAvg += snapshot.RequestSizeAvg
+		average.ResponseSizeAvg += snapshot.ResponseSizeAvg
+		average.TokenRateIn += snapshot.TokenRateIn
+		average.TokenRateOut += snapshot.TokenRateOut
+		average.TokenRateCacheRead += snapshot.TokenRateCacheRead
+		average.TokenRateCacheWrite += snapshot.TokenRateCacheWrite
+		average.ReqRate += snapshot.ReqRate
+		average.ErrorRatePct += snapshot.ErrorRatePct
+		average.WorkerUtilization += snapshot.WorkerUtilization
+		for status, rate := range snapshot.StatusCodeRates {
+			statusCodeRates[status] += rate
 		}
-
-		var snapshot model.MetricSnapshot
-		if err := json.Unmarshal([]byte(data), &snapshot); err != nil {
-			continue
-		}
-		result[variant] = &snapshot
 	}
 
-	return result, rows.Err()
-}
+	average.Requests2xx /= n
+	average.Requests4xx /= n
+	average.Requests5xx /= n
+	average.TokensInput /= n
+	average.TokensOutput /= n
+	average.TokensCacheRead /= n
+	average.TokensCacheWrite /= n
+	average.ConcurrentRequests /= n
+	average.MaxWorkers /= n
+	average.RateLimitRps /= n
+	average.RateLimitRejections /= n
+	average.RateLimitAdjIncrease /= n
+	average.RateLimitAdjDecrease /= n
+	average.UpstreamErrors /= n
+	average.RetryAttempts /= n
+	average.LatencyP50 /= n
+	average.LatencyP95 /= n
+	average.LatencyP99 /= n
+	average.RequestSizeAvg /= n
+	average.ResponseSizeAvg /= n
+	average.TokenRateIn /= n
+	average.TokenRateOut /= n
+	average.TokenRateCacheRead /= n
+	average.TokenRateCacheWrite /= n
+	average.ReqRate /= n
+	average.ErrorRatePct /= n
+	average.WorkerUtilization /= n
+	if len(statusCodeRates) > 0 {
+		average.StatusCodeRates = statusCodeRates
+		for status := range average.StatusCodeRates {
+			average.StatusCodeRates[status] /= n
+		}
+	}
 
-// GetDB returns the underlying database connection for testing.
-func (s *Storage) GetDB() *sql.DB {
-	return s.db
+	return average
 }

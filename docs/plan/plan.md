@@ -1,7 +1,7 @@
 # ZAI Proxy Ecosystem — Plan
 
 **Last updated:** 2026-07-20
-**Version:** proxy/1.10.0, dashboard/1.1.0
+**Version:** proxy/1.10.0, dashboard/1.1.1
 
 ## Objective
 
@@ -140,8 +140,8 @@ zai-proxy /metrics
 │        │   │  • "connected" event on join     │
 │5s/24h  │   │    (scrape_interval, variants)   │
 │1m/7d   │   │  • 30 s keepalive heartbeat      │
-│SQLite  │   │  • Drops slow consumers          │
-│WAL     │   └─────────────────────────────────┘
+│In-memory│  │  • Drops slow consumers          │
+│rings   │   └─────────────────────────────────┘
 └────────┘
       │
       ▼
@@ -153,19 +153,18 @@ REST API
   GET /healthz                 Health check
 ```
 
-**Storage schema (SQLite, WAL mode):**
+**Storage layout (in-memory ring buffers):**
 
-| Table | Resolution | Retention |
-|-------|-----------|-----------|
-| `metrics_5s` | 5 s | 24 h |
-| `metrics_1m` | 1 min averages | 7 d |
+| Buffer | Resolution | Retention | Capacity per variant |
+|--------|-----------|-----------|----------------------|
+| Raw | 5 s | 24 h | 17,280 snapshots |
+| Downsampled | 1 min averages | 7 d | 10,080 snapshots |
 
-`QueryRange` automatically selects the table: `metrics_5s` for ranges ≤ 1 h,
-`metrics_1m` for longer ranges. Downsampling runs every 10 minutes. Retention
-purge runs every 10 minutes.
-
-> **Note:** The deployment uses `emptyDir` for `/data` — dashboard history is
-> lost on pod restart. A PVC is commented out in the manifest for future use.
+The storage holds fixed-size rings for the production and canary streams, with
+no database, PVC, or filesystem dependency. `QueryRange` automatically selects
+the raw ring for ranges ≤ 1 h and the downsampled ring for longer ranges.
+Downsampling and retention cleanup run every 10 minutes. A pod restart begins
+with an empty window, which refills through normal scraping.
 
 **REST API parameters:**
 
@@ -217,7 +216,6 @@ Global controls:
 | `SCRAPE_INTERVAL` | `5s` | How often to scrape |
 | `SCRAPE_TIMEOUT` | `3s` | Per-scrape HTTP timeout |
 | `LISTEN_ADDR` | `:8080` | Dashboard listen address |
-| `DB_PATH` | `/data/dashboard.db` | SQLite file path |
 | `RETENTION_5S` | `24h` | High-resolution data retention |
 | `RETENTION_1M` | `168h` (7d) | Downsampled data retention |
 
@@ -343,7 +341,7 @@ zai-proxy/                          (git.ardenone.com/jedarden/zai-proxy)
 │   ├── main.go                     HTTP server + SSE broadcaster
 │   ├── collector/                  Prometheus scraper + parser
 │   ├── api/                        REST + SSE handlers
-│   ├── storage/                    SQLite persistence layer
+│   ├── storage/                    In-memory dual-resolution ring buffers
 │   ├── model/                      Shared metric data types
 │   ├── logger/                     Structured logger
 │   └── frontend/                   React/Vite/Tailwind dashboard UI

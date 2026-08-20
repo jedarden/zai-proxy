@@ -6,7 +6,7 @@ Real-time web dashboard for monitoring zai-proxy metrics, token usage, and reque
 
 ✅ **Real-time Metrics** - Live updates via Server-Sent Events (SSE)
 ✅ **Prometheus Scraping** - Collects metrics from zai-proxy endpoints
-✅ **SQLite Storage** - Efficient data storage with automatic downsampling
+✅ **In-Memory Storage** - Bounded, dual-resolution history with automatic downsampling
 ✅ **Multi-Variant Support** - Monitor production and canary deployments side-by-side
 ✅ **Token Tracking** - Visualize input/output token rates and totals
 ✅ **Request Analytics** - Latency percentiles, error rates, throughput
@@ -22,7 +22,7 @@ Real-time web dashboard for monitoring zai-proxy metrics, token usage, and reque
 │  ┌──────────────┐      ┌─────────────┐      ┌──────────────┐              │
 │  │   Collector  │─────▶│   Storage   │─────▶│   SSE Hub    │              │
 │  │              │      │             │      │              │              │
-│  │ Scrapes      │      │ SQLite      │      │ Broadcasts   │              │
+│  │ Scrapes      │      │ Ring buffers│      │ Broadcasts   │              │
 │  │ Prometheus   │      │ metrics_5s  │      │ live updates  │              │
 │  │ endpoints    │      │ metrics_1m  │      │ to clients   │              │
 │  └──────────────┘      └─────────────┘      └──────────────┘              │
@@ -40,9 +40,10 @@ Real-time web dashboard for monitoring zai-proxy metrics, token usage, and reque
 ### Components
 
 - **Collector** - Scrapes Prometheus metrics from configured targets every 5 seconds
-- **Storage** - SQLite database with dual-resolution storage:
-  - `metrics_5s` - High-resolution data (24h retention)
-  - `metrics_1m` - Downsampled averages (7d retention)
+- **Storage** - Process-local, bounded ring buffers with dual-resolution history:
+  - 5-second snapshots (24h retention)
+  - 1-minute averages (7d retention)
+  - History is intentionally empty after a pod restart; Grafana is the durable source.
 - **SSE Hub** - Real-time broadcast of new snapshots to connected web clients
 - **API Router** - REST endpoints for historical data queries
 - **Frontend** - React SPA with live charts and status displays
@@ -58,7 +59,6 @@ cd dashboard/
 # Set required environment variables (optional, defaults shown)
 export SCRAPE_TARGETS="http://localhost:8080/metrics"
 export LISTEN_ADDR=":8080"
-export DB_PATH="/tmp/dashboard.db"
 
 # Build and run
 go run .
@@ -94,7 +94,6 @@ docker build -t zai-proxy-dashboard:latest .
 
 # Run container
 docker run -p 8080:8080 \
-  -v dashboard-data:/data \
   -e SCRAPE_TARGETS="http://zai-proxy:8080/metrics" \
   zai-proxy-dashboard:latest
 ```
@@ -119,18 +118,13 @@ spec:
     spec:
       containers:
       - name: dashboard
-        image: ronaldraygun/zai-proxy-dashboard:latest
+        image: ronaldraygun/zai-proxy-dashboard:1.1.1
         ports:
         - containerPort: 8080
           name: http
         env:
         - name: SCRAPE_TARGETS
           value: "http://zai-proxy.devpod.svc.cluster.local:8080/metrics"
-        - name: DB_PATH
-          value: "/data/dashboard.db"
-        volumeMounts:
-        - name: data
-          mountPath: /data
         resources:
           requests:
             cpu: 100m
@@ -138,9 +132,6 @@ spec:
           limits:
             cpu: 500m
             memory: 256Mi
-      volumes:
-      - name: data
-        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -165,7 +156,6 @@ spec:
 | `SCRAPE_TARGETS` | String | `http://zai-proxy.devpod.svc.cluster.local:8080/metrics` | Comma-separated Prometheus endpoints to scrape |
 | `SCRAPE_INTERVAL` | Duration | `5s` | Scrape interval |
 | `SCRAPE_TIMEOUT` | Duration | `3s` | HTTP timeout for each scrape |
-| `DB_PATH` | String | `/data/dashboard.db` | SQLite database file path |
 | `RETENTION_5S` | Duration | `24h` | Retention for high-resolution data |
 | `RETENTION_1M` | Duration | `168h` (7d) | Retention for downsampled data |
 
@@ -350,34 +340,32 @@ type MetricSnapshot struct {
 
 ## Storage
 
-### Database Schema
+### In-Memory Ring Buffers
 
-SQLite database with two resolution levels:
+The dashboard has no database or persistent volume. It keeps one fixed-size
+ring buffer per supported variant (production and canary) at each resolution:
 
-**`metrics_5s`** - High-resolution data
-- 5-second intervals
-- 24-hour retention
-- Raw metric snapshots
+- 5-second raw snapshots for 24 hours
+- 1-minute averages for 7 days
 
-**`metrics_1m`** - Downsampled data
-- 1-minute intervals (averaged from 5s data)
-- 7-day retention
-- Created by background downsample job
+The buffers are process-local, so a restart begins with an empty window and
+refills as the collector scrapes. This is intentional; use Grafana/Prometheus
+for durable history.
 
 ### Automatic Downsampling
 
 Every 10 minutes, the dashboard:
-1. Reads new 5s data since last downsample
+1. Reads the retained 5-second snapshots
 2. Groups by minute bucket and variant
 3. Computes averages for all numeric fields
-4. Writes to `metrics_1m` table
+4. Refreshes the 1-minute ring buffer
 5. Cleans up data beyond retention periods
 
 ### Query Routing
 
-The API automatically selects the appropriate table based on query range:
-- ≤ 1 hour → queries `metrics_5s` for detailed data
-- > 1 hour → queries `metrics_1m` for performance
+The API automatically selects the appropriate buffer based on query range:
+- ≤ 1 hour → 5-second data for detail
+- > 1 hour → 1-minute data for efficiency
 
 ## Development
 
@@ -457,8 +445,8 @@ dashboard/
 ├── model/
 │   └── metrics.go           # Data structures
 └── storage/
-    ├── storage.go           # SQLite storage layer
-    └── schema.go            # Database schema, config
+    ├── config.go            # Retention and fixed-capacity configuration
+    └── storage.go           # In-memory ring-buffer storage layer
 ```
 
 ## Troubleshooting
@@ -493,31 +481,13 @@ curl -N http://localhost:8080/api/events
 - Network policies blocking connections
 - Client not handling keep-alive heartbeats
 
-### Database errors
-
-**Check disk space:**
-```bash
-kubectl exec -n devpod deployment/zai-proxy-dashboard -- df -h /data
-```
-
-**Verify database file:**
-```bash
-kubectl exec -n devpod deployment/zai-proxy-dashboard -- sqlite3 /data/dashboard.db ".schema"
-```
-
 ### High memory usage
 
 **Adjust retention periods:**
-```bash
-kubectl set env deployment/zai-proxy-dashboard -n devpod \
-  RETENTION_5S=12h \
-  RETENTION_1M=72h
-```
 
-**Check database size:**
-```bash
-kubectl exec -n devpod deployment/zai-proxy-dashboard -- du -sh /data/dashboard.db
-```
+Set `RETENTION_5S` and `RETENTION_1M` in the GitOps deployment manifest,
+then let ArgoCD reconcile it. The rings are fixed-size at startup, so a pod
+restart is required for a changed retention to take effect.
 
 ## Performance
 
@@ -528,7 +498,7 @@ kubectl exec -n devpod deployment/zai-proxy-dashboard -- du -sh /data/dashboard.
 | Query latency (1h) | <500ms | 50-200ms |
 | Query latency (7d) | <2s | 500ms-1s |
 | Memory per variant | <50MB | 20-30MB |
-| Disk usage (per day) | <100MB | 40-60MB |
+| Storage memory | Well below 256Mi | Bounded by retention and two variants |
 
 **Note:** Metrics depend on scrape interval and request volume.
 

@@ -516,32 +516,29 @@ for scanner.Scan() {
 
 ## Data Retention
 
-The dashboard stores metrics at two granularities with different retention policies:
+The dashboard keeps metrics in process-local, bounded ring buffers at two
+granularities. The history window starts empty after a pod restart.
 
-| Table | Granularity | Retention | Purpose |
-|-------|-------------|-----------|---------|
-| `metrics_5s` | 5 seconds | 24 hours | High-resolution recent data |
-| `metrics_1m` | 1 minute | 7 days | Downsampled historical data |
+| Buffer | Granularity | Retention | Purpose |
+|--------|-------------|-----------|---------|
+| Raw ring | 5 seconds | 24 hours | High-resolution recent data |
+| Downsampled ring | 1 minute | 7 days | Historical averages |
 
 ### Automatic Operations
 
 - **Downsampling:** Runs every 10 minutes, aggregates 5-second data into 1-minute averages
-- **Cleanup:** Runs every hour, deletes data beyond retention windows
-- **WAL Mode:** Enabled for performance and concurrency
+- **Cleanup:** Runs every 10 minutes, removes data beyond retention windows
 
 ### Storage Backend
 
-**Database:** SQLite with WAL mode
+**Backend:** In-memory, fixed-size rings for the production and canary streams
 
-**Path:** Configured via `DB_PATH` environment variable (default: `/data/dashboard.db`)
+**Query Strategy:** Time-based buffer selection
+- Queries > 1 hour use the downsampled ring
+- Queries ≤ 1 hour use the high-resolution ring
 
-**Write Strategy:** Asynchronous writes via buffered channel (capacity: 1000)
-
-**Query Strategy:** Time-based table selection
-- Queries > 1 hour use `metrics_1m` (downsampled)
-- Queries ≤ 1 hour use `metrics_5s` (high-resolution)
-
-Data is automatically downsampled from 5-second to 1-minute granularity every 10 minutes. Old data beyond retention periods is automatically cleaned up.
+Data is automatically downsampled from 5-second to 1-minute granularity every
+10 minutes. No history is persisted to disk.
 
 ---
 

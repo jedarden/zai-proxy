@@ -26,6 +26,13 @@ func NewParser() *Parser {
 // Parse parses Prometheus exposition format text and returns a map of metric names
 // to their values and labels.
 func (p *Parser) Parse(text string) (map[string][]MetricValue, error) {
+	// Prometheus text exposition is line-oriented. Metrics endpoints include a
+	// trailing newline, but accepting one-line input keeps the parser useful
+	// for callers and tests that provide a final sample without one.
+	if text != "" && !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+
 	var parser expfmt.TextParser
 	families, err := parser.TextToMetricFamilies(bytes.NewReader([]byte(text)))
 	if err != nil {
@@ -36,6 +43,17 @@ func (p *Parser) Parse(text string) (map[string][]MetricValue, error) {
 	for name, family := range families {
 		values := p.parseFamily(family)
 		result[name] = values
+	}
+	// Keep declared-but-empty metric families visible. This matches the
+	// behavior callers relied on before the newer parser stopped emitting a
+	// family for a TYPE declaration with no samples.
+	for _, line := range strings.Split(text, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 4 && fields[0] == "#" && fields[1] == "TYPE" {
+			if _, ok := result[fields[2]]; !ok {
+				result[fields[2]] = nil
+			}
+		}
 	}
 	return result, nil
 }
@@ -82,8 +100,8 @@ func (p *Parser) parseFamily(family *dto.MetricFamily) []MetricValue {
 				values = append(values, MetricValue{
 					Value: float64(bucket.GetCumulativeCount()),
 					Labels: mergeLabels(labelsToMap(m.GetLabel()), map[string]string{
-						"_type":  "bucket",
-						"le":     formatBound(bound),
+						"_type": "bucket",
+						"le":    formatBound(bound),
 					}),
 				})
 			}
@@ -158,7 +176,7 @@ func (p *Parser) ParseHistogram(metrics map[string][]MetricValue, name string, f
 // HistogramQuantile computes the quantile from histogram buckets using linear interpolation.
 // This implements the same algorithm as Prometheus's histogram_quantile() function.
 func HistogramQuantile(q float64, buckets []model.HistogramBucket) float64 {
-	if len(buckets) == 0 {
+	if len(buckets) == 0 || q < 0 || q > 1 {
 		return math.NaN()
 	}
 
@@ -187,6 +205,12 @@ func HistogramQuantile(q float64, buckets []model.HistogramBucket) float64 {
 
 	for _, b := range buckets {
 		if b.Count >= target {
+			// The +Inf bucket gives the total count but has no finite upper
+			// bound. Prometheus returns the previous finite bucket in this
+			// case rather than interpolating to infinity.
+			if math.IsInf(b.UpperBound, 1) {
+				return prevBound
+			}
 			// Linear interpolation between this bucket and the previous
 			if b.Count == prevCount {
 				return prevBound
