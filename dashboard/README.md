@@ -89,8 +89,8 @@ npm run test
 ### Docker Deployment
 
 ```bash
-# Build image
-docker build -t zai-proxy-dashboard:latest .
+# Build image from the repository root
+docker build -t zai-proxy-dashboard:latest -f dashboard/Dockerfile .
 
 # Run container
 docker run -p 8080:8080 \
@@ -118,7 +118,7 @@ spec:
     spec:
       containers:
       - name: dashboard
-        image: ronaldraygun/zai-proxy-dashboard:1.1.4
+        image: ronaldraygun/zai-proxy-dashboard:1.1.5
         ports:
         - containerPort: 8080
           name: http
@@ -412,8 +412,8 @@ go build -o zai-proxy-dashboard .
 cd frontend/
 npm run build
 
-# Full Docker image
-docker build -t zai-proxy-dashboard:latest .
+# Full Docker image (run from repository root)
+docker build -t zai-proxy-dashboard:latest -f dashboard/Dockerfile .
 ```
 
 ## Project Structure

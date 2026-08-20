@@ -3,7 +3,7 @@
 # Real-time web dashboard for monitoring zai-proxy metrics.
 # Scrapes Prometheus endpoints, keeps a bounded in-memory history, and broadcasts via SSE.
 #
-# Build: docker build -t ronaldraygun/zai-proxy-dashboard:latest .
+# Build: docker build -t ronaldraygun/zai-proxy-dashboard:latest -f dashboard/Dockerfile .
 # Run:   docker run -p 8080:8080 ronaldraygun/zai-proxy-dashboard:latest
 
 # =============================================================================
@@ -11,16 +11,16 @@
 # =============================================================================
 FROM node:20-alpine AS frontend
 
-WORKDIR /app/frontend
+WORKDIR /app/dashboard/frontend
 
 # Copy package files first for better caching
-COPY frontend/package.json frontend/package-lock.json ./
+COPY dashboard/frontend/package.json dashboard/frontend/package-lock.json ./
 
 # Install dependencies
 RUN npm ci --prefer-offline --no-audit
 
 # Copy source and build
-COPY frontend/ ./
+COPY dashboard/frontend/ ./
 RUN npm run build
 
 # Output: frontend/dist/ with index.html and hashed assets
@@ -32,17 +32,17 @@ FROM golang:1.23-alpine AS backend
 
 WORKDIR /app
 
-# Copy go.mod first
-COPY go.mod ./
-
-# Copy source code first (needed for go mod tidy to work)
+# The dashboard module replaces the root zai-proxy module with ../, so build
+# from the repository context rather than dashboard/ alone.
 COPY . .
 
-# Download dependencies and generate go.sum if needed
-RUN go mod tidy && go mod download
+WORKDIR /app/dashboard
+
+# Download the dashboard module's dependencies.
+RUN go mod download
 
 # Copy frontend build from stage 1
-COPY --from=frontend /app/frontend/dist ./frontend/dist
+COPY --from=frontend /app/dashboard/frontend/dist ./frontend/dist
 
 # Build static binary.
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /zai-proxy-dashboard .
