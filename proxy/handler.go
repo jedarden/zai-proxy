@@ -23,6 +23,7 @@ type ProxyHandler struct {
 	tokenizerModel    string
 	rateLimiter       *AdaptiveRateLimiter
 	client            *http.Client
+	retrySleep        func(time.Duration)
 	currentRequests   atomic.Int64
 	mu                sync.RWMutex
 }
@@ -55,7 +56,18 @@ func NewProxyHandler(
 				return http.ErrUseLastResponse
 			},
 		},
+		retrySleep: time.Sleep,
 	}
+}
+
+// sleepForRetry waits before a retry. retrySleep is injectable so tests can
+// assert the chosen delay without waiting for production-sized backoff.
+func (h *ProxyHandler) sleepForRetry(delay time.Duration) {
+	if h.retrySleep != nil {
+		h.retrySleep(delay)
+		return
+	}
+	time.Sleep(delay)
 }
 
 // updateUtilization updates the worker utilization metric.
@@ -152,7 +164,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// Exponential backoff: 1s, 2s, 4s, etc.
 			backoffDuration := time.Duration(1<<uint(attempt-1)) * time.Second
 			log.Printf("Retry attempt %d/%d after %v", attempt, h.maxRetries, backoffDuration)
-			time.Sleep(backoffDuration)
+			h.sleepForRetry(backoffDuration)
 			retryAttempts.WithLabelValues("retry", h.deploymentVariant).Inc()
 		}
 
@@ -215,7 +227,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if retryAfter != "" {
 				if seconds, err := strconv.Atoi(retryAfter); err == nil {
 					log.Printf("429 Rate Limited, retry after %d seconds", seconds)
-					time.Sleep(time.Duration(seconds) * time.Second)
+					h.sleepForRetry(time.Duration(seconds) * time.Second)
 				}
 			}
 

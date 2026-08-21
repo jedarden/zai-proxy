@@ -882,8 +882,8 @@ func TestProxyHandlerFactoryIntegration(t *testing.T) {
 		mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			count := attempts.Add(1)
 			if count < 3 {
-				w.WriteHeader(http.StatusTooManyRequests)
 				w.Header().Set("Retry-After", "1")
+				w.WriteHeader(http.StatusTooManyRequests)
 			} else {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
@@ -893,11 +893,18 @@ func TestProxyHandlerFactoryIntegration(t *testing.T) {
 		defer mockServer.Close()
 
 		handler := CreateTestProxyHandler(t, mockServer.URL, 5)
+		var observedDelays []time.Duration
+		handler.retrySleep = func(delay time.Duration) {
+			observedDelays = append(observedDelays, delay)
+		}
 
-		// Calculate expected delays (AC9)
+		// Each 429 honors Retry-After, and the retry loop then applies its
+		// exponential delay before issuing the next request.
 		expectedDelays := []time.Duration{
-			CalculateBackoffDelay(1), // 1s
-			CalculateBackoffDelay(2), // 2s
+			time.Second,
+			CalculateBackoffDelay(1),
+			time.Second,
+			CalculateBackoffDelay(2),
 		}
 
 		// Calculate total max delay (AC10)
@@ -906,19 +913,20 @@ func TestProxyHandlerFactoryIntegration(t *testing.T) {
 			t.Errorf("Expected total max delay 31s, got %v", totalMaxDelay)
 		}
 
-		// Make request and measure time
-		start := time.Now()
+		// Make the request without sleeping in real time.
 		testBody := `{"model":"glm-4","messages":[{"role":"user","content":"test"}]}`
 		resp := ExecuteMessagesRequest(t, handler, testBody)
-		elapsed := time.Since(start)
 
 		// Verify we got success after retries
 		AssertStatusCode(t, resp, http.StatusOK)
 
-		// Should have taken at least the sum of backoff delays
-		minExpectedTime := expectedDelays[0] + expectedDelays[1]
-		if elapsed < minExpectedTime {
-			t.Errorf("Expected at least %v, took %v", minExpectedTime, elapsed)
+		if len(observedDelays) != len(expectedDelays) {
+			t.Fatalf("Expected %d retry delays, got %d: %v", len(expectedDelays), len(observedDelays), observedDelays)
+		}
+		for i, want := range expectedDelays {
+			if got := observedDelays[i]; got != want {
+				t.Errorf("Retry delay %d: got %v, want %v", i, got, want)
+			}
 		}
 
 		// Verify we made 3 attempts (2 failures + 1 success)

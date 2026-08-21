@@ -491,11 +491,13 @@ func TestMockUpstream_ProxyIntegration(t *testing.T) {
 		upstreamErrors.Reset()
 
 		handler := CreateTestProxyHandler(t, mock.URL(), 2)
+		var observedDelays []time.Duration
+		handler.retrySleep = func(delay time.Duration) {
+			observedDelays = append(observedDelays, delay)
+		}
 		req := CreateNonStreamingMessagesRequest()
 
-		start := time.Now()
 		resp := ExecuteProxyRequest(t, handler, req)
-		duration := time.Since(start)
 
 		// Should succeed after retry
 		if resp.StatusCode != http.StatusOK {
@@ -507,15 +509,19 @@ func TestMockUpstream_ProxyIntegration(t *testing.T) {
 			t.Errorf("Expected 2 upstream calls, got %d", count)
 		}
 
-		// Verify retry behavior occurred via call count and timing
-		// Metrics are tested separately in response_validation_test.go
-
-		// Should take at least 1 second (Retry-After: 1)
-		if duration < 900*time.Millisecond {
-			t.Errorf("Expected >=1s delay, got %v", duration)
+		// The header delay and exponential delay are both selected without
+		// adding real-time sleeps to the suite.
+		wantDelays := []time.Duration{time.Second, time.Second}
+		if len(observedDelays) != len(wantDelays) {
+			t.Fatalf("Expected %d retry delays, got %d: %v", len(wantDelays), len(observedDelays), observedDelays)
+		}
+		for i, want := range wantDelays {
+			if got := observedDelays[i]; got != want {
+				t.Errorf("Retry delay %d: got %v, want %v", i, got, want)
+			}
 		}
 
-		t.Logf("429 retry: %v, %d calls", duration, mock.GetRequestCount())
+		t.Logf("429 retry: %d calls", mock.GetRequestCount())
 	})
 
 	t.Run("empty json body through proxy triggers retry", func(t *testing.T) {

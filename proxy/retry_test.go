@@ -1464,7 +1464,7 @@ func createTestProxyHandler(t *testing.T, upstreamURL string, maxRetries int) *P
 	t.Setenv("RATE_LIMIT_MIN", "1000")
 	t.Setenv("RATE_LIMIT_MAX", "1000")
 
-	return NewProxyHandler(
+	handler := NewProxyHandler(
 		"test-key",
 		upstreamURL,
 		maxRetries,
@@ -1476,6 +1476,8 @@ func createTestProxyHandler(t *testing.T, upstreamURL string, maxRetries int) *P
 		1000.0,  // minRate
 		1000.0,  // maxRate
 	)
+	handler.retrySleep = func(time.Duration) {}
+	return handler
 }
 
 // TestIntegration429WithRetryAfter tests 429 with Retry-After header through real proxy

@@ -753,7 +753,7 @@ func CreateTestProxyHandler(t *testing.T, upstreamURL string, maxRetries int) *P
 	t.Setenv(TestMaxRetriesEnv, strconv.Itoa(maxRetries))
 	t.Setenv("ZAI_API_KEY", "test-key")
 
-	return NewProxyHandler(
+	handler := NewProxyHandler(
 		"test-key",
 		upstreamURL,
 		maxRetries,
@@ -765,6 +765,8 @@ func CreateTestProxyHandler(t *testing.T, upstreamURL string, maxRetries int) *P
 		1000.0,  // minRate
 		1000.0,  // maxRate
 	)
+	handler.retrySleep = func(time.Duration) {}
+	return handler
 }
 
 // ============================================================================
