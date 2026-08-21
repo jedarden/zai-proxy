@@ -142,14 +142,17 @@ func TestAdaptiveRateLimiter_Acceptance_WaitSanity(t *testing.T) {
 	})
 
 	t.Run("wait_scales_inversely_with_rate", func(t *testing.T) {
-		rates := []float64{1.0, 10.0, 100.0}
+		rates := []float64{2.0, 4.0, 16.0}
 		waitTimes := make(map[float64]time.Duration)
 
 		for _, rate := range rates {
 			arl := NewAdaptiveRateLimiter(rate, 0.1, rate*10)
 
 			var totalWait time.Duration
-			iterations := 5
+			// Drain the initial burst and measure one token refill. This keeps
+			// this acceptance check fast while producing a real wait for each
+			// rate.
+			iterations := arl.limiter.Burst() + 1
 			for i := 0; i < iterations; i++ {
 				totalWait += arl.Wait("test")
 			}
@@ -160,13 +163,13 @@ func TestAdaptiveRateLimiter_Acceptance_WaitSanity(t *testing.T) {
 		}
 
 		// Lower rates should have higher wait times
-		if waitTimes[1.0] < waitTimes[10.0] {
-			t.Errorf("Wait time should scale inversely with rate: 1.0 req/s wait %v < 10.0 req/s wait %v",
-				waitTimes[1.0], waitTimes[10.0])
+		if waitTimes[2.0] < waitTimes[4.0] {
+			t.Errorf("Wait time should scale inversely with rate: 2.0 req/s wait %v < 4.0 req/s wait %v",
+				waitTimes[2.0], waitTimes[4.0])
 		}
-		if waitTimes[10.0] < waitTimes[100.0] {
-			t.Errorf("Wait time should scale inversely with rate: 10.0 req/s wait %v < 100.0 req/s wait %v",
-				waitTimes[10.0], waitTimes[100.0])
+		if waitTimes[4.0] < waitTimes[16.0] {
+			t.Errorf("Wait time should scale inversely with rate: 4.0 req/s wait %v < 16.0 req/s wait %v",
+				waitTimes[4.0], waitTimes[16.0])
 		}
 	})
 
@@ -324,7 +327,9 @@ func TestAdaptiveRateLimiter_Acceptance_ConcurrentSafety(t *testing.T) {
 	t.Run("concurrent_Wait_with_recording_is_race_free", func(t *testing.T) {
 		arl := NewAdaptiveRateLimiter(10.0, 1.0, 50.0)
 		goroutines := 10
-		operationsPerGoroutine := 20
+		// Five goroutines invoke Wait, so two iterations stay within the
+		// initial burst while still racing Wait against both record paths.
+		operationsPerGoroutine := 2
 
 		var wg sync.WaitGroup
 		for i := 0; i < goroutines; i++ {

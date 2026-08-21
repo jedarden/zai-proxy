@@ -768,30 +768,38 @@ func TestAdaptiveRateLimiter_Concurrency(t *testing.T) {
 		initialRate float64
 		goroutines  int
 		operations  int
+		mode        string
 	}{
 		{
 			name:        "concurrent 429 recording",
 			initialRate: 10.0,
 			goroutines:  10,
 			operations:  100,
+			mode:        "429",
 		},
 		{
 			name:        "concurrent success recording",
 			initialRate: 10.0,
 			goroutines:  10,
 			operations:  100,
+			mode:        "success",
 		},
 		{
 			name:        "concurrent mixed 429 and success",
 			initialRate: 10.0,
 			goroutines:  20,
 			operations:  100,
+			mode:        "mixed",
 		},
 		{
 			name:        "concurrent with Wait() calls",
 			initialRate: 10.0,
 			goroutines:  10,
-			operations:  50,
+			// Three goroutines invoke Wait, so two iterations exercise six
+			// concurrent waits within the limiter's initial burst of 20. The
+			// focused race test below covers larger Record call counts.
+			operations: 2,
+			mode:       "wait",
 		},
 	}
 
@@ -805,13 +813,24 @@ func TestAdaptiveRateLimiter_Concurrency(t *testing.T) {
 				go func(goroutineID int) {
 					defer wg.Done()
 					for j := 0; j < tt.operations; j++ {
-						switch {
-						case goroutineID%3 == 0:
+						switch tt.mode {
+						case "429":
 							arl.Record429()
-						case goroutineID%3 == 1:
+						case "success":
 							arl.RecordSuccess()
-						default:
-							arl.Wait("test")
+						case "mixed", "wait":
+							switch goroutineID % 3 {
+							case 0:
+								arl.Record429()
+							case 1:
+								arl.RecordSuccess()
+							default:
+								if tt.mode == "wait" {
+									arl.Wait("test")
+								} else {
+									arl.RecordSuccess()
+								}
+							}
 						}
 					}
 				}(i)
@@ -2197,51 +2216,48 @@ func TestAdaptiveRateLimiter_Wait_NegativeRate(t *testing.T) {
 // TestAdaptiveRateLimiter_Wait_InverseScaling tests that wait duration scales inversely with rate
 func TestAdaptiveRateLimiter_Wait_InverseScaling(t *testing.T) {
 	tests := []struct {
-		name           string
-		rate           float64
-		expectedFactor float64 // Relative to 10 req/s baseline
+		name string
+		rate float64
 	}{
 		{
-			name:           "1 req/s - 10x slower than 10 req/s",
-			rate:           1.0,
-			expectedFactor: 10.0,
+			name: "2 req/s",
+			rate: 2.0,
 		},
 		{
-			name:           "10 req/s - baseline",
-			rate:           10.0,
-			expectedFactor: 1.0,
+			name: "4 req/s",
+			rate: 4.0,
 		},
 		{
-			name:           "100 req/s - 10x faster than 10 req/s",
-			rate:           100.0,
-			expectedFactor: 0.1,
+			name: "16 req/s",
+			rate: 16.0,
 		},
 	}
 
+	waits := make(map[float64]time.Duration, len(tests))
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			arl := NewAdaptiveRateLimiter(tt.rate, 0.1, tt.rate*10)
 
-			// Measure wait time for multiple calls
-			var totalTime time.Duration
-			iterations := 10
-			for i := 0; i < iterations; i++ {
-				totalTime += arl.Wait("test")
+			// Exhaust the initial burst and measure one refill. This preserves
+			// rate-limited coverage without turning a unit test into a multi-
+			// second throughput benchmark.
+			for i := 0; i < arl.limiter.Burst(); i++ {
+				arl.Wait("test")
 			}
-
-			avgWait := totalTime / time.Duration(iterations)
-			t.Logf("Rate: %.1f req/s, Avg wait: %v", tt.rate, avgWait)
+			wait := arl.Wait("test")
+			waits[tt.rate] = wait
+			t.Logf("Rate: %.1f req/s, refill wait: %v", tt.rate, wait)
 
 			// Wait time should be non-negative
-			if avgWait < 0 {
-				t.Errorf("Wait() returned negative duration: %v", avgWait)
-			}
-
-			// For very low rates, wait should be measurable
-			if tt.rate <= 1.0 && avgWait == 0 {
-				t.Logf("Note: Wait time at rate %.1f was instantaneous (burst may have absorbed it)", tt.rate)
+			if wait < 0 {
+				t.Errorf("Wait() returned negative duration: %v", wait)
 			}
 		})
+	}
+
+	if waits[2] <= waits[4] || waits[4] <= waits[16] {
+		t.Errorf("Wait() does not scale inversely with rate: 2 req/s = %v, 4 req/s = %v, 16 req/s = %v",
+			waits[2], waits[4], waits[16])
 	}
 }
 
