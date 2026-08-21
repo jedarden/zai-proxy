@@ -10,8 +10,8 @@ import (
 	"git.ardenone.com/jedarden/zai-proxy/proxy/config"
 )
 
-// TestAdaptiveRateLimiter_Acceptance_ProbeBehavior validates that probing works after probe_interval clean windows
-func TestAdaptiveRateLimiter_Acceptance_ProbeBehavior(t *testing.T) {
+// TestRatelimiterAcceptance_ProbeBehavior validates that probing works after probe_interval clean windows.
+func TestRatelimiterAcceptance_ProbeBehavior(t *testing.T) {
 	testWindow := 10 * time.Millisecond
 
 	t.Run("probe_activates_after_N_clean_windows_when_429_rate_below_1_percent", func(t *testing.T) {
@@ -128,8 +128,8 @@ func TestAdaptiveRateLimiter_Acceptance_ProbeBehavior(t *testing.T) {
 	})
 }
 
-// TestAdaptiveRateLimiter_Acceptance_WaitSanity validates Wait() returns sane durations
-func TestAdaptiveRateLimiter_Acceptance_WaitSanity(t *testing.T) {
+// TestRatelimiterAcceptance_WaitSanity validates Wait() returns sane durations.
+func TestRatelimiterAcceptance_WaitSanity(t *testing.T) {
 	t.Run("wait_duration_never_negative", func(t *testing.T) {
 		arl := NewAdaptiveRateLimiter(10.0, 1.0, 50.0)
 
@@ -237,8 +237,8 @@ func TestAdaptiveRateLimiter_Acceptance_WaitSanity(t *testing.T) {
 	})
 }
 
-// TestAdaptiveRateLimiter_Acceptance_ConcurrentSafety validates concurrent operations are race-free
-func TestAdaptiveRateLimiter_Acceptance_ConcurrentSafety(t *testing.T) {
+// TestRatelimiterAcceptance_ConcurrentSafety validates concurrent operations are race-free.
+func TestRatelimiterAcceptance_ConcurrentSafety(t *testing.T) {
 	t.Run("concurrent_Record429_is_race_free", func(t *testing.T) {
 		arl := NewAdaptiveRateLimiter(10.0, 1.0, 50.0)
 		goroutines := 10
@@ -386,8 +386,8 @@ func TestAdaptiveRateLimiter_Acceptance_ConcurrentSafety(t *testing.T) {
 	})
 }
 
-// TestAdaptiveRateLimiter_Acceptance_EnvVarParsing validates environment variable parsing and application
-func TestAdaptiveRateLimiter_Acceptance_EnvVarParsing(t *testing.T) {
+// TestRatelimiterAcceptance_EnvVarParsing validates environment variable parsing and application.
+func TestRatelimiterAcceptance_EnvVarParsing(t *testing.T) {
 	// Save original env vars
 	origAlpha := os.Getenv("RATE_LIMIT_CEILING_ALPHA")
 	origHoldMargin := os.Getenv("RATE_LIMIT_HOLD_MARGIN")
@@ -590,8 +590,8 @@ func TestAdaptiveRateLimiter_Acceptance_EnvVarParsing(t *testing.T) {
 	})
 }
 
-// TestAdaptiveRateLimiter_Acceptance_FullSuite is a quick smoke test that runs all acceptance criteria
-func TestAdaptiveRateLimiter_Acceptance_FullSuite(t *testing.T) {
+// TestRatelimiterAcceptance_FullSuite is a quick smoke test that runs all acceptance criteria.
+func TestRatelimiterAcceptance_FullSuite(t *testing.T) {
 	testWindow := 10 * time.Millisecond
 
 	t.Run("probe_behavior_works", func(t *testing.T) {
