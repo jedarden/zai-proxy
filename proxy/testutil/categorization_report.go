@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -47,26 +48,75 @@ type CategorizationReport struct {
 	ParseError string                   `json:"parse_error,omitempty"`
 }
 
+// CategorizedFailureOutputFormat controls how a categorized failure report is
+// rendered. The zero value is JSON so callers get a structured format without
+// needing to set an option explicitly.
+type CategorizedFailureOutputFormat string
+
+const (
+	CategorizedFailureOutputJSON CategorizedFailureOutputFormat = "json"
+	CategorizedFailureOutputText CategorizedFailureOutputFormat = "text"
+)
+
+// CategorizedFailureOutputOptions controls a rendered report. Categories is
+// optional: an empty slice includes every category, while a non-empty slice
+// includes only failures whose selected category appears in the slice.
+// Statistics in filtered output describe only the displayed failures.
+type CategorizedFailureOutputOptions struct {
+	Format     CategorizedFailureOutputFormat
+	Categories []FailureCategory
+}
+
+// LabeledCategorizedFailure is the machine-readable categorization result
+// augmented with the human-readable category label used by text reports.
+// Category remains the stable value for programmatic filtering and grouping.
+type LabeledCategorizedFailure struct {
+	CategorizedFailure
+	Label string `json:"label"`
+}
+
+// CategorizedFailureOutput is the structured value rendered as JSON or text.
+// It contains labels on every failure and statistics for exactly the failures
+// selected by CategorizedFailureOutputOptions.
+type CategorizedFailureOutput struct {
+	Source     string                      `json:"source,omitempty"`
+	Failures   []LabeledCategorizedFailure `json:"failures"`
+	Statistics CategorizationStatistics    `json:"statistics"`
+	ParseError string                      `json:"parse_error,omitempty"`
+}
+
 // CategorizeParsedFailures applies CategorizeFailure to every parsed failure
 // and calculates the complete aggregate report. It is useful when a caller
 // already owns the raw test output and has parsed it independently.
 func CategorizeParsedFailures(failures []TestFailure) CategorizationReport {
-	categorized, baseStats := CategorizeFailures(failures)
+	categorized, _ := CategorizeFailures(failures)
 
+	return CategorizationReport{
+		Failures:   categorized,
+		Statistics: categorizationStatistics(categorized),
+	}
+}
+
+func categorizationStatistics(failures []CategorizedFailure) CategorizationStatistics {
 	statistics := CategorizationStatistics{
-		Total:          baseStats.Total,
-		ByCategory:     make(map[FailureCategory]int, len(baseStats.ByCategory)),
-		Distribution:   make([]CategoryDistribution, 0, len(baseStats.ByCategory)),
-		LowConfidence:  baseStats.LowConfidence,
-		AmbiguousCases: baseStats.AmbiguousCases,
+		Total:        len(failures),
+		ByCategory:   make(map[FailureCategory]int),
+		Distribution: make([]CategoryDistribution, 0),
 	}
 
-	for category, count := range baseStats.ByCategory {
-		statistics.ByCategory[category] = count
+	for _, failure := range failures {
+		category := categorizedFailureCategory(failure)
+		statistics.ByCategory[category]++
 		if category == CategoryUnknown {
-			statistics.Uncategorized += count
+			statistics.Uncategorized++
 		} else {
-			statistics.Categorized += count
+			statistics.Categorized++
+		}
+		if failure.Confidence <= 0.5 {
+			statistics.LowConfidence++
+		}
+		if IsAmbiguous(failure) {
+			statistics.AmbiguousCases++
 		}
 	}
 
@@ -89,22 +139,30 @@ func CategorizeParsedFailures(failures []TestFailure) CategorizationReport {
 		return statistics.Distribution[i].Category < statistics.Distribution[j].Category
 	})
 
-	if len(statistics.Distribution) > 0 {
-		mostCommonCount := statistics.Distribution[0].Count
-		for _, distribution := range statistics.Distribution {
-			if distribution.Count != mostCommonCount {
-				break
-			}
-			statistics.MostCommonFailureTypes = append(statistics.MostCommonFailureTypes, distribution)
-		}
-	} else {
+	if len(statistics.Distribution) == 0 {
 		statistics.MostCommonFailureTypes = []CategoryDistribution{}
+		return statistics
 	}
 
-	return CategorizationReport{
-		Failures:   categorized,
-		Statistics: statistics,
+	mostCommonCount := statistics.Distribution[0].Count
+	for _, distribution := range statistics.Distribution {
+		if distribution.Count != mostCommonCount {
+			break
+		}
+		statistics.MostCommonFailureTypes = append(statistics.MostCommonFailureTypes, distribution)
 	}
+
+	return statistics
+}
+
+func categorizedFailureCategory(failure CategorizedFailure) FailureCategory {
+	if failure.Category != "" {
+		return failure.Category
+	}
+	if failure.Type != "" {
+		return failure.Type
+	}
+	return CategoryUnknown
 }
 
 // CategorizeTestOutput reads and parses a Go test-output file, then applies
@@ -134,7 +192,7 @@ func CategorizeTestOutput(inputPath string) (CategorizationReport, error) {
 func VerifyCategorizedFailures(report CategorizationReport) error {
 	unknownTests := make([]string, 0, report.Statistics.Uncategorized)
 	for _, failure := range report.Failures {
-		if failure.Category == CategoryUnknown || failure.Type == CategoryUnknown {
+		if categorizedFailureCategory(failure) == CategoryUnknown {
 			unknownTests = append(unknownTests, failure.TestName)
 		}
 	}
@@ -146,15 +204,161 @@ func VerifyCategorizedFailures(report CategorizationReport) error {
 	return fmt.Errorf("%w: %d (%s)", ErrUncategorizedFailures, len(unknownTests), strings.Join(unknownTests, ", "))
 }
 
-// ExportCategorizationReportJSON writes a complete, human-readable report for
-// later verification. It preserves both the categorized failures and their
-// aggregate statistics in a single document.
-func ExportCategorizationReportJSON(report CategorizationReport, outputPath string) error {
-	data, err := json.MarshalIndent(report, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal categorization report: %w", err)
+// BuildCategorizedFailureOutput filters a report and enriches every displayed
+// failure with its human-readable category label. It does not mutate report.
+func BuildCategorizedFailureOutput(report CategorizationReport, options CategorizedFailureOutputOptions) CategorizedFailureOutput {
+	categoryFilter := make(map[FailureCategory]struct{}, len(options.Categories))
+	for _, category := range options.Categories {
+		categoryFilter[category] = struct{}{}
 	}
-	if err := os.WriteFile(outputPath, data, 0o644); err != nil {
+
+	failures := make([]LabeledCategorizedFailure, 0, len(report.Failures))
+	for _, failure := range report.Failures {
+		category := categorizedFailureCategory(failure)
+		if len(categoryFilter) > 0 {
+			if _, selected := categoryFilter[category]; !selected {
+				continue
+			}
+		}
+
+		failure.Category = category
+		if failure.Type == "" {
+			failure.Type = category
+		}
+		failures = append(failures, LabeledCategorizedFailure{
+			CategorizedFailure: failure,
+			Label:              GetCategoryLabel(failure),
+		})
+	}
+
+	categorized := make([]CategorizedFailure, len(failures))
+	for i, failure := range failures {
+		categorized[i] = failure.CategorizedFailure
+	}
+
+	return CategorizedFailureOutput{
+		Source:     report.Source,
+		Failures:   failures,
+		Statistics: categorizationStatistics(categorized),
+		ParseError: report.ParseError,
+	}
+}
+
+// FormatCategorizedFailureOutput renders a labeled categorization report.
+// JSON is the default format. Text is deterministic and intended for terminal
+// logs, while JSON is intended for CI artifacts and other tools.
+func FormatCategorizedFailureOutput(report CategorizationReport, options CategorizedFailureOutputOptions) (string, error) {
+	output := BuildCategorizedFailureOutput(report, options)
+
+	switch options.Format {
+	case "", CategorizedFailureOutputJSON:
+		data, err := json.MarshalIndent(output, "", "  ")
+		if err != nil {
+			return "", fmt.Errorf("marshal categorized failure output: %w", err)
+		}
+		return string(data), nil
+	case CategorizedFailureOutputText:
+		return formatCategorizedFailureOutputText(output, options.Categories), nil
+	default:
+		return "", fmt.Errorf("unsupported categorized failure output format %q", options.Format)
+	}
+}
+
+// WriteCategorizedFailureOutput writes a labeled, optionally filtered report
+// to writer and returns the same structured result that was rendered.
+func WriteCategorizedFailureOutput(writer io.Writer, report CategorizationReport, options CategorizedFailureOutputOptions) (CategorizedFailureOutput, error) {
+	output := BuildCategorizedFailureOutput(report, options)
+	if writer == nil {
+		return output, errors.New("categorized failure output writer is nil")
+	}
+
+	rendered, err := FormatCategorizedFailureOutput(report, options)
+	if err != nil {
+		return output, err
+	}
+	if _, err := io.WriteString(writer, rendered); err != nil {
+		return output, fmt.Errorf("write categorized failure output: %w", err)
+	}
+
+	return output, nil
+}
+
+// OutputCategorizedFailures is the parsed-failure-to-output workflow. It
+// categorizes every supplied parsed failure, applies any requested category
+// filter, renders the selected format, and returns the structured result.
+func OutputCategorizedFailures(writer io.Writer, failures []TestFailure, options CategorizedFailureOutputOptions) (CategorizedFailureOutput, error) {
+	return WriteCategorizedFailureOutput(writer, CategorizeParsedFailures(failures), options)
+}
+
+func formatCategorizedFailureOutputText(output CategorizedFailureOutput, categories []FailureCategory) string {
+	var builder strings.Builder
+
+	builder.WriteString("=== Test Failure Categorization Report ===\n")
+	if output.Source != "" {
+		fmt.Fprintf(&builder, "Source: %s\n", output.Source)
+	}
+	if len(categories) > 0 {
+		labels := make([]string, len(categories))
+		for i, category := range categories {
+			labels[i] = categoryGroupLabel(category)
+		}
+		fmt.Fprintf(&builder, "Category filter: %s\n", strings.Join(labels, ", "))
+	}
+	if output.ParseError != "" {
+		fmt.Fprintf(&builder, "Parse warning: %s\n", output.ParseError)
+	}
+
+	statistics := output.Statistics
+	fmt.Fprintf(&builder, "\nTotal failures: %d\n", statistics.Total)
+	fmt.Fprintf(&builder, "Categorized: %d\n", statistics.Categorized)
+	fmt.Fprintf(&builder, "Uncategorized: %d\n", statistics.Uncategorized)
+	fmt.Fprintf(&builder, "Low confidence: %d\n", statistics.LowConfidence)
+	fmt.Fprintf(&builder, "Ambiguous cases: %d\n", statistics.AmbiguousCases)
+
+	builder.WriteString("\nFailures by category:\n")
+	if len(statistics.Distribution) == 0 {
+		builder.WriteString("  none\n")
+	} else {
+		for _, distribution := range statistics.Distribution {
+			fmt.Fprintf(&builder, "  %s: %d (%.2f%%)\n",
+				categoryGroupLabel(distribution.Category), distribution.Count, distribution.Percentage)
+		}
+	}
+
+	builder.WriteString("\nIndividual failures:\n")
+	if len(output.Failures) == 0 {
+		builder.WriteString("  none\n")
+		return builder.String()
+	}
+
+	for i, failure := range output.Failures {
+		fmt.Fprintf(&builder, "%d. [%s] %s (%.0f%% confidence)\n",
+			i+1, failure.Label, failure.TestName, failure.Confidence.Float64()*100)
+		if failure.FilePath != "" || failure.LineNumber != 0 {
+			fmt.Fprintf(&builder, "   File: %s:%d\n", failure.FilePath, failure.LineNumber)
+		}
+		if failure.ErrorMessage != "" {
+			fmt.Fprintf(&builder, "   Error: %s\n", failure.ErrorMessage)
+		}
+		if failure.Reasoning != "" {
+			fmt.Fprintf(&builder, "   Reasoning: %s\n", failure.Reasoning)
+		}
+	}
+
+	return builder.String()
+}
+
+// ExportCategorizationReportJSON writes the default complete JSON report for
+// later verification. JSON failures include both the stable category value and
+// a human-readable label.
+func ExportCategorizationReportJSON(report CategorizationReport, outputPath string) error {
+	rendered, err := FormatCategorizedFailureOutput(report, CategorizedFailureOutputOptions{
+		Format: CategorizedFailureOutputJSON,
+	})
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(outputPath, []byte(rendered), 0o644); err != nil {
 		return fmt.Errorf("write categorization report %q: %w", outputPath, err)
 	}
 	return nil

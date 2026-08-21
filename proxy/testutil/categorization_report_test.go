@@ -1,10 +1,13 @@
 package testutil
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -138,8 +141,16 @@ FAIL
 	if report.Failures[0].Subcategory != fallbackSubcategoryUnclassified {
 		t.Errorf("subcategory: got %q, want %q", report.Failures[0].Subcategory, fallbackSubcategoryUnclassified)
 	}
-	if _, err := os.Stat(outputPath); err != nil {
-		t.Errorf("unknown result should still be persisted for inspection: %v", err)
+	data, readErr := os.ReadFile(outputPath)
+	if readErr != nil {
+		t.Fatalf("unknown result should still be persisted for inspection: %v", readErr)
+	}
+	var persisted CategorizedFailureOutput
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatalf("decode persisted unknown result: %v", err)
+	}
+	if len(persisted.Failures) != 1 || persisted.Failures[0].Label != "Other: unclassified failure" {
+		t.Errorf("persisted unknown labels: got %#v", persisted.Failures)
 	}
 }
 
@@ -199,5 +210,93 @@ func TestCategorizeParsedFailures_Empty(t *testing.T) {
 	}
 	if err := VerifyCategorizedFailures(report); err != nil {
 		t.Errorf("empty report should be valid: %v", err)
+	}
+}
+
+func TestOutputCategorizedFailures_ParsedFailureWorkflowFormatsAndFilters(t *testing.T) {
+	parsed, err := ParseTestFailures([]byte(`=== RUN   TestAssertion
+    handler_test.go:10: assertion failed: expected 200, got 500
+--- FAIL: TestAssertion (0.00s)
+=== RUN   TestTimeout
+    client_test.go:20: context deadline exceeded
+--- FAIL: TestTimeout (0.00s)
+=== RUN   TestAnotherTimeout
+    worker_test.go:30: timeout waiting for worker shutdown
+--- FAIL: TestAnotherTimeout (0.00s)
+FAIL
+`))
+	if err != nil {
+		t.Fatalf("ParseTestFailures() error: %v", err)
+	}
+
+	var jsonBuffer bytes.Buffer
+	jsonOutput, err := OutputCategorizedFailures(&jsonBuffer, parsed, CategorizedFailureOutputOptions{
+		Format: CategorizedFailureOutputJSON,
+	})
+	if err != nil {
+		t.Fatalf("OutputCategorizedFailures(JSON) error: %v", err)
+	}
+	if jsonOutput.Statistics.Total != 3 {
+		t.Fatalf("JSON total: got %d, want 3", jsonOutput.Statistics.Total)
+	}
+	if jsonOutput.Statistics.ByCategory[CategoryTimeout] != 2 || jsonOutput.Statistics.ByCategory[CategoryAssertionError] != 1 {
+		t.Errorf("JSON category counts: got %#v", jsonOutput.Statistics.ByCategory)
+	}
+	if len(jsonOutput.Statistics.Distribution) != 2 {
+		t.Fatalf("JSON distribution: got %#v", jsonOutput.Statistics.Distribution)
+	}
+	if got := jsonOutput.Statistics.Distribution[0]; got.Category != CategoryTimeout || got.Count != 2 || math.Abs(got.Percentage-200.0/3.0) > 0.000001 {
+		t.Errorf("JSON timeout distribution: got %#v, want timeout with count 2 and 66.67%%", got)
+	}
+	if got := jsonOutput.Failures[0].Label; got != "assertion_error" {
+		t.Errorf("JSON failure label: got %q, want assertion_error", got)
+	}
+
+	var decoded CategorizedFailureOutput
+	if err := json.Unmarshal(jsonBuffer.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode JSON output: %v", err)
+	}
+	if len(decoded.Failures) != 3 || decoded.Failures[1].Label != "timeout" {
+		t.Errorf("decoded labels: got %#v", decoded.Failures)
+	}
+
+	var textBuffer bytes.Buffer
+	textOutput, err := OutputCategorizedFailures(&textBuffer, parsed, CategorizedFailureOutputOptions{
+		Format:     CategorizedFailureOutputText,
+		Categories: []FailureCategory{CategoryTimeout},
+	})
+	if err != nil {
+		t.Fatalf("OutputCategorizedFailures(text) error: %v", err)
+	}
+	if textOutput.Statistics.Total != 2 || textOutput.Statistics.Categorized != 2 || textOutput.Statistics.Uncategorized != 0 {
+		t.Errorf("filtered statistics: got %#v", textOutput.Statistics)
+	}
+	if len(textOutput.Statistics.Distribution) != 1 || textOutput.Statistics.Distribution[0].Percentage != 100 {
+		t.Errorf("filtered distribution: got %#v, want one timeout category at 100%%", textOutput.Statistics.Distribution)
+	}
+
+	text := textBuffer.String()
+	for _, want := range []string{
+		"Category filter: timeout",
+		"Total failures: 2",
+		"timeout: 2 (100.00%)",
+		"[timeout] TestTimeout",
+		"[timeout] TestAnotherTimeout",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text output missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "TestAssertion") {
+		t.Errorf("text output includes a filtered failure:\n%s", text)
+	}
+}
+
+func TestFormatCategorizedFailureOutput_RejectsUnsupportedFormat(t *testing.T) {
+	_, err := FormatCategorizedFailureOutput(CategorizeParsedFailures(nil), CategorizedFailureOutputOptions{
+		Format: CategorizedFailureOutputFormat("yaml"),
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported categorized failure output format") {
+		t.Fatalf("FormatCategorizedFailureOutput() error = %v, want unsupported format error", err)
 	}
 }
