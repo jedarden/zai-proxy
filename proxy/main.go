@@ -75,7 +75,14 @@ func (arl *AdaptiveRateLimiter) Wait(variant string) time.Duration {
 	// Protect access to limiter with read lock to prevent race with tryAdjustRate()
 	arl.mu.RLock()
 	limiter := arl.limiter
+	currentRate := arl.currentRate
 	arl.mu.RUnlock()
+	// golang.org/x/time/rate returns an error immediately when a zero-rate
+	// limiter cannot reserve a token. A zero configured rate means no requests
+	// are permitted, so Wait must instead remain blocked indefinitely.
+	if currentRate <= 0 {
+		select {}
+	}
 	limiter.Wait(context.Background())
 	waitTime := time.Since(start)
 	rateLimitWaitTime.WithLabelValues(variant).Observe(waitTime.Seconds())
