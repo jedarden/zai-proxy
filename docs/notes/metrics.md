@@ -235,10 +235,11 @@ zai_proxy_worker_utilization_ratio{variant="stable"} > 0.8
 
 **Type:** Histogram
 
-**Description:** Time spent waiting for rate limiter before processing request.
+**Description:** Time spent waiting for the rate limiter before processing a request. When the global rate is contended, source buckets are served round-robin.
 
 **Labels:**
 - `variant` - Deployment variant
+- `client` - Stable `source-00` through `source-63` bucket derived from the direct peer IP. The fixed bucket set bounds Prometheus cardinality; collisions are possible.
 
 **Buckets:** `[.001, .005, .01, .025, .05, .1, .25, .5, 1, 2, 5, 10]` (seconds)
 
@@ -262,10 +263,11 @@ rate(zai_proxy_rate_limit_adjustments_total{variant="stable"}[10m])
 
 **Type:** Counter
 
-**Description:** Number of requests rejected due to rate limiting.
+**Description:** Number of requests rejected at the proxy concurrency cap.
 
 **Labels:**
 - `variant` - Deployment variant
+- `client` - Stable `source-00` through `source-63` bucket derived from the direct peer IP.
 
 ## Error Metrics
 

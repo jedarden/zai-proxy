@@ -83,6 +83,7 @@ func (h *ProxyHandler) updateUtilization() {
 // ServeHTTP handles an incoming HTTP request.
 func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	clientBucket := rateLimitClientBucket(r.RemoteAddr)
 
 	// Increment concurrent requests
 	current := h.currentRequests.Add(1)
@@ -99,13 +100,14 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	max := atomic.LoadInt64(&h.maxWorkers)
 	if max > 0 && current > max {
 		log.Printf("Max workers exceeded: %d/%d", current, max)
+		rateLimitRejections.WithLabelValues(h.deploymentVariant, clientBucket).Inc()
 		requestsTotal.WithLabelValues(r.Method, r.URL.Path, "503", h.deploymentVariant).Inc()
 		http.Error(w, "Service at capacity", http.StatusServiceUnavailable)
 		return
 	}
 
 	// Apply rate limiting
-	h.rateLimiter.Wait(h.deploymentVariant)
+	h.rateLimiter.waitForClient(h.deploymentVariant, clientBucket)
 
 	// Track request size
 	if r.ContentLength > 0 {

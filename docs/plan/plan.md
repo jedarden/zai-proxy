@@ -72,8 +72,13 @@ The core component. Handles:
   requests. Requests beyond the cap receive 503 immediately.
 
 - **Global adaptive rate limiter (AIMD/EWMA):**
-  A single token-bucket limiter serves all traffic. Every 30-second window it inspects
-  the 429 rate from the upstream and adjusts:
+  A single adaptive token-bucket limiter remains the global ceiling for all traffic.
+  When that ceiling is contended, requests are queued into 64 deterministic source
+  buckets derived from the direct peer IP and dispatched round-robin, so one source
+  cannot monopolize the shared budget. Bucket collisions are possible by design to
+  bound queue state and Prometheus cardinality; forwarded headers and caller-supplied
+  identities are deliberately ignored because they are not credentials. Every
+  30-second window it inspects the 429 rate from the upstream and adjusts:
   - If 429-rate > 5 %: updates the estimated ceiling via EWMA
     (`alpha = 0.3`; default), then drops to `ceiling × (1 − hold_margin)`.
   - If 429-rate < 1 %: converges toward the hold position in 50 % steps per window;
@@ -276,9 +281,9 @@ agents can track their own consumption without querying the dashboard.
 | Metric | Labels | Description |
 |--------|--------|-------------|
 | `zai_proxy_rate_limit_requests_per_second` | `variant` | Current limiter rate |
-| `zai_proxy_rate_limit_wait_seconds` | `variant` | Time waiting in the limiter |
+| `zai_proxy_rate_limit_wait_seconds` | `variant`, `client={source-00…source-63}` | Time waiting in the limiter, by bounded source bucket |
 | `zai_proxy_rate_limit_adjustments_total` | `direction={increase,decrease,probe}`, `variant` | Algorithm decisions |
-| `zai_proxy_rate_limit_rejections_total` | `variant` | Requests rejected (capacity) |
+| `zai_proxy_rate_limit_rejections_total` | `variant`, `client={source-00…source-63}` | Requests rejected at the concurrency cap, by bounded source bucket |
 | `zai_proxy_retry_attempts_total` | `reason={retry,network_error,429,truncated_response,empty_streaming}`, `variant` | Retry causes |
 | `zai_proxy_upstream_errors_total` | `error_type={HTTP status (for example 400,422,429,500),truncated_response,empty_streaming,upstream_connection,write_error,read_error,request_creation}`, `variant` | Error taxonomy |
 

@@ -87,9 +87,9 @@ The proxy exposes standard Prometheus metrics at `/metrics`:
 - `zai_proxy_upstream_errors_total` — upstream error counts by type and variant
 - `zai_proxy_tokens_total` — token counters with labels: direction (input/output/cache_read/cache_write), model, variant, pricing_tier
 - `zai_proxy_rate_limit_requests_per_second` — current rate limit gauge
-- `zai_proxy_rate_limit_wait_seconds` — time spent waiting on the rate limiter
+- `zai_proxy_rate_limit_wait_seconds` — time spent waiting on the rate limiter, with a bounded `client` source-bucket label
 - `zai_proxy_rate_limit_adjustments_total` — rate limit adjustments by direction and variant
-- `zai_proxy_rate_limit_rejections_total` — requests rejected due to rate limiting
+- `zai_proxy_rate_limit_rejections_total` — capacity rejections, with a bounded `client` source-bucket label
 - `zai_proxy_retry_attempts_total` — retry attempts by reason and variant
 - `zai_proxy_worker_utilization_ratio` — worker utilization gauge
 - `zai_proxy_max_workers` — maximum concurrent workers gauge

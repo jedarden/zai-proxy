@@ -212,7 +212,7 @@ The proxy exports metrics at `:8080/metrics`:
 | Metric | Type | Description |
 |--------|------|-------------|
 | `zai_proxy_rate_limit_requests_per_second` | Gauge | Current rate limit |
-| `zai_proxy_rate_limit_wait_seconds` | Histogram | Rate limiter wait time |
+| `zai_proxy_rate_limit_wait_seconds` | Histogram | Rate limiter wait time by bounded source bucket |
 | `zai_proxy_rate_limit_adjustments_total` | Counter | Rate limit adjustments (increase/decrease) |
 
 ## Usage Example

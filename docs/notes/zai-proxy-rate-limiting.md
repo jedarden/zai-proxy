@@ -149,14 +149,16 @@ env:
 2. **`zai_proxy_rate_limit_wait_seconds`** (Histogram)
    - Time requests spend waiting for rate limiter
    - Buckets: 1ms to 10s
+   - Labels: deployment variant and a bounded `client=source-00…source-63` bucket
 
 3. **`zai_proxy_rate_limit_adjustments_total`** (Counter)
    - Count of rate adjustments by direction
    - Labels: `direction=increase` or `direction=decrease`
 
 4. **`zai_proxy_rate_limit_rejections_total`** (Counter)
-   - Requests rejected due to rate limiting
+   - Requests rejected at the proxy concurrency cap
    - Should be rare if MAX_WORKERS is set correctly
+   - Labels: deployment variant and bounded source bucket
 
 5. **`zai_proxy_retry_attempts_total`** (Counter)
    - Retry attempts by reason

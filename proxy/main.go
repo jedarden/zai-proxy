@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"hash/fnv"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"sync"
@@ -15,6 +18,8 @@ import (
 
 	"git.ardenone.com/jedarden/zai-proxy/proxy/config"
 )
+
+const rateLimitClientBucketCount = 64
 
 var (
 	currentRequests   int64
@@ -34,6 +39,7 @@ var (
 type AdaptiveRateLimiter struct {
 	limiter            *rate.Limiter
 	mu                 sync.RWMutex
+	rateChanged        chan struct{}
 	currentRate        float64
 	minRate            float64
 	maxRate            float64
@@ -46,7 +52,21 @@ type AdaptiveRateLimiter struct {
 	adjustmentWindow   time.Duration
 	recent429Count     int64
 	recentSuccessCount int64
+
+	// Fair scheduling happens before the global token bucket. The queues are
+	// keyed by a fixed set of source buckets, so neither queue state nor metric
+	// labels can grow with the number of callers.
+	fairMu          sync.Mutex
+	fairCond        *sync.Cond
+	fairQueues      map[string][]*fairRequest
+	fairOrder       []string
+	fairNext        int
+	fairDispatching bool
 }
+
+// A non-zero-size marker guarantees distinct request pointers, which lets a
+// source queue distinguish consecutive requests without allocating an ID.
+type fairRequest struct{ marker byte }
 
 func NewAdaptiveRateLimiter(initialRate, minRate, maxRate float64) *AdaptiveRateLimiter {
 	return NewAdaptiveRateLimiterWithWindow(initialRate, minRate, maxRate, 30*time.Second)
@@ -55,38 +75,165 @@ func NewAdaptiveRateLimiter(initialRate, minRate, maxRate float64) *AdaptiveRate
 // NewAdaptiveRateLimiterWithWindow creates an AdaptiveRateLimiter with a configurable adjustment window.
 // Use this for tests to inject shorter durations (e.g., 1ms or 100ms) for fast execution without sleeping.
 func NewAdaptiveRateLimiterWithWindow(initialRate, minRate, maxRate float64, windowDuration time.Duration) *AdaptiveRateLimiter {
-	return &AdaptiveRateLimiter{
-		limiter:            rate.NewLimiter(rate.Limit(initialRate), int(initialRate*2)),
+	arl := &AdaptiveRateLimiter{
+		limiter:            rate.NewLimiter(rate.Limit(initialRate), limiterBurst(initialRate)),
+		rateChanged:        make(chan struct{}),
 		currentRate:        initialRate,
 		minRate:            minRate,
 		maxRate:            maxRate,
-		estimatedCeiling:   maxRate,              // Assume max until we learn otherwise
-		ceilingSmoothAlpha: 0.3,                  // 30% new observation, 70% history
-		holdMargin:         0.02,                 // Hold 2% below estimated ceiling
-		probeInterval:      10,                   // Probe every 10 clean windows (5 min at 30s windows)
+		estimatedCeiling:   maxRate, // Assume max until we learn otherwise
+		ceilingSmoothAlpha: 0.3,     // 30% new observation, 70% history
+		holdMargin:         0.02,    // Hold 2% below estimated ceiling
+		probeInterval:      10,      // Probe every 10 clean windows (5 min at 30s windows)
 		cleanWindows:       0,
 		lastAdjustment:     time.Now(),
 		adjustmentWindow:   windowDuration,
+		fairQueues:         make(map[string][]*fairRequest),
+	}
+	arl.fairCond = sync.NewCond(&arl.fairMu)
+	return arl
+}
+
+// Wait waits for a global token using the default source bucket. It is kept
+// for callers that do not have an HTTP request from which to derive a source.
+func (arl *AdaptiveRateLimiter) Wait(variant string) time.Duration {
+	return arl.waitForClient(variant, rateLimitClientBucket(""))
+}
+
+// waitForClient schedules a request fairly among active source buckets before
+// taking a token from the shared adaptive limiter. It does not add capacity:
+// every request still obtains exactly one token from the existing global
+// bucket. A source with queued work receives at most one turn before the next
+// active source is considered.
+func (arl *AdaptiveRateLimiter) waitForClient(variant, client string) time.Duration {
+	start := time.Now()
+	if client == "" {
+		client = rateLimitClientBucket("")
+	}
+
+	request := &fairRequest{}
+	arl.fairMu.Lock()
+	if len(arl.fairQueues[client]) == 0 {
+		arl.fairOrder = append(arl.fairOrder, client)
+	}
+	arl.fairQueues[client] = append(arl.fairQueues[client], request)
+	for !arl.canDispatchLocked(client, request) {
+		arl.fairCond.Wait()
+	}
+	arl.fairDispatching = true
+	arl.fairMu.Unlock()
+
+	arl.waitForGlobalToken()
+
+	arl.fairMu.Lock()
+	arl.completeDispatchLocked(client, request)
+	arl.fairDispatching = false
+	arl.fairCond.Broadcast()
+	arl.fairMu.Unlock()
+
+	waitTime := time.Since(start)
+	rateLimitWaitTime.WithLabelValues(variant, client).Observe(waitTime.Seconds())
+	return waitTime
+}
+
+// canDispatchLocked returns whether request owns the next round-robin turn.
+// fairMu must be held by the caller.
+func (arl *AdaptiveRateLimiter) canDispatchLocked(client string, request *fairRequest) bool {
+	if arl.fairDispatching || len(arl.fairOrder) == 0 {
+		return false
+	}
+	if arl.fairNext >= len(arl.fairOrder) {
+		arl.fairNext = 0
+	}
+	queue := arl.fairQueues[client]
+	return arl.fairOrder[arl.fairNext] == client && len(queue) > 0 && queue[0] == request
+}
+
+// completeDispatchLocked removes the served request and moves the round-robin
+// cursor. Keeping the request at the head until its global token arrives means
+// requests that arrive while that source is waiting cannot take another turn
+// ahead of another already-queued source.
+// fairMu must be held by the caller.
+func (arl *AdaptiveRateLimiter) completeDispatchLocked(client string, request *fairRequest) {
+	queue := arl.fairQueues[client]
+	if len(queue) == 0 || queue[0] != request {
+		panic("rate limiter fair queue lost its active request")
+	}
+
+	queue = queue[1:]
+	if len(queue) > 0 {
+		arl.fairQueues[client] = queue
+		arl.fairNext = (arl.fairNext + 1) % len(arl.fairOrder)
+		return
+	}
+
+	delete(arl.fairQueues, client)
+	arl.fairOrder = append(arl.fairOrder[:arl.fairNext], arl.fairOrder[arl.fairNext+1:]...)
+	if len(arl.fairOrder) == 0 || arl.fairNext >= len(arl.fairOrder) {
+		arl.fairNext = 0
 	}
 }
 
-func (arl *AdaptiveRateLimiter) Wait(variant string) time.Duration {
-	start := time.Now()
-	// Protect access to limiter with read lock to prevent race with tryAdjustRate()
-	arl.mu.RLock()
-	limiter := arl.limiter
-	currentRate := arl.currentRate
-	arl.mu.RUnlock()
-	// golang.org/x/time/rate returns an error immediately when a zero-rate
-	// limiter cannot reserve a token. A zero configured rate means no requests
-	// are permitted, so Wait must instead remain blocked indefinitely.
-	if currentRate <= 0 {
-		select {}
+// waitForGlobalToken preserves the adaptive limiter as the outer authority.
+// A zero configured rate is intentionally an indefinite wait, matching the
+// previous Wait behavior, but a Reset can wake it by replacing rateChanged.
+func (arl *AdaptiveRateLimiter) waitForGlobalToken() {
+	for {
+		arl.mu.RLock()
+		limiter := arl.limiter
+		currentRate := arl.currentRate
+		rateChanged := arl.rateChanged
+		arl.mu.RUnlock()
+
+		if currentRate <= 0 {
+			<-rateChanged
+			continue
+		}
+
+		if err := limiter.Wait(context.Background()); err == nil {
+			return
+		}
+
+		// A positive rate always has a burst of at least one, so this branch
+		// is defensive. Wait until a rate change instead of admitting a
+		// request without a global token.
+		<-rateChanged
 	}
-	limiter.Wait(context.Background())
-	waitTime := time.Since(start)
-	rateLimitWaitTime.WithLabelValues(variant).Observe(waitTime.Seconds())
-	return waitTime
+}
+
+func limiterBurst(rateValue float64) int {
+	if rateValue <= 0 {
+		return 0
+	}
+	burst := int(rateValue * 2)
+	if burst < 1 {
+		return 1
+	}
+	return burst
+}
+
+// rateLimitClientBucket derives a stable, bounded source identity from the
+// direct network peer. Do not use X-Forwarded-For or a user-controlled header
+// here: those can be spoofed by callers and would let one caller manufacture
+// arbitrary scheduler identities. Pod-to-service connections carry the pod IP
+// in RemoteAddr in the supported cluster-internal deployment.
+func rateLimitClientBucket(remoteAddr string) string {
+	source := remoteAddr
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		source = host
+	}
+	if source == "" {
+		source = "unknown"
+	}
+
+	hasher := fnv.New32a()
+	_, _ = hasher.Write([]byte(source))
+	return fmt.Sprintf("source-%02d", hasher.Sum32()%rateLimitClientBucketCount)
+}
+
+func (arl *AdaptiveRateLimiter) notifyRateChangeLocked() {
+	close(arl.rateChanged)
+	arl.rateChanged = make(chan struct{})
 }
 
 func (arl *AdaptiveRateLimiter) Record429() {
@@ -171,7 +318,8 @@ func (arl *AdaptiveRateLimiter) tryAdjustRate() {
 	if newRate != arl.currentRate {
 		arl.currentRate = newRate
 		arl.limiter.SetLimit(rate.Limit(newRate))
-		arl.limiter.SetBurst(int(newRate * 2))
+		arl.limiter.SetBurst(limiterBurst(newRate))
+		arl.notifyRateChangeLocked()
 		rateLimitCurrentRate.WithLabelValues(deploymentVariant).Set(newRate)
 	}
 
@@ -190,7 +338,8 @@ func (arl *AdaptiveRateLimiter) Reset(initialRate float64) {
 	arl.currentRate = initialRate
 	arl.estimatedCeiling = initialRate
 	arl.cleanWindows = 0
-	arl.limiter = rate.NewLimiter(rate.Limit(initialRate), int(initialRate*2))
+	arl.limiter = rate.NewLimiter(rate.Limit(initialRate), limiterBurst(initialRate))
+	arl.notifyRateChangeLocked()
 	arl.lastAdjustment = time.Now()
 	atomic.StoreInt64(&arl.recent429Count, 0)
 	atomic.StoreInt64(&arl.recentSuccessCount, 0)
@@ -310,6 +459,9 @@ func main() {
 		minRate,
 		maxRate,
 	)
+	// Reuse the configured limiter rather than constructing a second one in the
+	// handler, so the configured EWMA parameters remain the outer fairness bound.
+	proxyHandler.rateLimiter = rateLimiter
 
 	// Metrics endpoint
 	http.Handle("/metrics", promhttp.Handler())

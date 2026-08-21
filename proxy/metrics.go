@@ -123,10 +123,10 @@ var (
 	rateLimitWaitTime = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "zai_proxy_rate_limit_wait_seconds",
-			Help:    "Time spent waiting for rate limiter",
+			Help:    "Time spent waiting for the rate limiter, by bounded source bucket",
 			Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2, 5, 10},
 		},
-		[]string{"variant"},
+		[]string{"variant", "client"},
 	)
 
 	rateLimitAdjustments = promauto.NewCounterVec(
@@ -140,9 +140,9 @@ var (
 	rateLimitRejections = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "zai_proxy_rate_limit_rejections_total",
-			Help: "Total number of requests rejected due to rate limiting",
+			Help: "Total number of requests rejected due to proxy capacity, by bounded source bucket",
 		},
-		[]string{"variant"},
+		[]string{"variant", "client"},
 	)
 
 	retryAttempts = promauto.NewCounterVec(
