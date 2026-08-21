@@ -536,14 +536,14 @@ func TestCountingMockServerWrapHandler(t *testing.T) {
 // TestWaitForCondition verifies AC7: WaitForCondition() waits for conditions with timeout
 func TestWaitForCondition(t *testing.T) {
 	t.Run("returns_true_when_condition_met_quickly", func(t *testing.T) {
-		conditionMet := false
+		var conditionMet atomic.Bool
 		go func() {
 			time.Sleep(50 * time.Millisecond)
-			conditionMet = true
+			conditionMet.Store(true)
 		}()
 
 		result := WaitForCondition(t, func() bool {
-			return conditionMet
+			return conditionMet.Load()
 		}, 500*time.Millisecond, 10*time.Millisecond)
 
 		if !result {
@@ -578,14 +578,14 @@ func TestWaitForCondition(t *testing.T) {
 	})
 
 	t.Run("handles_condition_that_becomes_true_just_before_timeout", func(t *testing.T) {
-		conditionMet := false
+		var conditionMet atomic.Bool
 		go func() {
 			time.Sleep(90 * time.Millisecond)
-			conditionMet = true
+			conditionMet.Store(true)
 		}()
 
 		result := WaitForCondition(t, func() bool {
-			return conditionMet
+			return conditionMet.Load()
 		}, 100*time.Millisecond, 10*time.Millisecond)
 
 		if !result {
