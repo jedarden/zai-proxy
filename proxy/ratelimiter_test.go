@@ -2549,64 +2549,48 @@ func TestProbeActivatesAfterCleanWindows(t *testing.T) {
 // TestProbeRateAboveCeiling confirms probed rate exceeds configured ceiling
 func TestProbeRateAboveCeiling(t *testing.T) {
 	tests := []struct {
-		name          string
-		initialRate   float64
-		minRate       float64
-		maxRate       float64
-		holdMargin    float64
-		probeInterval int
-		ceiling       float64
-		description   string
+		name             string
+		initialRate      float64
+		minRate          float64
+		maxRate          float64
+		holdMargin       float64
+		probeInterval    int
+		ceiling          float64
+		wantAboveCeiling bool
+		description      string
 	}{
 		{
-			name:          "probe rate exceeds ceiling by hold margin",
-			initialRate:   30.0,
-			minRate:       1.0,
-			maxRate:       50.0,
-			holdMargin:    0.02,
-			probeInterval: 10,
-			ceiling:       50.0,
-			description:   "Probe should go to ceiling * (1 + holdMargin)",
+			name:             "probe rate exceeds configured ceiling by hold margin",
+			initialRate:      30.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			probeInterval:    3,
+			ceiling:          40.0,
+			wantAboveCeiling: true,
+			description:      "Probe should go to the configured ceiling times (1 + hold margin)",
 		},
 		{
-			name:          "probe with 5% hold margin",
-			initialRate:   30.0,
-			minRate:       1.0,
-			maxRate:       60.0,
-			holdMargin:    0.05,
-			probeInterval: 10,
-			ceiling:       60.0,
-			description:   "Probe should exceed ceiling by 5%",
+			name:             "probe honors a ceiling below the configured maximum",
+			initialRate:      20.0,
+			minRate:          1.0,
+			maxRate:          80.0,
+			holdMargin:       0.05,
+			probeInterval:    3,
+			ceiling:          60.0,
+			wantAboveCeiling: true,
+			description:      "The configured ceiling, rather than maxRate, determines the probe target",
 		},
 		{
-			name:          "probe with 10% hold margin",
-			initialRate:   30.0,
-			minRate:       1.0,
-			maxRate:       80.0,
-			holdMargin:    0.10,
-			probeInterval: 10,
-			ceiling:       80.0,
-			description:   "Probe should exceed ceiling by 10%",
-		},
-		{
-			name:          "probe capped at maxRate when ceiling + margin exceeds max",
-			initialRate:   40.0,
-			minRate:       1.0,
-			maxRate:       45.0,
-			holdMargin:    0.02,
-			probeInterval: 10,
-			ceiling:       45.0,
-			description:   "Probe should not exceed maxRate even with margin",
-		},
-		{
-			name:          "probe from low rate still exceeds ceiling",
-			initialRate:   10.0,
-			minRate:       1.0,
-			maxRate:       50.0,
-			holdMargin:    0.02,
-			probeInterval: 10,
-			ceiling:       50.0,
-			description:   "Starting rate should not affect probe target",
+			name:             "probe is capped by configured maximum",
+			initialRate:      30.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.10,
+			probeInterval:    3,
+			ceiling:          50.0,
+			wantAboveCeiling: false,
+			description:      "Probe must not exceed maxRate even when the calculated target would",
 		},
 	}
 
@@ -2640,8 +2624,17 @@ func TestProbeRateAboveCeiling(t *testing.T) {
 			}
 
 			finalRate := arl.GetCurrentRate()
+			arl.mu.RLock()
+			finalCeiling := arl.estimatedCeiling
+			cleanWindows := arl.cleanWindows
+			arl.mu.RUnlock()
 
-			// Verify probe rate exceeds ceiling
+			// The clean windows that triggered the probe must not modify the configured ceiling.
+			if finalCeiling != tt.ceiling {
+				t.Errorf("Probe changed configured ceiling: got %.2f, want %.2f", finalCeiling, tt.ceiling)
+			}
+
+			// Verify that the probe target is derived from that ceiling, then bounded by maxRate.
 			tolerance := 0.01
 			if finalRate < expectedProbeRate-tolerance || finalRate > expectedProbeRate+tolerance {
 				t.Errorf("Probe rate %.2f should equal expected probe rate %.2f±%.2f",
@@ -2653,15 +2646,21 @@ func TestProbeRateAboveCeiling(t *testing.T) {
 				t.Errorf("Probe rate %.2f should exceed hold position %.2f",
 					finalRate, holdRate)
 			}
+			if tt.wantAboveCeiling && finalRate <= tt.ceiling {
+				t.Errorf("Active probe rate %.2f should exceed configured ceiling %.2f",
+					finalRate, tt.ceiling)
+			}
 
 			// Verify probe rate does not exceed maxRate
 			if finalRate > tt.maxRate {
 				t.Errorf("Probe rate %.2f should not exceed maxRate %.2f",
 					finalRate, tt.maxRate)
 			}
+			if cleanWindows != 0 {
+				t.Errorf("Probe should reset clean windows, got %d", cleanWindows)
+			}
 
-			t.Logf("✓ Probe rate %.2f exceeds ceiling %.2f (within bounds)",
-				finalRate, tt.ceiling)
+			t.Logf("Probe rate %.2f, ceiling %.2f, max %.2f", finalRate, tt.ceiling, tt.maxRate)
 		})
 	}
 }
