@@ -16,16 +16,16 @@ import (
 
 // Collector scrapes Prometheus metrics from zai-proxy endpoints.
 type Collector struct {
-	targets       []string
-	client        *http.Client
-	interval      time.Duration
-	timeout       time.Duration
-	parser        *Parser
-	snapshots     chan *model.MetricSnapshot
-	prevMetrics   map[string]map[string][]MetricValue // target -> metrics
-	prevTime      map[string]time.Time
-	mu            sync.RWMutex
-	variantNames  map[string]string // target URL -> variant name
+	targets      []string
+	client       *http.Client
+	interval     time.Duration
+	timeout      time.Duration
+	parser       *Parser
+	snapshots    chan *model.MetricSnapshot
+	prevMetrics  map[string]map[string][]MetricValue // target -> metrics
+	prevTime     map[string]time.Time
+	mu           sync.RWMutex
+	variantNames map[string]string // target URL -> variant name
 }
 
 // Config holds configuration for the collector.
@@ -241,6 +241,10 @@ func (c *Collector) buildSnapshot(cur, prev map[string][]MetricValue, now, prevT
 	s.TokensOutput = sumMetric("zai_proxy_tokens_total", map[string]string{"direction": "output"})
 	s.TokensCacheRead = sumMetric("zai_proxy_tokens_total", map[string]string{"direction": "cache_read"})
 	s.TokensCacheWrite = sumMetric("zai_proxy_tokens_total", map[string]string{"direction": "cache_write"})
+	s.EstimatedCostUSDInput = sumMetric("zai_proxy_estimated_cost_usd_total", map[string]string{"direction": "input"})
+	s.EstimatedCostUSDOutput = sumMetric("zai_proxy_estimated_cost_usd_total", map[string]string{"direction": "output"})
+	s.EstimatedCostUSDCacheRead = sumMetric("zai_proxy_estimated_cost_usd_total", map[string]string{"direction": "cache_read"})
+	s.EstimatedCostUSDCacheWrite = sumMetric("zai_proxy_estimated_cost_usd_total", map[string]string{"direction": "cache_write"})
 	s.ConcurrentRequests = sumMetric("zai_proxy_concurrent_requests", nil)
 	s.MaxWorkers = sumMetric("zai_proxy_max_workers", nil)
 	s.RateLimitRps = sumMetric("zai_proxy_rate_limit_requests_per_second", nil)

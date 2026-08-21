@@ -60,6 +60,17 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(1)}${units[i]}`;
 }
 
+/** Format an estimated cost in USD, retaining useful precision for small windows. */
+export function formatCurrencyUSD(value: number): string {
+  if (value === null || value === undefined || isNaN(value)) {
+    return '-';
+  }
+  if (value > 0 && value < 0.01) {
+    return `$${value.toFixed(4)}`;
+  }
+  return `$${value.toFixed(2)}`;
+}
+
 /** Format timestamp to local time string */
 export function formatTime(timestamp: number): string {
   const date = new Date(timestamp);

@@ -240,6 +240,10 @@ Returns historical metrics for a time range.
     "tokens_output": 150000,
     "tokens_cache_read": 10000,
     "tokens_cache_write": 8000,
+    "estimated_cost_usd_input": 0.03,
+    "estimated_cost_usd_output": 0.33,
+    "estimated_cost_usd_cache_read": 0.0011,
+    "estimated_cost_usd_cache_write": 0,
     "concurrent_requests": 12,
     "max_workers": 50,
     "rate_limit_rps": 50.0,
@@ -314,6 +318,10 @@ type MetricSnapshot struct {
     TokensOutput          float64                 // Total output tokens
     TokensCacheRead       float64                 // Total cache-read tokens
     TokensCacheWrite      float64                 // Total cache-write tokens
+    EstimatedCostUSDInput      float64             // Estimated input cost (USD)
+    EstimatedCostUSDOutput     float64             // Estimated output cost (USD)
+    EstimatedCostUSDCacheRead  float64             // Estimated cache-read cost (USD)
+    EstimatedCostUSDCacheWrite float64             // Estimated cache-write cost (USD)
     ConcurrentRequests    float64                 // Current concurrent requests
     MaxWorkers            float64                 // Maximum workers
     RateLimitRps          float64                 // Current rate limit (req/s)

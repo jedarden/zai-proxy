@@ -1,12 +1,71 @@
 package main
 
 import (
+	"math"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
+
+func TestEstimatedTokenCostUSD(t *testing.T) {
+	tests := []struct {
+		name      string
+		direction string
+		tier      string
+		count     int
+		want      float64
+	}{
+		{name: "off-peak input", direction: "input", tier: "off_peak", count: 1000, want: 0.00060},
+		{name: "peak input", direction: "input", tier: "peak", count: 1000, want: 0.00120},
+		{name: "off-peak output", direction: "output", tier: "off_peak", count: 1000, want: 0.00220},
+		{name: "peak cache read", direction: "cache_read", tier: "peak", count: 1000, want: 0.00022},
+		{name: "free cache write", direction: "cache_write", tier: "off_peak", count: 1000, want: 0},
+		{name: "unknown tier", direction: "input", tier: "unknown", count: 1000, want: 0},
+		{name: "non-positive count", direction: "input", tier: "off_peak", count: 0, want: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := estimatedTokenCostUSD(tt.direction, tt.tier, tt.count); math.Abs(got-tt.want) > 1e-12 {
+				t.Errorf("estimatedTokenCostUSD() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRecordUsageRecordsEstimatedCost(t *testing.T) {
+	tokensTotal.Reset()
+	estimatedCostUSDTotal.Reset()
+
+	model, variant, tier := "glm-4.7", "production", GetPricingTier()
+	usage := UsageData{
+		InputTokens:      1000,
+		OutputTokens:     2000,
+		CacheReadTokens:  3000,
+		CacheWriteTokens: 4000,
+	}
+	RecordUsage(model, variant, usage)
+
+	tests := []struct {
+		direction string
+		count     int
+	}{
+		{direction: "input", count: usage.InputTokens},
+		{direction: "output", count: usage.OutputTokens},
+		{direction: "cache_read", count: usage.CacheReadTokens},
+		{direction: "cache_write", count: usage.CacheWriteTokens},
+	}
+	for _, tt := range tests {
+		if got, want := testutil.ToFloat64(tokensTotal.WithLabelValues(tt.direction, model, variant, tier)), float64(tt.count); got != want {
+			t.Errorf("token count for %s = %v, want %v", tt.direction, got, want)
+		}
+		if got, want := testutil.ToFloat64(estimatedCostUSDTotal.WithLabelValues(tt.direction, model, variant, tier)), estimatedTokenCostUSD(tt.direction, tier, tt.count); math.Abs(got-want) > 1e-12 {
+			t.Errorf("estimated cost for %s = %v, want %v", tt.direction, got, want)
+		}
+	}
+}
 
 func TestRecordInputTokens(t *testing.T) {
 	// Reset metrics before test
@@ -361,8 +420,8 @@ func TestMetricsExportFormat(t *testing.T) {
 		# HELP zai_proxy_tokens_total Total number of tokens processed by direction (input/output), model, deployment variant, and pricing tier
 		# TYPE zai_proxy_tokens_total counter
 	`
-	expectedInputLine := `zai_proxy_tokens_total{direction="input",model="glm-4",variant="stable",pricing_tier="off_peak"} 100`
-	expectedOutputLine := `zai_proxy_tokens_total{direction="output",model="glm-4",variant="stable",pricing_tier="off_peak"} 200`
+	expectedInputLine := `zai_proxy_tokens_total{direction="input",model="glm-4",pricing_tier="off_peak",variant="stable"} 100`
+	expectedOutputLine := `zai_proxy_tokens_total{direction="output",model="glm-4",pricing_tier="off_peak",variant="stable"} 200`
 
 	// Verify metric can be collected
 	if err := testutil.CollectAndCompare(tokensTotal, strings.NewReader(metadata+expectedInputLine+"\n"+expectedOutputLine+"\n")); err != nil {

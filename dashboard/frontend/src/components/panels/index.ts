@@ -2,6 +2,7 @@
 export { RequestRatePanel } from './RequestRatePanel';
 export { LatencyPanel } from './LatencyPanel';
 export { TokenPanel } from './TokenPanel';
+export { EstimatedCostPanel } from './EstimatedCostPanel';
 export { ConcurrencyPanel } from './ConcurrencyPanel';
 export { RateLimitPanel } from './RateLimitPanel';
 export { ErrorPanel } from './ErrorPanel';

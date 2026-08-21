@@ -7,6 +7,41 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+type tokenPricingRates struct {
+	input      float64
+	output     float64
+	cacheRead  float64
+	cacheWrite float64
+}
+
+const (
+	// Z.AI's GLM-4.7 public API rates, converted from USD per 1M to USD per
+	// 1K tokens. Source: https://docs.z.ai/guides/overview/pricing (accessed
+	// 2026-08-20). Cached-input storage (cache writes) was listed as
+	// limited-time free on that date.
+	offPeakInputUSDPer1K      = 0.00060
+	offPeakOutputUSDPer1K     = 0.00220
+	offPeakCacheReadUSDPer1K  = 0.00011
+	offPeakCacheWriteUSDPer1K = 0.0
+)
+
+// tokenPricingRatesUSDPer1K holds the estimated Z.AI GLM-4.7 API rates by
+// pricing tier. Peak rates are 2x off-peak rates, matching GetPricingTier.
+var tokenPricingRatesUSDPer1K = map[string]tokenPricingRates{
+	"off_peak": {
+		input:      offPeakInputUSDPer1K,
+		output:     offPeakOutputUSDPer1K,
+		cacheRead:  offPeakCacheReadUSDPer1K,
+		cacheWrite: offPeakCacheWriteUSDPer1K,
+	},
+	"peak": {
+		input:      offPeakInputUSDPer1K * 2,
+		output:     offPeakOutputUSDPer1K * 2,
+		cacheRead:  offPeakCacheReadUSDPer1K * 2,
+		cacheWrite: offPeakCacheWriteUSDPer1K * 2,
+	},
+}
+
 var (
 	// Request metrics
 	requestsTotal = promauto.NewCounterVec(
@@ -127,6 +162,14 @@ var (
 		[]string{"direction", "model", "variant", "pricing_tier"},
 	)
 
+	estimatedCostUSDTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "zai_proxy_estimated_cost_usd_total",
+			Help: "Estimated Z.AI API cost in USD by token direction, model, deployment variant, and pricing tier",
+		},
+		[]string{"direction", "model", "variant", "pricing_tier"},
+	)
+
 	tokenCountDuration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "zai_proxy_token_count_duration_seconds",
@@ -178,18 +221,56 @@ func GetPricingTier() string {
 	return "off_peak"
 }
 
+// estimatedTokenCostUSD converts a token count to an estimated USD cost for a
+// direction and pricing tier. Unknown directions or tiers deliberately return
+// zero so a new label cannot cause the proxy to overstate spend.
+func estimatedTokenCostUSD(direction, tier string, count int) float64 {
+	if count <= 0 {
+		return 0
+	}
+
+	rates, ok := tokenPricingRatesUSDPer1K[tier]
+	if !ok {
+		return 0
+	}
+
+	var rate float64
+	switch direction {
+	case "input":
+		rate = rates.input
+	case "output":
+		rate = rates.output
+	case "cache_read":
+		rate = rates.cacheRead
+	case "cache_write":
+		rate = rates.cacheWrite
+	default:
+		return 0
+	}
+
+	return float64(count) / 1000 * rate
+}
+
+// recordTokenUsage records matching token and estimated-cost counters for one
+// usage direction. A zero-cost direction still creates its cost series when
+// tokens are observed, making the free rate explicit in Prometheus.
+func recordTokenUsage(direction, model, variant, tier string, count int) {
+	if count <= 0 {
+		return
+	}
+
+	tokensTotal.WithLabelValues(direction, model, variant, tier).Add(float64(count))
+	estimatedCostUSDTotal.WithLabelValues(direction, model, variant, tier).Add(estimatedTokenCostUSD(direction, tier, count))
+}
+
 // RecordInputTokens records input token count metrics
 func RecordInputTokens(model string, version string, count int) {
-	if count > 0 {
-		tokensTotal.WithLabelValues("input", model, version, GetPricingTier()).Add(float64(count))
-	}
+	recordTokenUsage("input", model, version, GetPricingTier(), count)
 }
 
 // RecordOutputTokens records output token count metrics
 func RecordOutputTokens(model string, version string, count int) {
-	if count > 0 {
-		tokensTotal.WithLabelValues("output", model, version, GetPricingTier()).Add(float64(count))
-	}
+	recordTokenUsage("output", model, version, GetPricingTier(), count)
 }
 
 // RecordTokenRate records token processing rate metrics
@@ -229,16 +310,8 @@ func RecordOutputTokenRate(model string, version string, duration time.Duration,
 // Directions: "input", "output", "cache_read", "cache_write".
 func RecordUsage(model, variant string, usage UsageData) {
 	tier := GetPricingTier()
-	if usage.InputTokens > 0 {
-		tokensTotal.WithLabelValues("input", model, variant, tier).Add(float64(usage.InputTokens))
-	}
-	if usage.OutputTokens > 0 {
-		tokensTotal.WithLabelValues("output", model, variant, tier).Add(float64(usage.OutputTokens))
-	}
-	if usage.CacheReadTokens > 0 {
-		tokensTotal.WithLabelValues("cache_read", model, variant, tier).Add(float64(usage.CacheReadTokens))
-	}
-	if usage.CacheWriteTokens > 0 {
-		tokensTotal.WithLabelValues("cache_write", model, variant, tier).Add(float64(usage.CacheWriteTokens))
-	}
+	recordTokenUsage("input", model, variant, tier, usage.InputTokens)
+	recordTokenUsage("output", model, variant, tier, usage.OutputTokens)
+	recordTokenUsage("cache_read", model, variant, tier, usage.CacheReadTokens)
+	recordTokenUsage("cache_write", model, variant, tier, usage.CacheWriteTokens)
 }

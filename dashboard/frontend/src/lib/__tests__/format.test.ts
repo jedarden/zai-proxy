@@ -5,6 +5,7 @@ import {
   formatLatency,
   formatPercent,
   formatBytes,
+  formatCurrencyUSD,
   formatRelativeTime,
   formatUtilization,
   getUtilizationColor,
@@ -89,6 +90,19 @@ describe('format utilities', () => {
     it('should handle null/undefined/NaN', () => {
       expect(formatBytes(null as unknown as number)).toBe('-');
       expect(formatBytes(NaN)).toBe('-');
+    });
+  });
+
+  describe('formatCurrencyUSD', () => {
+    it('should format typical and small estimated costs', () => {
+      expect(formatCurrencyUSD(12.5)).toBe('$12.50');
+      expect(formatCurrencyUSD(0.0044)).toBe('$0.0044');
+      expect(formatCurrencyUSD(0)).toBe('$0.00');
+    });
+
+    it('should handle null/undefined/NaN', () => {
+      expect(formatCurrencyUSD(null as unknown as number)).toBe('-');
+      expect(formatCurrencyUSD(NaN)).toBe('-');
     });
   });
 

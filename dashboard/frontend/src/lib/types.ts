@@ -13,6 +13,10 @@ export interface MetricSnapshot {
   tokens_output: number;
   tokens_cache_read: number;
   tokens_cache_write: number;
+  estimated_cost_usd_input: number;
+  estimated_cost_usd_output: number;
+  estimated_cost_usd_cache_read: number;
+  estimated_cost_usd_cache_write: number;
   concurrent_requests: number;
   max_workers: number;
   rate_limit_rps: number;

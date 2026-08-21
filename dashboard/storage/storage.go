@@ -338,6 +338,10 @@ func computeAverage(snapshots []*model.MetricSnapshot) *model.MetricSnapshot {
 		average.TokensOutput += snapshot.TokensOutput
 		average.TokensCacheRead += snapshot.TokensCacheRead
 		average.TokensCacheWrite += snapshot.TokensCacheWrite
+		average.EstimatedCostUSDInput += snapshot.EstimatedCostUSDInput
+		average.EstimatedCostUSDOutput += snapshot.EstimatedCostUSDOutput
+		average.EstimatedCostUSDCacheRead += snapshot.EstimatedCostUSDCacheRead
+		average.EstimatedCostUSDCacheWrite += snapshot.EstimatedCostUSDCacheWrite
 		average.ConcurrentRequests += snapshot.ConcurrentRequests
 		average.MaxWorkers += snapshot.MaxWorkers
 		average.RateLimitRps += snapshot.RateLimitRps
@@ -370,6 +374,10 @@ func computeAverage(snapshots []*model.MetricSnapshot) *model.MetricSnapshot {
 	average.TokensOutput /= n
 	average.TokensCacheRead /= n
 	average.TokensCacheWrite /= n
+	average.EstimatedCostUSDInput /= n
+	average.EstimatedCostUSDOutput /= n
+	average.EstimatedCostUSDCacheRead /= n
+	average.EstimatedCostUSDCacheWrite /= n
 	average.ConcurrentRequests /= n
 	average.MaxWorkers /= n
 	average.RateLimitRps /= n

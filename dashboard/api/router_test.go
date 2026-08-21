@@ -20,7 +20,14 @@ func TestMetricsAndStatusUseInMemoryStorage(t *testing.T) {
 	defer store.Close()
 
 	now := time.Now().UnixMilli()
-	store.Write(&model.MetricSnapshot{Timestamp: now, Variant: "production", ReqRate: 12.5})
+	store.Write(&model.MetricSnapshot{
+		Timestamp:                 now,
+		Variant:                   "production",
+		ReqRate:                   12.5,
+		EstimatedCostUSDInput:     0.125,
+		EstimatedCostUSDOutput:    0.25,
+		EstimatedCostUSDCacheRead: 0.01,
+	})
 	store.Write(&model.MetricSnapshot{Timestamp: now, Variant: "canary", ReqRate: 3.5})
 
 	router := NewRouter(NewSSEHub(DefaultConfig()), store, DefaultConfig())
@@ -38,7 +45,7 @@ func TestMetricsAndStatusUseInMemoryStorage(t *testing.T) {
 	if err := json.Unmarshal(metricsResponse.Body.Bytes(), &snapshots); err != nil {
 		t.Fatalf("decode metrics response: %v", err)
 	}
-	if len(snapshots) != 1 || snapshots[0].Variant != "production" || snapshots[0].ReqRate != 12.5 {
+	if len(snapshots) != 1 || snapshots[0].Variant != "production" || snapshots[0].ReqRate != 12.5 || snapshots[0].EstimatedCostUSDInput != 0.125 || snapshots[0].EstimatedCostUSDOutput != 0.25 || snapshots[0].EstimatedCostUSDCacheRead != 0.01 {
 		t.Fatalf("unexpected metrics response: %+v", snapshots)
 	}
 

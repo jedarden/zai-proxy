@@ -9,6 +9,7 @@ import {
   RequestRatePanel,
   LatencyPanel,
   TokenPanel,
+  EstimatedCostPanel,
   ConcurrencyPanel,
   RateLimitPanel,
   ErrorPanel,
@@ -142,18 +143,23 @@ export function Dashboard({ sseUrl = getSseUrl() }: DashboardProps) {
             <LatencyPanel data={filteredData} variant={variantFilter} height={180} />
           </PanelErrorBoundary>
 
-          {/* Row 2: Token Throughput & Concurrency */}
+          {/* Row 2: Token Throughput & Estimated Cost */}
           <PanelErrorBoundary panelName="Tokens">
             <TokenPanel data={filteredData} variant={variantFilter} height={180} />
           </PanelErrorBoundary>
+          <PanelErrorBoundary panelName="Estimated Cost">
+            <EstimatedCostPanel data={filteredData} variant={variantFilter} />
+          </PanelErrorBoundary>
+
+          {/* Row 3: Concurrency & Rate Limiter */}
           <PanelErrorBoundary panelName="Concurrency">
             <ConcurrencyPanel data={filteredData} variant={variantFilter} height={180} />
           </PanelErrorBoundary>
-
-          {/* Row 3: Rate Limiter & Errors */}
           <PanelErrorBoundary panelName="Rate Limiter">
             <RateLimitPanel data={filteredData} variant={variantFilter} height={180} />
           </PanelErrorBoundary>
+
+          {/* Row 4: Errors */}
           <PanelErrorBoundary panelName="Errors">
             <ErrorPanel data={filteredData} variant={variantFilter} height={180} />
           </PanelErrorBoundary>
