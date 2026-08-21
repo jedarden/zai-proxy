@@ -176,7 +176,7 @@ func TestAdaptiveRateLimiter_EWMACeilingUpdate(t *testing.T) {
 			wantRateDrop:        true,
 		},
 		{
-			name:        "exactly 5% 429 rate triggers decrease",
+			name:        "exactly 5% 429 rate holds position",
 			initialRate: 20.0,
 			minRate:     1.0,
 			maxRate:     40.0,
@@ -187,8 +187,10 @@ func TestAdaptiveRateLimiter_EWMACeilingUpdate(t *testing.T) {
 				recordSuccesses(95),
 				advanceWindow(),
 			},
-			wantCeilingDecrease: true,
-			wantRateDrop:        true,
+			// The adjustment threshold is strictly greater than 5%, so the
+			// boundary belongs to the middle regime and must not adjust.
+			wantCeilingDecrease: false,
+			wantRateDrop:        false,
 		},
 		{
 			name:        "just above 5% threshold (5.1%)",
