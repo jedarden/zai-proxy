@@ -307,6 +307,35 @@ go test -bench=. -benchmem
 go test -v -run Regression
 ```
 
+### Retry Timing and Backoff Test Helpers
+
+Proxy tests share retry helpers in `proxy/helpers_test.go`. Use calculated
+delays instead of hard-coding the backoff curve, and treat real elapsed time as
+a lower bound because request handling and scheduler overhead add time.
+
+```go
+delays := []time.Duration{
+    CalculateBackoffDelay(1),
+    CalculateBackoffDelay(2),
+    CalculateBackoffDelay(3),
+}
+AssertExponentialBackoff(t, delays) // 1s, 2s, 4s
+
+start := time.Now()
+resp := ExecuteMessagesRequest(t, handler, requestBody)
+defer resp.Body.Close()
+
+elapsed := time.Since(start)
+AssertRetryTiming(t, elapsed, delays[0]+delays[1])
+AssertTotalTimeout(t, elapsed, 5*time.Second)
+```
+
+`AssertRetryTiming` checks that the expected backoff was not skipped;
+`AssertTotalTimeout` checks an upper bound; and `AssertExponentialBackoff`
+checks the canonical production sequence. For one retry, use
+`AssertRetryTiming` directly; `AssertExponentialBackoff` requires at least two
+delays to verify a curve.
+
 ### Dashboard Tests
 
 #### Backend Tests

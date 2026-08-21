@@ -685,6 +685,79 @@ func CalculateTotalMaxDelay(maxRetries int) time.Duration {
 	return time.Duration(1<<uint(maxRetries)-1) * time.Second
 }
 
+// AssertRetryTiming verifies that an operation included at least the expected
+// retry delay. It intentionally checks a lower bound: request handling and
+// scheduler overhead can make wall-clock measurements longer than the delay.
+func AssertRetryTiming(t *testing.T, elapsed, expectedDelay time.Duration) {
+	t.Helper()
+	if err := validateRetryTiming(elapsed, expectedDelay); err != nil {
+		t.Error(err)
+	}
+}
+
+func validateRetryTiming(elapsed, expectedDelay time.Duration) error {
+	if elapsed < 0 {
+		return fmt.Errorf("retry timing cannot be negative: got %v", elapsed)
+	}
+	if expectedDelay < 0 {
+		return fmt.Errorf("expected retry delay cannot be negative: got %v", expectedDelay)
+	}
+	if elapsed < expectedDelay {
+		return fmt.Errorf("retry completed too quickly: expected at least %v, got %v", expectedDelay, elapsed)
+	}
+	return nil
+}
+
+// AssertTotalTimeout verifies that an operation did not exceed its overall
+// timeout. Use it with a timeout that includes any permitted scheduling or
+// transport overhead.
+func AssertTotalTimeout(t *testing.T, elapsed, timeout time.Duration) {
+	t.Helper()
+	if err := validateTotalTimeout(elapsed, timeout); err != nil {
+		t.Error(err)
+	}
+}
+
+func validateTotalTimeout(elapsed, timeout time.Duration) error {
+	if elapsed < 0 {
+		return fmt.Errorf("elapsed duration cannot be negative: got %v", elapsed)
+	}
+	if timeout < 0 {
+		return fmt.Errorf("timeout cannot be negative: got %v", timeout)
+	}
+	if elapsed > timeout {
+		return fmt.Errorf("operation exceeded total timeout: limit %v, got %v", timeout, elapsed)
+	}
+	return nil
+}
+
+// AssertExponentialBackoff verifies that delays follow the production retry
+// curve calculated by CalculateBackoffDelay: 1s, 2s, 4s, and so on.
+//
+// Supply at least two delays so the helper can validate the curve rather than
+// only a single delay. Use AssertRetryTiming for a single measured retry.
+func AssertExponentialBackoff(t *testing.T, delays []time.Duration) {
+	t.Helper()
+	if err := validateExponentialBackoff(delays); err != nil {
+		t.Error(err)
+	}
+}
+
+func validateExponentialBackoff(delays []time.Duration) error {
+	if len(delays) < 2 {
+		return fmt.Errorf("exponential backoff requires at least two delays, got %d", len(delays))
+	}
+
+	for index, actual := range delays {
+		attempt := index + 1
+		expected := CalculateBackoffDelay(attempt)
+		if actual != expected {
+			return fmt.Errorf("backoff attempt %d: expected %v, got %v", attempt, expected, actual)
+		}
+	}
+	return nil
+}
+
 // ============================================================================
 // Integration Test Helpers
 // ============================================================================
