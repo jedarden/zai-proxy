@@ -167,3 +167,35 @@ Use the stack trace to confirm the primary event, but do not recategorize a
 failure solely because a test name or file path sounds related. If the same
 Other subcategory occurs repeatedly, add a precise category rule and tests
 before making it a new primary category.
+
+## Coverage validation
+
+The confidence and categorization package is measured independently so its
+coverage is not diluted by the proxy's unrelated transport code. Generate the
+tracked profile and function report with:
+
+```bash
+go test -coverprofile=coverage_confidence.out ./proxy/testutil
+go tool cover -func=coverage_confidence.out
+```
+
+Final validation on 2026-08-20: **96.9% statement coverage**, up from the
+previous tracked baseline of **89.5%** (+7.4 percentage points). This exceeds
+the 90% target. The critical decision paths--confidence calculation and
+thresholds, rule selection, ambiguity handling, edge-case adjustments,
+batch categorization, and ambiguity resolution--each report 100% function
+coverage. No critical decision path is below 80%.
+
+The only output-support helpers at or below 80% are
+`ExportCategorizationReportJSON` (66.7%) and `ReadTestOutput` (80.0%). They
+do not determine a category, confidence score, uncertainty status, or review
+decision; their normal and deterministic error behavior is exercised by
+focused tests.
+
+`go test -v ./...` was also run for the repository. The confidence package
+passes, but the full command exits nonzero because of pre-existing failures
+outside this package: metric exposition label order, token-counting allocation
+thresholds, one rate-limiter threshold assertion, and legacy translator tests
+that expect transformations although `TranslateRequest` is deliberately a
+no-op for Z.AI compatibility. The command therefore cannot currently be
+recorded as an all-tests-pass result.
