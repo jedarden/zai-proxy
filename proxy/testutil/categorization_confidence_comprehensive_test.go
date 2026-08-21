@@ -319,7 +319,7 @@ func TestConfidence_MethodChaining(t *testing.T) {
 // results for the same confidence value.
 func TestConfidence_LevelConsistency(t *testing.T) {
 	testCases := []struct {
-		confidence Confidence
+		confidence    Confidence
 		expectedLevel string
 	}{
 		{Confidence(0.0), "Very Low"},
@@ -379,8 +379,8 @@ func TestConfidence_CalculationWithNilSignals(t *testing.T) {
 // combinations of parameters.
 func TestConfidence_ExtremeValues(t *testing.T) {
 	testCases := []struct {
-		name     string
-		params   ConfidenceCalculationParams
+		name        string
+		params      ConfidenceCalculationParams
 		minExpected float64
 		maxExpected float64
 	}{
@@ -461,11 +461,11 @@ func TestConfidence_SignalWeightSummation(t *testing.T) {
 // properly bounded and doesn't produce invalid results.
 func TestConfidence_AmbiguityPenaltyBounds(t *testing.T) {
 	testCases := []struct {
-		name            string
-		base            float64
+		name             string
+		base             float64
 		ambiguityPenalty float64
-		minResult       float64
-		maxResult       float64
+		minResult        float64
+		maxResult        float64
 	}{
 		{"100% penalty", 0.8, 1.0, 0.0, 0.1},
 		{"invalid penalty > 1.0", 0.8, 1.5, 0.0, 0.1},
@@ -493,10 +493,10 @@ func TestConfidence_AmbiguityPenaltyBounds(t *testing.T) {
 // bounded and doesn't exceed 1.0.
 func TestConfidence_ContextBoostBounds(t *testing.T) {
 	testCases := []struct {
-		name        string
-		base        float64
+		name         string
+		base         float64
 		contextBoost float64
-		expectedMax float64
+		expectedMax  float64
 	}{
 		{"maximum boost", 0.9, 1.0, 1.0},
 		{"invalid boost > 1.0", 0.5, 1.5, 1.0},
@@ -527,14 +527,14 @@ func TestConfidence_ContextBoostBounds(t *testing.T) {
 // are properly bounded.
 func TestConfidence_SignalStrengthBounds(t *testing.T) {
 	testCases := []struct {
-		name        string
-		strength    float64
-		minResult   float64
-		maxResult   float64
+		name      string
+		strength  float64
+		minResult float64
+		maxResult float64
 	}{
 		{"zero strength (defaults to 1.0)", 0.0, 0.70, 0.80},
 		{"negative strength", -0.5, 0.0, 0.1},
-		{"very high strength", 2.0, 0.85, 0.95},
+		{"very high strength", 2.0, 0.80, 0.85},
 	}
 
 	for _, tt := range testCases {
@@ -558,36 +558,36 @@ func TestConfidence_SignalStrengthBounds(t *testing.T) {
 // interact correctly without producing invalid results.
 func TestConfidence_CombinedPenaltyAndBoost(t *testing.T) {
 	testCases := []struct {
-		name            string
-		base            float64
+		name             string
+		base             float64
 		ambiguityPenalty float64
-		contextBoost    float64
-		minExpected     float64
-		maxExpected     float64
+		contextBoost     float64
+		minExpected      float64
+		maxExpected      float64
 	}{
 		{
-			name:            "high penalty, high boost",
-			base:            0.7,
+			name:             "high penalty, high boost",
+			base:             0.7,
 			ambiguityPenalty: 0.8,
 			contextBoost:     0.8,
-			minExpected:     0.2,
-			maxExpected:     0.4,
+			minExpected:      0.80,
+			maxExpected:      0.90,
 		},
 		{
-			name:            "balanced penalty and boost",
-			base:            0.6,
+			name:             "balanced penalty and boost",
+			base:             0.6,
 			ambiguityPenalty: 0.3,
 			contextBoost:     0.3,
-			minExpected:     0.45,
-			maxExpected:     0.65,
+			minExpected:      0.70,
+			maxExpected:      0.75,
 		},
 		{
-			name:            "zero penalty, maximum boost",
-			base:            0.5,
+			name:             "zero penalty, maximum boost",
+			base:             0.5,
 			ambiguityPenalty: 0.0,
 			contextBoost:     1.0,
-			minExpected:     0.75,
-			maxExpected:     1.0,
+			minExpected:      0.75,
+			maxExpected:      1.0,
 		},
 	}
 

@@ -3,6 +3,7 @@ package testutil
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -86,7 +87,7 @@ const (
 	CategoryTimeout FailureCategory = "timeout"
 
 	// CategoryPanic indicates a runtime panic (panic:.*, runtime panic, etc.)
-	// Priority: 25 (checked after specific panic types like nil pointer, index errors)
+	// Priority: 50 (except an explicit panic marker takes precedence over a nil pointer match)
 	// Confidence: 1.0 (explicit panic markers)
 	CategoryPanic FailureCategory = "panic"
 
@@ -181,16 +182,16 @@ const (
 type MatchSignal struct {
 	Type     MatchSignalType `json:"type"`
 	Pattern  string          `json:"pattern"`
-	Context  string          `json:"context,omitempty"` // Additional context (e.g., stack trace, test name)
+	Context  string          `json:"context,omitempty"`  // Additional context (e.g., stack trace, test name)
 	Strength float64         `json:"strength,omitempty"` // Optional strength modifier (0.5 to 1.5)
 }
 
 // ConfidenceCalculationParams represents parameters for confidence calculation.
 type ConfidenceCalculationParams struct {
-	BaseConfidence    float64       `json:"base_confidence"`    // Starting confidence (0.0 to 1.0)
-	Signals           []MatchSignal `json:"signals"`             // Match signals to weight
-	AmbiguityPenalty  float64       `json:"ambiguity_penalty"`   // Penalty for ambiguous matches (0.0 to 1.0)
-	ContextBoost      float64       `json:"context_boost"`       // Boost for strong supporting context (0.0 to 1.0)
+	BaseConfidence   float64       `json:"base_confidence"`   // Starting confidence (0.0 to 1.0)
+	Signals          []MatchSignal `json:"signals"`           // Match signals to weight
+	AmbiguityPenalty float64       `json:"ambiguity_penalty"` // Penalty for ambiguous matches (0.0 to 1.0)
+	ContextBoost     float64       `json:"context_boost"`     // Boost for strong supporting context (0.0 to 1.0)
 }
 
 // CalculateConfidence calculates a confidence score based on match signals.
@@ -230,11 +231,11 @@ func CalculateConfidence(params ConfidenceCalculationParams) Confidence {
 	// Calculate signal contribution
 	signalContribution := 0.0
 	signalWeights := map[MatchSignalType]float64{
-		SignalExactMatch:     1.0,
-		SignalKeywordMatch:   0.9,
+		SignalExactMatch:      1.0,
+		SignalKeywordMatch:    0.9,
 		SignalContextualMatch: 0.8,
-		SignalPartialMatch:   0.6,
-		SignalInferred:       0.4,
+		SignalPartialMatch:    0.6,
+		SignalInferred:        0.4,
 	}
 
 	for _, signal := range params.Signals {
@@ -274,27 +275,32 @@ func CalculateConfidence(params ConfidenceCalculationParams) Confidence {
 // The confidence scoring system quantifies categorization certainty using a weighted
 // signal algorithm that considers multiple factors:
 //
-// 1. Base Confidence: Each category starts with a base confidence (0.0 to 1.0)
-//    representing the inherent specificity of its patterns. Examples:
-//    - Data race: 1.0 (unambiguous "WARNING: DATA RACE" marker)
-//    - Timeout: 0.95 (clear terminology but various contexts)
-//    - Assertion error: 0.7 (general patterns, high ambiguity)
+//  1. Base Confidence: Each category starts with a base confidence (0.0 to 1.0)
+//     representing the inherent specificity of its patterns. Examples:
+//     - Data race: 1.0 (unambiguous "WARNING: DATA RACE" marker)
+//     - Timeout: 0.95 (clear terminology but various contexts)
+//     - Assertion error: 0.7 (general patterns, high ambiguity)
 //
 // 2. Signal Weighting: Match signals contribute to confidence based on type:
-//    - ExactMatch: 1.0 (strongest - "panic:", "DATA RACE")
-//    - KeywordMatch: 0.9 (strong - "timeout", "refused")
-//    - ContextualMatch: 0.8 (moderate-strong - pattern with supporting context)
-//    - PartialMatch: 0.6 (weak - generic patterns)
-//    - Inferred: 0.4 (very weak - inference from context only)
 //
-// 3. Ambiguity Penalty: When multiple patterns match, confidence is reduced based
-//    on predefined ambiguity handlers. This prevents overconfidence in ambiguous cases.
+//   - ExactMatch: 1.0 (strongest - "panic:", "DATA RACE")
 //
-// 4. Context Boost: Strong supporting context can increase confidence, but never
-//    above 1.0 (the formula: boost * (1.0 - confidence) ensures this).
+//   - KeywordMatch: 0.9 (strong - "timeout", "refused")
 //
-// 5. Normalization: Signal contributions are normalized using a sigmoid-like function
-//    (contribution / (1.0 + contribution)) to prevent any single signal from dominating.
+//   - ContextualMatch: 0.8 (moderate-strong - pattern with supporting context)
+//
+//   - PartialMatch: 0.6 (weak - generic patterns)
+//
+//   - Inferred: 0.4 (very weak - inference from context only)
+//
+//     3. Ambiguity Penalty: When multiple patterns match, confidence is reduced based
+//     on predefined ambiguity handlers. This prevents overconfidence in ambiguous cases.
+//
+//     4. Context Boost: Strong supporting context can increase confidence, but never
+//     above 1.0 (the formula: boost * (1.0 - confidence) ensures this).
+//
+//     5. Normalization: Signal contributions are normalized using a sigmoid-like function
+//     (contribution / (1.0 + contribution)) to prevent any single signal from dominating.
 //
 // INTERPRETING CONFIDENCE VALUES:
 //
@@ -323,10 +329,10 @@ type Confidence float64
 
 // Confidence constants for common threshold values
 const (
-	ConfidenceMin      Confidence = 0.0  // Minimum possible confidence (unknown/no match)
-	ConfidenceMax      Confidence = 1.0  // Maximum possible confidence (unambiguous)
-	ConfidenceLow      Confidence = 0.5  // Low confidence threshold
-	ConfidenceModerate Confidence = 0.7  // Moderate confidence threshold (uncertain below this)
+	ConfidenceMin      Confidence = 0.0 // Minimum possible confidence (unknown/no match)
+	ConfidenceMax      Confidence = 1.0 // Maximum possible confidence (unambiguous)
+	ConfidenceLow      Confidence = 0.5 // Low confidence threshold
+	ConfidenceModerate Confidence = 0.7 // Moderate confidence threshold (uncertain below this)
 	// UncertainThreshold is the confidence level below which categorizations
 	// are considered uncertain and may need manual review. A value of 0.7
 	// means categorizations with 70% confidence or less are flagged.
@@ -435,8 +441,14 @@ func (c Confidence) Level() string {
 //	}
 type CategorizedFailure struct {
 	TestFailure
-	Category    FailureCategory `json:"category"`           // Categorized failure type
-	Subcategory string           `json:"subcategory,omitempty"` // Optional subcategory for specificity
+	// Type is the category selected by CategorizeFailure. It is the concise
+	// result field used by the Failure/Category API.
+	Type FailureCategory `json:"type"`
+	// Category is retained for compatibility with callers that used the
+	// original, more detailed CategorizedFailure API. It always equals Type
+	// for values produced by this package.
+	Category    FailureCategory `json:"category"`
+	Subcategory string          `json:"subcategory,omitempty"` // Optional subcategory for specificity
 	// Confidence is the categorization confidence score (0.0 to 1.0).
 	// Use the IsUncertain() method to check if this score is below the
 	// uncertainty threshold (0.7), or access the Uncertain field directly.
@@ -445,9 +457,22 @@ type CategorizedFailure struct {
 	// This field is automatically computed during categorization.
 	// Categorizations with Uncertain=true may need manual review.
 	// Use Confidence.IsUncertain() for the same check in a fluent style.
-	Uncertain bool   `json:"uncertain"` // true if confidence <= 0.7
+	Uncertain bool   `json:"uncertain"`           // true if confidence <= 0.7
 	Reasoning string `json:"reasoning,omitempty"` // Human-readable explanation of categorization
 }
+
+// Failure is the input accepted by CategorizeFailure.
+//
+// It aliases TestFailure so existing parser callers and the concise
+// categorization API use the same representation.
+type Failure = TestFailure
+
+// Category is the result returned by CategorizeFailure.
+//
+// Category.Type and Category.Subcategory provide the compact categorization
+// result, while the embedded failure and confidence fields remain available to
+// existing consumers.
+type Category = CategorizedFailure
 
 // CategorizationRule defines how to categorize failures.
 // The BaseConfidence represents the initial confidence score (0.0 to 1.0)
@@ -457,7 +482,7 @@ type CategorizationRule struct {
 	Category       FailureCategory
 	Pattern        *regexp.Regexp
 	Subcategory    string
-	Priority       int // Higher priority rules checked first
+	Priority       int     // Higher priority rules checked first
 	BaseConfidence float64 // Base confidence for this rule (0.0 to 1.0)
 	// AmbiguityHandlers defines rules to adjust confidence when ambiguous with other categories
 	AmbiguityHandlers map[FailureCategory]ConfidenceAdjustment
@@ -508,7 +533,7 @@ var categorizationRules = []CategorizationRule{
 	// Checked before specific error types to catch timeout-related issues early
 	{
 		Category:       CategoryTimeout,
-		Pattern:        regexp.MustCompile(`(?i)context deadline exceeded|context canceled|timeout.*exceeded|timed out|timeout waiting for|test timed out|exceeded.*timeout`),
+		Pattern:        regexp.MustCompile(`(?i)context deadline exceeded|context canceled|timeout.*exceeded|timed out|timeout waiting for|timeout occurred|test timed out|exceeded.*timeout`),
 		Priority:       70,
 		BaseConfidence: 0.95,
 		AmbiguityHandlers: map[FailureCategory]ConfidenceAdjustment{
@@ -526,7 +551,7 @@ var categorizationRules = []CategorizationRule{
 		Priority:       65,
 		BaseConfidence: 1.0,
 		AmbiguityHandlers: map[FailureCategory]ConfidenceAdjustment{
-			CategoryPanic:        {ReduceBaseBy: 0.1, Reason: "Nil pointer dereference causes panic, but is more specific"},
+			CategoryPanic:          {ReduceBaseBy: 0.1, Reason: "Nil pointer dereference causes panic, but is more specific"},
 			CategoryAssertionError: {ReduceBaseBy: 0.3, Reason: "Nil pointer could appear in assertion message text"},
 		},
 	},
@@ -540,7 +565,7 @@ var categorizationRules = []CategorizationRule{
 		Priority:       60,
 		BaseConfidence: 1.0,
 		AmbiguityHandlers: map[FailureCategory]ConfidenceAdjustment{
-			CategoryPanic:        {ReduceBaseBy: 0.1, Reason: "Index out of range causes panic, but is more specific"},
+			CategoryPanic:          {ReduceBaseBy: 0.1, Reason: "Index out of range causes panic, but is more specific"},
 			CategoryAssertionError: {ReduceBaseBy: 0.3, Reason: "Index error could appear in assertion message text"},
 		},
 	},
@@ -554,12 +579,12 @@ var categorizationRules = []CategorizationRule{
 		Priority:       55,
 		BaseConfidence: 0.95,
 		AmbiguityHandlers: map[FailureCategory]ConfidenceAdjustment{
-			CategoryPanic:        {ReduceBaseBy: 0.15, Reason: "Map key error causes panic, but is more specific"},
+			CategoryPanic:          {ReduceBaseBy: 0.15, Reason: "Map key error causes panic, but is more specific"},
 			CategoryAssertionError: {ReduceBaseBy: 0.3, Reason: "Key not found could appear in assertion message text"},
 		},
 	},
 
-	// DECISION TREE STEP 7: Goroutine panic detection (Priority: 55)
+	// DECISION TREE STEP 8: Goroutine panic detection (Priority: 55)
 	// Rationale: Goroutine panics have distinct patterns ("goroutine [running]")
 	// Checked before general panics to provide specific categorization
 	{
@@ -568,22 +593,22 @@ var categorizationRules = []CategorizationRule{
 		Priority:       55,
 		BaseConfidence: 0.9,
 		AmbiguityHandlers: map[FailureCategory]ConfidenceAdjustment{
-			CategoryPanic:  {ReduceBaseBy: 0.2, Reason: "Goroutine panic is a type of panic, checked first for specificity"},
+			CategoryPanic:    {ReduceBaseBy: 0.2, Reason: "Goroutine panic is a type of panic, checked first for specificity"},
 			CategoryDeadlock: {ReduceBaseBy: 0.3, Reason: "Goroutine issues could be related to deadlock"},
 		},
 	},
 
-	// DECISION TREE STEP 8: Channel errors (Priority: 50)
+	// DECISION TREE STEP 7: Channel errors (Priority: 56)
 	// Rationale: Channel errors have explicit, unambiguous messages
 	// Checked before type errors to catch concurrency-specific issues
 	{
 		Category:       CategoryChannel,
 		Pattern:        regexp.MustCompile(`(?i)send on closed channel|close of closed channel|channel.*closed|receive on closed channel`),
-		Priority:       50,
+		Priority:       56,
 		BaseConfidence: 1.0,
 		AmbiguityHandlers: map[FailureCategory]ConfidenceAdjustment{
-			CategoryPanic:        {ReduceBaseBy: 0.1, Reason: "Channel operation causes panic, but is more specific"},
-			CategoryGoroutinePanic: {ReduceBaseBy: 0.15, Reason: "Channel errors often involve goroutines"},
+			CategoryPanic:          {ReduceBaseBy: 0.05, Reason: "Channel operation causes panic, but is more specific"},
+			CategoryGoroutinePanic: {ReduceBaseBy: 0.1, Reason: "Channel errors often involve goroutines"},
 		},
 	},
 
@@ -592,12 +617,12 @@ var categorizationRules = []CategorizationRule{
 	// Moved up to prevent "panic: interface conversion" from matching type patterns
 	{
 		Category:       CategoryPanic,
-		Pattern:        regexp.MustCompile(`(?i)\bpanic:|runtime panic|panic\(\)`),
+		Pattern:        regexp.MustCompile(`(?i)\bpanic:|runtime panic|panic\(\)|\bpanic in\b|runtime error`),
 		Subcategory:    "runtime_panic",
 		Priority:       50,
 		BaseConfidence: 1.0,
 		AmbiguityHandlers: map[FailureCategory]ConfidenceAdjustment{
-			CategoryTypeMismatch: {ReduceBaseBy: 0.2, Reason: "Panic about type conversion vs. type mismatch"},
+			CategoryTypeMismatch:   {ReduceBaseBy: 0.2, Reason: "Panic about type conversion vs. type mismatch"},
 			CategoryAssertionError: {ReduceBaseBy: 0.3, Reason: "Panic could appear in assertion message text"},
 		},
 	},
@@ -611,7 +636,7 @@ var categorizationRules = []CategorizationRule{
 		Priority:       45,
 		BaseConfidence: 0.9,
 		AmbiguityHandlers: map[FailureCategory]ConfidenceAdjustment{
-			CategoryPanic:        {ReduceBaseBy: 0.25, Reason: "Type conversion panic vs. type mismatch"},
+			CategoryPanic:          {ReduceBaseBy: 0.25, Reason: "Type conversion panic vs. type mismatch"},
 			CategoryAssertionError: {ReduceBaseBy: 0.35, Reason: "Type errors often appear in assertion messages"},
 		},
 	},
@@ -636,12 +661,12 @@ var categorizationRules = []CategorizationRule{
 	// Checked as a general category for file system and device I/O issues
 	{
 		Category:       CategoryIOError,
-		Pattern:        regexp.MustCompile(`(?i)no such file|directory.*not found|file not found|permission denied|i/o error|read.*failed|write.*failed`),
+		Pattern:        regexp.MustCompile(`(?i)no such file|directory.*not found|file not found|permission denied|i/o error|read.*failed|write.*failed|broken pipe`),
 		Priority:       35,
 		BaseConfidence: 0.9,
 		AmbiguityHandlers: map[FailureCategory]ConfidenceAdjustment{
 			CategoryHTTPError: {ReduceBaseBy: 0.2, Reason: "File I/O errors could be network-related"},
-			CategoryTimeout:  {ReduceBaseBy: 0.25, Reason: "I/O operations can timeout"},
+			CategoryTimeout:   {ReduceBaseBy: 0.25, Reason: "I/O operations can timeout"},
 		},
 	},
 
@@ -651,7 +676,7 @@ var categorizationRules = []CategorizationRule{
 	// Lower confidence because assertion-like patterns can appear in various contexts
 	{
 		Category:       CategoryAssertionError,
-		Pattern:        regexp.MustCompile(`(?i)assertion.*failed|expected.*but.*got|not equal|should.*be|want.*got|expected.*got|assert`),
+		Pattern:        regexp.MustCompile(`(?i)assertion.*failed|expected.*(?:but.*got|got|non-nil|to exist|value at|element at|type)|not equal|should.*be|want.*got|assert`),
 		Priority:       10,
 		BaseConfidence: 0.7,
 		// No ambiguity handlers needed - this is the fallback category
@@ -673,38 +698,40 @@ var categorizationRules = []CategorizationRule{
 //
 // Returns the categorized failure with reasoning explaining which pattern matched
 // and whether ambiguity was detected.
-func CategorizeFailure(failure TestFailure) CategorizedFailure {
+func CategorizeFailure(failure Failure) Category {
 	// Combine error message and stack trace for analysis
 	fullText := failure.ErrorMessage
 	if failure.StackTrace != "" {
 		fullText = fullText + "\n" + failure.StackTrace
 	}
 
-	// Sort rules by priority (highest first)
-	sortedRules := make([]CategorizationRule, len(categorizationRules))
-	copy(sortedRules, categorizationRules)
+	// Sort rules by priority (highest first). Keeping this explicit makes the
+	// result independent of the declaration order of categorizationRules.
+	sortedRules := sortedCategorizationRules()
 
-	// Find all matching patterns to detect ambiguity
-	var matchingRules []CategorizationRule
-	for _, rule := range sortedRules {
-		if rule.Pattern.MatchString(fullText) {
-			matchingRules = append(matchingRules, rule)
-		}
-	}
+	matchingRules := matchingCategorizationRules(fullText, sortedRules)
 
 	// If no patterns matched, categorize as unknown
 	if len(matchingRules) == 0 {
+		confidence := 0.0
+		if len(fullText) < 20 {
+			confidence = 0.05
+		}
 		return CategorizedFailure{
 			TestFailure: failure,
+			Type:        CategoryUnknown,
 			Category:    CategoryUnknown,
-			Confidence:  NewConfidence(0.0),
+			Confidence:  NewConfidence(confidence),
 			Uncertain:   true,
 			Reasoning:   "No categorization pattern matched; needs manual review",
 		}
 	}
 
-	// Primary category is the highest priority match
-	primaryRule := matchingRules[0]
+	// Primary category is the highest priority match. An explicit panic is the
+	// exception: when its message also reports a nil pointer, the panic is the
+	// primary failure event and takes precedence over the derived nil-pointer
+	// category.
+	primaryRule := primaryCategorizationRule(matchingRules)
 	confidence := primaryRule.BaseConfidence // Use float64 for calculations
 
 	// Build reasoning
@@ -713,9 +740,10 @@ func CategorizeFailure(failure TestFailure) CategorizedFailure {
 
 	// Check for ambiguity and adjust confidence
 	if len(matchingRules) > 1 {
-		ambiguousCategories := make([]FailureCategory, 0, len(matchingRules)-1)
-		for _, matched := range matchingRules[1:] {
-			ambiguousCategories = append(ambiguousCategories, matched.Category)
+		for _, matched := range matchingRules {
+			if matched.Category == primaryRule.Category {
+				continue
+			}
 
 			// Check if primary rule has ambiguity handler for this category
 			if adjustment, exists := primaryRule.AmbiguityHandlers[matched.Category]; exists {
@@ -745,15 +773,75 @@ func CategorizeFailure(failure TestFailure) CategorizedFailure {
 
 	// Convert to Confidence type with bounds validation
 	finalConfidence := NewConfidence(confidence)
+	subcategory := primaryRule.Subcategory
+	if primaryRule.Category == CategoryNilPointer &&
+		(strings.Contains(strings.ToLower(fullText), "setup") ||
+			strings.Contains(strings.ToLower(fullText), "mock") ||
+			strings.Contains(strings.ToLower(fullText), "fake")) {
+		subcategory = "test_setup"
+	}
 
 	return CategorizedFailure{
 		TestFailure: failure,
+		Type:        primaryRule.Category,
 		Category:    primaryRule.Category,
-		Subcategory: primaryRule.Subcategory,
+		Subcategory: subcategory,
 		Confidence:  finalConfidence,
 		Uncertain:   finalConfidence.IsUncertain(),
 		Reasoning:   reasoning,
 	}
+}
+
+func matchingCategorizationRules(fullText string, rules []CategorizationRule) []CategorizationRule {
+	matchingRules := make([]CategorizationRule, 0, len(rules))
+	for _, rule := range rules {
+		if rule.Pattern.MatchString(fullText) {
+			matchingRules = append(matchingRules, rule)
+		}
+	}
+
+	// A safe type assertion is deliberately checking its boolean result. Its
+	// wording should not also be treated as a test-framework assertion failure.
+	lowerText := strings.ToLower(fullText)
+	if strings.Contains(lowerText, "type assertion") && strings.Contains(lowerText, ", ok") {
+		matchingRules = removeCategory(matchingRules, CategoryAssertionError)
+	}
+
+	return matchingRules
+}
+
+func removeCategory(rules []CategorizationRule, category FailureCategory) []CategorizationRule {
+	filtered := rules[:0]
+	for _, rule := range rules {
+		if rule.Category != category {
+			filtered = append(filtered, rule)
+		}
+	}
+	return filtered
+}
+
+func primaryCategorizationRule(matchingRules []CategorizationRule) CategorizationRule {
+	primary := matchingRules[0]
+	if primary.Category != CategoryNilPointer {
+		return primary
+	}
+
+	for _, rule := range matchingRules {
+		if rule.Category == CategoryPanic {
+			return rule
+		}
+	}
+
+	return primary
+}
+
+func sortedCategorizationRules() []CategorizationRule {
+	rules := make([]CategorizationRule, len(categorizationRules))
+	copy(rules, categorizationRules)
+	sort.SliceStable(rules, func(i, j int) bool {
+		return rules[i].Priority > rules[j].Priority
+	})
+	return rules
 }
 
 // applyEdgeCaseAdjustments applies special confidence adjustments for known edge cases
@@ -797,9 +885,9 @@ func applyEdgeCaseAdjustments(fullText string, category FailureCategory, baseCon
 	}
 
 	// Edge case: Connection timeout with "dial tcp" - likely HTTP error
-	if strings.Contains(lowerText, "connection timeout") &&
-	   strings.Contains(lowerText, "dial tcp") &&
-	   category == CategoryTimeout {
+	if (strings.Contains(lowerText, "connection timeout") || strings.Contains(lowerText, "connection timed out")) &&
+		strings.Contains(lowerText, "dial") && strings.Contains(lowerText, "tcp") &&
+		category == CategoryTimeout {
 		// This is probably an HTTP error, not a general timeout
 		confidence -= 0.2
 		if confidence < 0.5 {
@@ -824,7 +912,7 @@ func applyEdgeCaseAdjustments(fullText string, category FailureCategory, baseCon
 
 	// NEW: Edge case: "nil pointer dereference" in testing context
 	if category == CategoryNilPointer && strings.Contains(lowerText, "test") &&
-	   (strings.Contains(lowerText, "mock") || strings.Contains(lowerText, "fake")) {
+		(strings.Contains(lowerText, "mock") || strings.Contains(lowerText, "fake")) {
 		// Nil pointer in test with mock/fake context suggests test setup issue - moderate confidence
 		confidence -= 0.1
 		if confidence < 0.8 {
@@ -870,7 +958,7 @@ func applyEdgeCaseAdjustments(fullText string, category FailureCategory, baseCon
 
 	// NEW: Edge case: HTTP error with specific status code in assertion
 	if category == CategoryHTTPError && strings.Contains(lowerText, "status code") &&
-	   (strings.Contains(lowerText, "expected") || strings.Contains(lowerText, "want")) {
+		(strings.Contains(lowerText, "expected") || strings.Contains(lowerText, "want")) {
 		// HTTP status code in assertion context - could be assertion error
 		confidence -= 0.2
 		if confidence < 0.6 {
@@ -1001,17 +1089,16 @@ func GetUncertainFailures(categorized []CategorizedFailure, threshold ...float64
 
 // GetMatchingCategoriesForFailure returns all categories that matched for a given failure
 // This is useful for analyzing why ambiguity occurred
-func GetMatchingCategoriesForFailure(failure TestFailure) []FailureCategory {
+func GetMatchingCategoriesForFailure(failure Failure) []FailureCategory {
 	fullText := failure.ErrorMessage
 	if failure.StackTrace != "" {
 		fullText = fullText + "\n" + failure.StackTrace
 	}
 
-	var matched []FailureCategory
-	for _, rule := range categorizationRules {
-		if rule.Pattern.MatchString(fullText) {
-			matched = append(matched, rule.Category)
-		}
+	matchingRules := matchingCategorizationRules(fullText, sortedCategorizationRules())
+	matched := make([]FailureCategory, 0, len(matchingRules))
+	for _, rule := range matchingRules {
+		matched = append(matched, rule.Category)
 	}
 
 	return matched
@@ -1122,7 +1209,7 @@ func ResolveAmbiguity(cat CategorizedFailure) CategorizedFailure {
 	lowerText := strings.ToLower(fullText)
 
 	// Resolution rule: If error mentions both HTTP and timeout, check for specific indicators
-	if cat.Category == CategoryTimeout && strings.Contains(lowerText, "dial tcp") {
+	if cat.Category == CategoryTimeout && strings.Contains(lowerText, "dial") && strings.Contains(lowerText, "tcp") {
 		// This is more likely an HTTP error
 		cat.Category = CategoryHTTPError
 		cat.Subcategory = "timeout"
@@ -1132,7 +1219,7 @@ func ResolveAmbiguity(cat CategorizedFailure) CategorizedFailure {
 
 	// Resolution rule: If panic mentions interface conversion, could be type mismatch
 	if cat.Category == CategoryPanic && strings.Contains(lowerText, "interface conversion") &&
-	   !strings.Contains(lowerText, "panic:") && !strings.Contains(lowerText, "runtime panic") {
+		!strings.Contains(lowerText, "panic:") && !strings.Contains(lowerText, "runtime panic") {
 		// This might be a type mismatch, not a runtime panic
 		cat.Category = CategoryTypeMismatch
 		cat.Reasoning += "\n  Ambiguity resolution: interface conversion without explicit panic marker suggests type mismatch"
@@ -1141,39 +1228,41 @@ func ResolveAmbiguity(cat CategorizedFailure) CategorizedFailure {
 
 	// Resolution rule: If nil pointer appears in test setup context
 	if cat.Category == CategoryNilPointer && (strings.Contains(lowerText, "setup") ||
-	   strings.Contains(lowerText, "initialize") || strings.Contains(lowerText, "before all")) {
+		strings.Contains(lowerText, "initialize") || strings.Contains(lowerText, "before all")) {
 		cat.Subcategory = "test_setup"
 		cat.Reasoning += "\n  Ambiguity resolution: nil pointer in test setup context"
 	}
+
+	cat.Type = cat.Category
 
 	return cat
 }
 
 // CategorizationStats provides statistics about categorized failures
 type CategorizationStats struct {
-	Total          int                         `json:"total"`
-	ByCategory     map[FailureCategory]int    `json:"by_category"`
-	LowConfidence  int                         `json:"low_confidence"`
-	AmbiguousCases int                         `json:"ambiguous_cases"` // Count of failures with multiple matching patterns
+	Total          int                     `json:"total"`
+	ByCategory     map[FailureCategory]int `json:"by_category"`
+	LowConfidence  int                     `json:"low_confidence"`
+	AmbiguousCases int                     `json:"ambiguous_cases"` // Count of failures with multiple matching patterns
 }
 
 // GetCategoryDescription returns a human-readable description for a category
 func GetCategoryDescription(cat FailureCategory) string {
 	descriptions := map[FailureCategory]string{
-		CategoryAssertionError:      "Assertion or expectation failure (expected vs actual mismatch)",
-		CategoryTimeout:             "Test exceeded timeout limit or context deadline",
-		CategoryPanic:               "Runtime panic occurred",
-		CategoryDataRace:            "Data race detected by race detector",
-		CategoryNilPointer:          "Nil pointer dereference",
-		CategoryTypeMismatch:        "Type conversion or assertion failure",
-		CategoryIndexOutOfRange:     "Array or slice index out of bounds",
-		CategoryMapKey:              "Map key access error",
-		CategoryChannel:             "Channel operation error (closed channel, etc.)",
-		CategoryGoroutinePanic:      "Goroutine panic or leak",
-		CategoryDeadlock:            "Potential deadlock detected",
-		CategoryIOError:             "I/O operation failed (file, network, etc.)",
-		CategoryHTTPError:           "HTTP/network communication error",
-		CategoryUnknown:             "Unknown failure type - requires manual analysis",
+		CategoryAssertionError:  "Assertion or expectation failure (expected vs actual mismatch)",
+		CategoryTimeout:         "Test exceeded timeout limit or context deadline",
+		CategoryPanic:           "Runtime panic occurred",
+		CategoryDataRace:        "Data race detected by race detector",
+		CategoryNilPointer:      "Nil pointer dereference",
+		CategoryTypeMismatch:    "Type conversion or assertion failure",
+		CategoryIndexOutOfRange: "Array or slice index out of bounds",
+		CategoryMapKey:          "Map key access error",
+		CategoryChannel:         "Channel operation error (closed channel, etc.)",
+		CategoryGoroutinePanic:  "Goroutine panic or leak",
+		CategoryDeadlock:        "Potential deadlock detected",
+		CategoryIOError:         "I/O operation failed (file, network, etc.)",
+		CategoryHTTPError:       "HTTP/network communication error",
+		CategoryUnknown:         "Unknown failure type - requires manual analysis",
 	}
 
 	if desc, ok := descriptions[cat]; ok {

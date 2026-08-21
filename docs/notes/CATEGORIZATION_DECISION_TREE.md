@@ -56,7 +56,7 @@ The categorization system uses a priority-based pattern matching approach to cla
 - **Confidence:** 0.95 (95%)
 - **Reasoning:** Map errors are specific but key-related phrasing can vary
 
-### Step 7: Channel Errors (Priority: 50)
+### Step 7: Channel Errors (Priority: 56)
 **Seventh check:** Is this a channel operation error?
 
 - **Pattern:** `send on closed channel`, `close of closed channel`, `channel.*closed`, `receive on closed channel`
@@ -188,7 +188,9 @@ If an error contains both "dial tcp" and "connection refused":
 - `panic("something went wrong")`
 
 **Edge cases:**
-- Specific panic types (nil pointer, index out of range) checked before general panic
+- Specific panic types (nil pointer, index out of range) are checked before general
+  panic, except that an explicit `panic:` marker takes priority when it accompanies
+  a nil pointer message
 - Goroutine panics categorized separately as `CategoryGoroutinePanic`
 - Confidence 1.0 due to explicit panic markers
 

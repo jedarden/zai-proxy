@@ -300,14 +300,14 @@ func TestGetUncertainFailures(t *testing.T) {
 
 	// Test default threshold (0.7)
 	uncertain := GetUncertainFailures(categorized)
-	if len(uncertain) != 2 {
-		t.Errorf("GetUncertainFailures() returned %d items, want 2", len(uncertain))
+	if len(uncertain) != 3 {
+		t.Errorf("GetUncertainFailures() returned %d items, want 3", len(uncertain))
 	}
 
 	// Test custom threshold (0.5)
 	uncertain = GetUncertainFailures(categorized, 0.5)
-	if len(uncertain) != 1 {
-		t.Errorf("GetUncertainFailures(threshold=0.5) returned %d items, want 1", len(uncertain))
+	if len(uncertain) != 2 {
+		t.Errorf("GetUncertainFailures(threshold=0.5) returned %d items, want 2", len(uncertain))
 	}
 }
 
@@ -343,7 +343,7 @@ func TestGetMatchingCategoriesForFailure(t *testing.T) {
 // TestGetConfidenceLevel tests human-readable confidence levels
 func TestGetConfidenceLevel(t *testing.T) {
 	testCases := []struct {
-		confidence  float64
+		confidence    float64
 		expectedLevel string
 	}{
 		{1.0, "Very High"},
@@ -373,10 +373,10 @@ func TestGetConfidenceLevel(t *testing.T) {
 // TestNeedsManualReview tests the manual review detection logic
 func TestNeedsManualReview(t *testing.T) {
 	testCases := []struct {
-		name          string
-		confidence    float64
-		category      FailureCategory
-		needsReview   bool
+		name        string
+		confidence  float64
+		category    FailureCategory
+		needsReview bool
 	}{
 		{"high confidence assertion", 0.9, CategoryAssertionError, false},
 		{"low confidence assertion", 0.4, CategoryAssertionError, true},
@@ -404,57 +404,57 @@ func TestNeedsManualReview(t *testing.T) {
 // TestGetSuggestedSubcategory tests subcategory suggestion logic
 func TestGetSuggestedSubcategory(t *testing.T) {
 	testCases := []struct {
-		name          string
-		errorMsg      string
-		category      FailureCategory
+		name           string
+		errorMsg       string
+		category       FailureCategory
 		expectedSubcat string
 	}{
 		{
-			name:          "HTTP timeout",
-			errorMsg:      "dial tcp: connection timeout",
-			category:      CategoryHTTPError,
+			name:           "HTTP timeout",
+			errorMsg:       "dial tcp: connection timeout",
+			category:       CategoryHTTPError,
 			expectedSubcat: "timeout",
 		},
 		{
-			name:          "HTTP connection refused",
-			errorMsg:      "dial tcp 127.0.0.1:8080: connection refused",
-			category:      CategoryHTTPError,
+			name:           "HTTP connection refused",
+			errorMsg:       "dial tcp 127.0.0.1:8080: connection refused",
+			category:       CategoryHTTPError,
 			expectedSubcat: "connection",
 		},
 		{
-			name:          "HTTP status code",
-			errorMsg:      "HTTP status code 500",
-			category:      CategoryHTTPError,
+			name:           "HTTP status code",
+			errorMsg:       "HTTP status code 500",
+			category:       CategoryHTTPError,
 			expectedSubcat: "status",
 		},
 		{
-			name:          "I/O permission denied",
-			errorMsg:      "permission denied reading file",
-			category:      CategoryIOError,
+			name:           "I/O permission denied",
+			errorMsg:       "permission denied reading file",
+			category:       CategoryIOError,
 			expectedSubcat: "permission",
 		},
 		{
-			name:          "I/O file not found",
-			errorMsg:      "no such file or directory",
-			category:      CategoryIOError,
+			name:           "I/O file not found",
+			errorMsg:       "no such file or directory",
+			category:       CategoryIOError,
 			expectedSubcat: "not_found",
 		},
 		{
-			name:          "Panic nil pointer",
-			errorMsg:      "panic: nil pointer dereference",
-			category:      CategoryPanic,
+			name:           "Panic nil pointer",
+			errorMsg:       "panic: nil pointer dereference",
+			category:       CategoryPanic,
 			expectedSubcat: "nil_pointer",
 		},
 		{
-			name:          "Panic index bounds",
-			errorMsg:      "panic: index out of range",
-			category:      CategoryPanic,
+			name:           "Panic index bounds",
+			errorMsg:       "panic: index out of range",
+			category:       CategoryPanic,
 			expectedSubcat: "bounds",
 		},
 		{
-			name:          "Timeout context",
-			errorMsg:      "context deadline exceeded",
-			category:      CategoryTimeout,
+			name:           "Timeout context",
+			errorMsg:       "context deadline exceeded",
+			category:       CategoryTimeout,
 			expectedSubcat: "context",
 		},
 	}
@@ -479,25 +479,25 @@ func TestGetSuggestedSubcategory(t *testing.T) {
 // TestResolveAmbiguity tests the ambiguity resolution logic
 func TestResolveAmbiguity(t *testing.T) {
 	testCases := []struct {
-		name            string
-		errorMsg        string
-		initialCategory FailureCategory
+		name             string
+		errorMsg         string
+		initialCategory  FailureCategory
 		expectedCategory FailureCategory
-		checkReasoning  string
+		checkReasoning   string
 	}{
 		{
-			name:            "timeout with dial tcp",
-			errorMsg:        "dial tcp 127.0.0.1:8080: connection timeout",
-			initialCategory: CategoryTimeout,
+			name:             "timeout with dial tcp",
+			errorMsg:         "dial tcp 127.0.0.1:8080: connection timeout",
+			initialCategory:  CategoryTimeout,
 			expectedCategory: CategoryHTTPError,
-			checkReasoning:  "Ambiguity resolution",
+			checkReasoning:   "Ambiguity resolution",
 		},
 		{
-			name:            "interface conversion without panic",
-			errorMsg:        "interface conversion: interface {} is string, not int",
-			initialCategory: CategoryPanic,
+			name:             "interface conversion without panic",
+			errorMsg:         "interface conversion: interface {} is string, not int",
+			initialCategory:  CategoryPanic,
 			expectedCategory: CategoryTypeMismatch,
-			checkReasoning:  "Ambiguity resolution",
+			checkReasoning:   "Ambiguity resolution",
 		},
 	}
 
@@ -536,96 +536,96 @@ func TestResolveAmbiguity(t *testing.T) {
 // of advanced edge cases with detailed validation
 func TestCategorizeFailure_ComprehensiveAdvancedEdgeCases(t *testing.T) {
 	testCases := []struct {
-		name              string
-		errorMsg          string
-		stackTrace        string
-		expectedCat       FailureCategory
-		minConfidence     float64
-		maxConfidence     float64
+		name                string
+		errorMsg            string
+		stackTrace          string
+		expectedCat         FailureCategory
+		minConfidence       float64
+		maxConfidence       float64
 		shouldHaveAmbiguity bool
-		expectedSubcat    string
+		expectedSubcat      string
 	}{
 		{
-			name:        "context cancellation in timeout test",
-			errorMsg:    "context canceled during test execution",
-			expectedCat: CategoryTimeout,
-			minConfidence: 0.95,
-			maxConfidence: 1.0,
+			name:                "context cancellation in timeout test",
+			errorMsg:            "context canceled during test execution",
+			expectedCat:         CategoryTimeout,
+			minConfidence:       0.95,
+			maxConfidence:       1.0,
 			shouldHaveAmbiguity: false,
 		},
 		{
-			name:        "close of closed channel in concurrent test",
-			errorMsg:    "close of closed channel in goroutine 2",
-			stackTrace:  "goroutine 2 [running]:",
-			expectedCat: CategoryChannel,
-			minConfidence: 0.8,
-			maxConfidence: 0.95,
+			name:                "close of closed channel in concurrent test",
+			errorMsg:            "close of closed channel in goroutine 2",
+			stackTrace:          "goroutine 2 [running]:",
+			expectedCat:         CategoryChannel,
+			minConfidence:       0.8,
+			maxConfidence:       0.95,
 			shouldHaveAmbiguity: true,
 		},
 		{
-			name:        "nil pointer in mock setup",
-			errorMsg:    "nil pointer dereference in test mock setup",
-			expectedCat: CategoryNilPointer,
-			minConfidence: 0.7,
-			maxConfidence: 0.9,
+			name:                "nil pointer in mock setup",
+			errorMsg:            "nil pointer dereference in test mock setup",
+			expectedCat:         CategoryNilPointer,
+			minConfidence:       0.7,
+			maxConfidence:       0.9,
 			shouldHaveAmbiguity: false,
-			expectedSubcat: "test_setup",
+			expectedSubcat:      "test_setup",
 		},
 		{
-			name:        "safe type assertion failure",
-			errorMsg:    "type assertion failed in safe check: value.(int), ok = false",
-			expectedCat: CategoryTypeMismatch,
-			minConfidence: 0.95,
-			maxConfidence: 1.0,
-			shouldHaveAmbiguity: false,
-		},
-		{
-			name:        "slice bounds with specific range",
-			errorMsg:    "slice bounds out of range [10:15] with length 5",
-			expectedCat: CategoryIndexOutOfRange,
-			minConfidence: 0.95,
-			maxConfidence: 1.0,
+			name:                "safe type assertion failure",
+			errorMsg:            "type assertion failed in safe check: value.(int), ok = false",
+			expectedCat:         CategoryTypeMismatch,
+			minConfidence:       0.95,
+			maxConfidence:       1.0,
 			shouldHaveAmbiguity: false,
 		},
 		{
-			name:        "multiple goroutines with panics",
-			errorMsg:    "panic in goroutine 1, panic in goroutine 2, panic in goroutine 3",
-			stackTrace:  "goroutine 1 [running]:\ngoroutine 2 [running]:\ngoroutine 3 [running]:",
-			expectedCat: CategoryGoroutinePanic,
-			minConfidence: 0.7,
-			maxConfidence: 0.85,
+			name:                "slice bounds with specific range",
+			errorMsg:            "slice bounds out of range [10:15] with length 5",
+			expectedCat:         CategoryIndexOutOfRange,
+			minConfidence:       0.95,
+			maxConfidence:       1.0,
 			shouldHaveAmbiguity: false,
 		},
 		{
-			name:        "channel deadlock detected",
-			errorMsg:    "potential deadlock detected in channel operation between goroutines",
-			expectedCat: CategoryDeadlock,
-			minConfidence: 0.95,
-			maxConfidence: 1.0,
+			name:                "multiple goroutines with panics",
+			errorMsg:            "panic in goroutine 1, panic in goroutine 2, panic in goroutine 3",
+			stackTrace:          "goroutine 1 [running]:\ngoroutine 2 [running]:\ngoroutine 3 [running]:",
+			expectedCat:         CategoryGoroutinePanic,
+			minConfidence:       0.7,
+			maxConfidence:       0.85,
+			shouldHaveAmbiguity: true,
+		},
+		{
+			name:                "channel deadlock detected",
+			errorMsg:            "potential deadlock detected in channel operation between goroutines",
+			expectedCat:         CategoryDeadlock,
+			minConfidence:       0.95,
+			maxConfidence:       1.0,
 			shouldHaveAmbiguity: false,
 		},
 		{
-			name:        "broken pipe in I/O operation",
-			errorMsg:    "write operation failed: broken pipe",
-			expectedCat: CategoryIOError,
-			minConfidence: 0.7,
-			maxConfidence: 0.9,
+			name:                "broken pipe in I/O operation",
+			errorMsg:            "write operation failed: broken pipe",
+			expectedCat:         CategoryIOError,
+			minConfidence:       0.7,
+			maxConfidence:       0.9,
 			shouldHaveAmbiguity: false,
 		},
 		{
-			name:        "zero map key in concurrent access",
-			errorMsg:    "zero map key in map access during iteration",
-			expectedCat: CategoryMapKey,
-			minConfidence: 0.95,
-			maxConfidence: 1.0,
+			name:                "zero map key in concurrent access",
+			errorMsg:            "zero map key in map access during iteration",
+			expectedCat:         CategoryMapKey,
+			minConfidence:       0.95,
+			maxConfidence:       1.0,
 			shouldHaveAmbiguity: false,
 		},
 		{
-			name:        "short unknown error message",
-			errorMsg:    "unknown error",
-			expectedCat: CategoryUnknown,
-			minConfidence: 0.0,
-			maxConfidence: 0.1,
+			name:                "short unknown error message",
+			errorMsg:            "unknown error",
+			expectedCat:         CategoryUnknown,
+			minConfidence:       0.0,
+			maxConfidence:       0.1,
 			shouldHaveAmbiguity: false,
 		},
 	}
@@ -689,7 +689,7 @@ func TestCategorizeFailure_ResolutionIntegration(t *testing.T) {
 	resolved := ResolveAmbiguity(cat)
 
 	// Resolution should maintain or improve categorization
-	if resolved.Confidence < cat.Confidence - 0.1 {
+	if resolved.Confidence < cat.Confidence-0.1 {
 		t.Errorf("Resolution reduced confidence too much: %.2f -> %.2f", cat.Confidence, resolved.Confidence)
 	}
 

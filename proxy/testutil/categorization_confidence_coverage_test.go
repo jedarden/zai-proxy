@@ -119,7 +119,7 @@ func TestGetHighConfidenceFailures(t *testing.T) {
 		{
 			name:      "exact threshold match (0.85)",
 			threshold: 0.85,
-			expected:  1, // Only test1 (test2 is exactly 0.85, should match with >=)
+			expected:  2, // test1 and test2 (the threshold is inclusive)
 		},
 	}
 
@@ -298,177 +298,177 @@ func TestGetSuggestedSubcategoryComprehensive(t *testing.T) {
 
 		// CategoryHTTPError paths
 		{
-			name:     "HTTP error with timeout keyword",
-			category: CategoryHTTPError,
-			errorMsg: "request timeout after 30 seconds",
-			expected: "timeout",
+			name:        "HTTP error with timeout keyword",
+			category:    CategoryHTTPError,
+			errorMsg:    "request timeout after 30 seconds",
+			expected:    "timeout",
 			description: "Tests HTTP timeout detection via 'timeout' keyword",
 		},
 		{
-			name:     "HTTP error with deadline keyword",
-			category: CategoryHTTPError,
-			errorMsg: "context deadline exceeded",
-			expected: "timeout",
+			name:        "HTTP error with deadline keyword",
+			category:    CategoryHTTPError,
+			errorMsg:    "context deadline exceeded",
+			expected:    "timeout",
 			description: "Tests HTTP timeout detection via 'deadline' keyword",
 		},
 		{
-			name:     "HTTP error with refused keyword",
-			category: CategoryHTTPError,
-			errorMsg: "connection refused",
-			expected: "connection",
+			name:        "HTTP error with refused keyword",
+			category:    CategoryHTTPError,
+			errorMsg:    "connection refused",
+			expected:    "connection",
 			description: "Tests HTTP connection error detection via 'refused' keyword",
 		},
 		{
-			name:     "HTTP error with reset keyword",
-			category: CategoryHTTPError,
-			errorMsg: "connection reset by peer",
-			expected: "connection",
+			name:        "HTTP error with reset keyword",
+			category:    CategoryHTTPError,
+			errorMsg:    "connection reset by peer",
+			expected:    "connection",
 			description: "Tests HTTP connection error detection via 'reset' keyword",
 		},
 		{
-			name:     "HTTP error with status code",
-			category: CategoryHTTPError,
-			errorMsg: "server returned status code 500",
-			expected: "status",
+			name:        "HTTP error with status code",
+			category:    CategoryHTTPError,
+			errorMsg:    "server returned status code 500",
+			expected:    "status",
 			description: "Tests HTTP status error detection via 'status code' phrase",
 		},
 		{
-			name:     "HTTP error with 500 code",
-			category: CategoryHTTPError,
-			errorMsg: "internal server error 500",
-			expected: "status",
+			name:        "HTTP error with 500 code",
+			category:    CategoryHTTPError,
+			errorMsg:    "internal server error 500",
+			expected:    "status",
 			description: "Tests HTTP status error detection via '500' code",
 		},
 		{
-			name:     "HTTP error with 404 code",
-			category: CategoryHTTPError,
-			errorMsg: "page not found 404",
-			expected: "status",
+			name:        "HTTP error with 404 code",
+			category:    CategoryHTTPError,
+			errorMsg:    "page not found 404",
+			expected:    "status",
 			description: "Tests HTTP status error detection via '404' code",
 		},
 		{
-			name:     "HTTP error default network",
-			category: CategoryHTTPError,
-			errorMsg: "network unreachable",
-			expected: "network",
+			name:        "HTTP error default network",
+			category:    CategoryHTTPError,
+			errorMsg:    "network unreachable",
+			expected:    "network",
 			description: "Tests default HTTP network subcategory when no specific pattern matches",
 		},
 
 		// CategoryIOError paths
 		{
-			name:     "IO error with permission keyword",
-			category: CategoryIOError,
-			errorMsg: "permission denied",
-			expected: "permission",
+			name:        "IO error with permission keyword",
+			category:    CategoryIOError,
+			errorMsg:    "permission denied",
+			expected:    "permission",
 			description: "Tests IO permission error detection",
 		},
 		{
-			name:     "IO error with no such file",
-			category: CategoryIOError,
-			errorMsg: "no such file or directory",
-			expected: "not_found",
+			name:        "IO error with no such file",
+			category:    CategoryIOError,
+			errorMsg:    "no such file or directory",
+			expected:    "not_found",
 			description: "Tests IO file not found error via 'no such file' phrase",
 		},
 		{
-			name:     "IO error with not found keyword",
-			category: CategoryIOError,
-			errorMsg: "file not found",
-			expected: "not_found",
+			name:        "IO error with not found keyword",
+			category:    CategoryIOError,
+			errorMsg:    "file not found",
+			expected:    "not_found",
 			description: "Tests IO file not found error via 'not found' phrase",
 		},
 		{
-			name:     "IO error with broken pipe",
-			category: CategoryIOError,
-			errorMsg: "broken pipe",
-			expected: "connection",
+			name:        "IO error with broken pipe",
+			category:    CategoryIOError,
+			errorMsg:    "broken pipe",
+			expected:    "connection",
 			description: "Tests IO connection error detection via 'broken pipe' phrase",
 		},
 		{
-			name:     "IO error with connection keyword",
-			category: CategoryIOError,
-			errorMsg: "connection lost during write",
-			expected: "connection",
+			name:        "IO error with connection keyword",
+			category:    CategoryIOError,
+			errorMsg:    "connection lost during write",
+			expected:    "connection",
 			description: "Tests IO connection error detection via 'connection' keyword",
 		},
 		{
-			name:     "IO error default filesystem",
-			category: CategoryIOError,
-			errorMsg: "disk full",
-			expected: "filesystem",
+			name:        "IO error default filesystem",
+			category:    CategoryIOError,
+			errorMsg:    "disk full",
+			expected:    "filesystem",
 			description: "Tests default IO filesystem subcategory when no specific pattern matches",
 		},
 
 		// CategoryPanic paths
 		{
-			name:     "Panic with nil pointer",
-			category: CategoryPanic,
-			errorMsg: "panic: nil pointer dereference",
-			expected: "nil_pointer",
+			name:        "Panic with nil pointer",
+			category:    CategoryPanic,
+			errorMsg:    "panic: nil pointer dereference",
+			expected:    "nil_pointer",
 			description: "Tests panic nil pointer subcategory detection",
 		},
 		{
-			name:     "Panic with index keyword",
-			category: CategoryPanic,
-			errorMsg: "panic: index out of range",
-			expected: "bounds",
+			name:        "Panic with index keyword",
+			category:    CategoryPanic,
+			errorMsg:    "panic: index out of range",
+			expected:    "bounds",
 			description: "Tests panic bounds error detection via 'index' keyword",
 		},
 		{
-			name:     "Panic with slice keyword",
-			category: CategoryPanic,
-			errorMsg: "panic: slice bounds out of range",
-			expected: "bounds",
+			name:        "Panic with slice keyword",
+			category:    CategoryPanic,
+			errorMsg:    "panic: slice bounds out of range",
+			expected:    "bounds",
 			description: "Tests panic bounds error detection via 'slice' keyword",
 		},
 		{
-			name:     "Panic with bounds keyword",
-			category: CategoryPanic,
-			errorMsg: "panic: array bounds error",
-			expected: "bounds",
+			name:        "Panic with bounds keyword",
+			category:    CategoryPanic,
+			errorMsg:    "panic: array bounds error",
+			expected:    "bounds",
 			description: "Tests panic bounds error detection via 'bounds' keyword",
 		},
 		{
-			name:     "Panic with interface keyword",
-			category: CategoryPanic,
-			errorMsg: "panic: interface conversion",
-			expected: "type",
+			name:        "Panic with interface keyword",
+			category:    CategoryPanic,
+			errorMsg:    "panic: interface conversion",
+			expected:    "type",
 			description: "Tests panic type error detection via 'interface' keyword",
 		},
 		{
-			name:     "Panic with conversion keyword",
-			category: CategoryPanic,
-			errorMsg: "panic: type conversion error",
-			expected: "type",
+			name:        "Panic with conversion keyword",
+			category:    CategoryPanic,
+			errorMsg:    "panic: type conversion error",
+			expected:    "type",
 			description: "Tests panic type error detection via 'conversion' keyword",
 		},
 		{
-			name:     "Panic default runtime",
-			category: CategoryPanic,
-			errorMsg: "panic: runtime error",
-			expected: "runtime",
+			name:        "Panic default runtime",
+			category:    CategoryPanic,
+			errorMsg:    "panic: runtime error",
+			expected:    "runtime",
 			description: "Tests default panic runtime subcategory when no specific pattern matches",
 		},
 
 		// CategoryTimeout paths
 		{
-			name:     "Timeout with context keyword",
-			category: CategoryTimeout,
-			errorMsg: "context deadline exceeded",
-			expected: "context",
+			name:        "Timeout with context keyword",
+			category:    CategoryTimeout,
+			errorMsg:    "context deadline exceeded",
+			expected:    "context",
 			description: "Tests timeout context subcategory detection",
 		},
 		{
-			name:     "Timeout with test keyword",
-			category: CategoryTimeout,
-			errorMsg: "test timeout after 5s",
-			expected: "test",
+			name:        "Timeout with test keyword",
+			category:    CategoryTimeout,
+			errorMsg:    "test timeout after 5s",
+			expected:    "test",
 			description: "Tests timeout test subcategory detection",
 		},
 		{
-			name:     "Timeout default operation",
-			category: CategoryTimeout,
-			errorMsg: "operation timed out",
-			expected: "operation",
+			name:        "Timeout default operation",
+			category:    CategoryTimeout,
+			errorMsg:    "operation timed out",
+			expected:    "operation",
 			description: "Tests default timeout operation subcategory when no specific pattern matches",
 		},
 
@@ -484,10 +484,10 @@ func TestGetSuggestedSubcategoryComprehensive(t *testing.T) {
 
 		// Default case for unknown categories
 		{
-			name:     "unknown category returns empty",
-			category: CategoryDataRace,
-			errorMsg: "data race detected",
-			expected: "",
+			name:        "unknown category returns empty",
+			category:    CategoryDataRace,
+			errorMsg:    "data race detected",
+			expected:    "",
 			description: "Tests default case for unsupported categories returns empty string",
 		},
 	}
@@ -546,9 +546,9 @@ func TestResolveAmbiguityCoverage(t *testing.T) {
 				TestFailure: TestFailure{
 					ErrorMessage: "timeout: operation timed out",
 				},
-				Category:    CategoryTimeout,
-				Confidence:  NewConfidence(0.95),
-				Reasoning:   "Single pattern match",
+				Category:   CategoryTimeout,
+				Confidence: NewConfidence(0.95),
+				Reasoning:  "Single pattern match",
 			},
 			expectCategory: CategoryTimeout,
 			expectSubcat:   "",
@@ -559,9 +559,9 @@ func TestResolveAmbiguityCoverage(t *testing.T) {
 				TestFailure: TestFailure{
 					ErrorMessage: "connection timeout dialing tcp",
 				},
-				Category:    CategoryTimeout,
-				Confidence:  NewConfidence(0.7),
-				Reasoning:   "Ambiguity detected: also matches 'http_error'",
+				Category:   CategoryTimeout,
+				Confidence: NewConfidence(0.7),
+				Reasoning:  "Ambiguity detected: also matches 'http_error'",
 			},
 			expectCategory: CategoryHTTPError,
 			expectSubcat:   "timeout",
@@ -573,9 +573,9 @@ func TestResolveAmbiguityCoverage(t *testing.T) {
 					ErrorMessage: "interface conversion error",
 					StackTrace:   "some stack trace",
 				},
-				Category:    CategoryPanic,
-				Confidence:  NewConfidence(0.75),
-				Reasoning:   "Ambiguity detected: also matches 'type_mismatch'",
+				Category:   CategoryPanic,
+				Confidence: NewConfidence(0.75),
+				Reasoning:  "Ambiguity detected: also matches 'type_mismatch'",
 			},
 			expectCategory: CategoryTypeMismatch,
 			expectSubcat:   "",
@@ -586,9 +586,9 @@ func TestResolveAmbiguityCoverage(t *testing.T) {
 				TestFailure: TestFailure{
 					ErrorMessage: "nil pointer dereference in before all setup",
 				},
-				Category:    CategoryNilPointer,
-				Confidence:  NewConfidence(0.85),
-				Reasoning:   "Ambiguity detected: also matches 'panic'",
+				Category:   CategoryNilPointer,
+				Confidence: NewConfidence(0.85),
+				Reasoning:  "Ambiguity detected: also matches 'panic'",
 			},
 			expectCategory: CategoryNilPointer,
 			expectSubcat:   "test_setup",
@@ -599,9 +599,9 @@ func TestResolveAmbiguityCoverage(t *testing.T) {
 				TestFailure: TestFailure{
 					ErrorMessage: "context deadline exceeded",
 				},
-				Category:    CategoryTimeout,
-				Confidence:  NewConfidence(0.7),
-				Reasoning:   "Ambiguity detected: also matches 'http_error'",
+				Category:   CategoryTimeout,
+				Confidence: NewConfidence(0.7),
+				Reasoning:  "Ambiguity detected: also matches 'http_error'",
 			},
 			expectCategory: CategoryTimeout,
 			expectSubcat:   "",
@@ -629,9 +629,9 @@ func TestResolveAmbiguityCoverage(t *testing.T) {
 			TestFailure: TestFailure{
 				ErrorMessage: "timeout: operation timed out",
 			},
-			Category:    CategoryTimeout,
-			Confidence:  NewConfidence(0.95),
-			Reasoning:   "Single pattern match, no ambiguity",
+			Category:   CategoryTimeout,
+			Confidence: NewConfidence(0.95),
+			Reasoning:  "Single pattern match, no ambiguity",
 		}
 		result := ResolveAmbiguity(input)
 		if result.Category != input.Category {
@@ -711,7 +711,7 @@ func TestCategorizeFailureEdgeCases(t *testing.T) {
 				ErrorMessage: "panic: interface conversion error while making HTTP request with timeout that resulted in nil pointer dereference",
 			},
 			expectCategory:  CategoryPanic, // Highest priority match
-			expectUncertain: true, // Multiple patterns = uncertain
+			expectUncertain: true,          // Multiple patterns = uncertain
 			minConfidence:   0.5,
 			maxConfidence:   0.95,
 		},
@@ -730,10 +730,10 @@ func TestCategorizeFailureEdgeCases(t *testing.T) {
 			failure: TestFailure{
 				ErrorMessage: "runtime error: invalid memory address",
 			},
-			expectCategory:  CategoryAssertionError, // Fallback
-			expectUncertain: true,
-			minConfidence:   0.6,
-			maxConfidence:   0.8,
+			expectCategory:  CategoryPanic,
+			expectUncertain: false,
+			minConfidence:   0.9,
+			maxConfidence:   1.0,
 		},
 	}
 
@@ -758,13 +758,13 @@ func TestCategorizeFailureEdgeCases(t *testing.T) {
 // This tests the private applyEdgeCaseAdjustments function directly since it's only accessible within the package
 func TestApplyEdgeCaseAdjustmentsComprehensive(t *testing.T) {
 	tests := []struct {
-		name         string
-		fullText     string
-		category     FailureCategory
-		baseConf     float64
-		minExpected  float64
-		maxExpected  float64
-		description  string
+		name        string
+		fullText    string
+		category    FailureCategory
+		baseConf    float64
+		minExpected float64
+		maxExpected float64
+		description string
 	}{
 		// Panic with interface conversion
 		{
