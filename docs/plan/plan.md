@@ -280,7 +280,7 @@ agents can track their own consumption without querying the dashboard.
 | `zai_proxy_rate_limit_adjustments_total` | `direction={increase,decrease,probe}`, `variant` | Algorithm decisions |
 | `zai_proxy_rate_limit_rejections_total` | `variant` | Requests rejected (capacity) |
 | `zai_proxy_retry_attempts_total` | `reason={retry,network_error,429,truncated_response,empty_streaming}`, `variant` | Retry causes |
-| `zai_proxy_upstream_errors_total` | `error_type={422,429,truncated_response,empty_streaming,upstream_connection,write_error,read_error,request_creation}`, `variant` | Error taxonomy |
+| `zai_proxy_upstream_errors_total` | `error_type={HTTP status (for example 400,422,429,500),truncated_response,empty_streaming,upstream_connection,write_error,read_error,request_creation}`, `variant` | Error taxonomy |
 
 ### Error classification
 

@@ -14,17 +14,17 @@ import (
 
 // ProxyHandler handles HTTP requests to the Z.AI upstream with retry logic and rate limiting.
 type ProxyHandler struct {
-	apiKey             string
-	targetURL          string
-	maxRetries         int
-	maxWorkers         int64
-	deploymentVariant  string
-	tokenCounter       TokenCounter
-	tokenizerModel     string
-	rateLimiter        *AdaptiveRateLimiter
-	client             *http.Client
-	currentRequests    atomic.Int64
-	mu                 sync.RWMutex
+	apiKey            string
+	targetURL         string
+	maxRetries        int
+	maxWorkers        int64
+	deploymentVariant string
+	tokenCounter      TokenCounter
+	tokenizerModel    string
+	rateLimiter       *AdaptiveRateLimiter
+	client            *http.Client
+	currentRequests   atomic.Int64
+	mu                sync.RWMutex
 }
 
 // NewProxyHandler creates a new proxy handler with the given configuration.
@@ -207,6 +207,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Handle 429 Rate Limit
 		if resp.StatusCode == 429 {
 			resp.Body.Close()
+			upstreamErrors.WithLabelValues("429", h.deploymentVariant).Inc()
 			h.rateLimiter.Record429()
 
 			// Check Retry-After header
@@ -244,10 +245,23 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			upstreamErrors.WithLabelValues("422", h.deploymentVariant).Inc()
 			requestsTotal.WithLabelValues(r.Method, r.URL.Path, "422", h.deploymentVariant).Inc()
 			requestDuration.WithLabelValues(r.Method, r.URL.Path, "422", h.deploymentVariant).Observe(time.Since(start).Seconds())
+			for key, values := range resp.Header {
+				for _, value := range values {
+					w.Header().Add(key, value)
+				}
+			}
+			w.Header().Del("Content-Length")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			w.Write(respBody)
 			return
+		}
+
+		// Other upstream 4xx/5xx responses are passed through without retrying.
+		// Keep their status code as the error type so callers can distinguish
+		// upstream validation failures from server failures in Prometheus.
+		if resp.StatusCode >= http.StatusBadRequest {
+			upstreamErrors.WithLabelValues(strconv.Itoa(resp.StatusCode), h.deploymentVariant).Inc()
 		}
 
 		// Validate response body before committing to the client.

@@ -925,10 +925,10 @@ func TestRetryValidationMetricsLabels(t *testing.T) {
 	}
 
 	expectedErrorLabels := []string{
-		"422",                  // Unprocessable entity
-		"429",                  // Rate limiting
-		"truncated_response",   // Empty/invalid JSON body
-		"empty_streaming",      // Empty streaming response
+		"422",                 // Unprocessable entity
+		"429",                 // Rate limiting
+		"truncated_response",  // Empty/invalid JSON body
+		"empty_streaming",     // Empty streaming response
 		"upstream_connection", // Network errors
 		"write_error",         // Write errors
 		"read_error",          // Read errors
@@ -966,54 +966,51 @@ func TestRetryValidationMetricsIntegration(t *testing.T) {
 	requestsTotal.Reset()
 
 	var upstreamCallCount atomic.Int32
+	var activeScenario atomic.Value
 
-	// Create upstream that returns various error codes
+	// Create an upstream whose response is selected by each subtest. Keeping
+	// the scenario independent avoids one subtest consuming another's fixture.
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		count := upstreamCallCount.Add(1)
-		// First call: 429, second: empty body, third: 422
-		switch count {
-		case 1:
-			w.Header().Set("Retry-After", "1")
+		upstreamCallCount.Add(1)
+		switch activeScenario.Load().(string) {
+		case "429 scenario":
+			w.Header().Set("Retry-After", "0")
 			w.WriteHeader(http.StatusTooManyRequests)
-		case 2:
+		case "empty body scenario":
 			w.WriteHeader(http.StatusOK)
-			// Empty body
-		case 3:
+		case "422 scenario":
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			json.NewEncoder(w).Encode(map[string]string{"error": "unprocessable"})
-		default:
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{"id": "msg_123"})
 		}
 	}))
 	defer upstream.Close()
 
 	// Test multiple scenarios
 	testScenarios := []struct {
-		name         string
-		maxRetries   int
+		name        string
+		maxRetries  int
 		reqBody     string
 		retryReason string
 		errorType   string
 	}{
 		{
-			name:         "429 scenario",
-			maxRetries:   1,
+			name:        "429 scenario",
+			maxRetries:  1,
 			reqBody:     createNonStreamingRequestBody(),
 			retryReason: "429",
-			errorType:   "", // 429 doesn't increment upstreamErrors
+			errorType:   "429",
 		},
 		{
-			name:         "empty body scenario",
-			maxRetries:   1,
+			name:        "empty body scenario",
+			maxRetries:  1,
 			reqBody:     createNonStreamingRequestBody(),
 			retryReason: "truncated_response",
 			errorType:   "truncated_response",
 		},
 		{
-			name:         "422 scenario",
-			maxRetries:   5,
+			name:        "422 scenario",
+			maxRetries:  5,
 			reqBody:     createNonStreamingRequestBody(),
 			retryReason: "", // 422 doesn't retry
 			errorType:   "422",
@@ -1024,6 +1021,7 @@ func TestRetryValidationMetricsIntegration(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			// Reset counters for this scenario
 			upstreamCallCount.Store(0)
+			activeScenario.Store(scenario.name)
 
 			handler := createTestProxyHandler(t, upstream.URL, scenario.maxRetries)
 			req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(scenario.reqBody))
