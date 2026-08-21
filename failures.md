@@ -17,10 +17,50 @@ The raw verbose test log is retained outside the repository at `/home/coding/scr
 
 ## Failures by Category
 
-| Category | Count |
-| --- | ---: |
-| Other: unclassified failure | 8 |
-| assertion_error | 4 |
+| Category | Count | Share of failure details |
+| --- | ---: | ---: |
+| Other: unclassified failure | 8 | 66.7% |
+| assertion_error | 4 | 33.3% |
+
+Not observed: timeouts, panics, data races, deadlocks, nil-pointer dereferences, I/O errors, HTTP errors.
+
+## Most Frequently Failing Tests
+
+| Test name | Failure details | Share of failure details |
+| --- | ---: | ---: |
+| TestTranslateRequest_CombinedTransformations | 3 | 25.0% |
+| TestTranslateRequest_StripsCacheControlFromMessages | 2 | 16.7% |
+| TestTranslateRequest_StripsThinking | 2 | 16.7% |
+| TestTranslateRequest_SystemArrayToString | 2 | 16.7% |
+| TestMemoryProfile/Long | 1 | 8.3% |
+| TestMemoryProfile/Medium | 1 | 8.3% |
+| TestTranslateRequest_InvalidJSON | 1 | 8.3% |
+
+## Files with Highest Failure Density
+
+Failure density is the share of emitted failure details located in a file; the extracted log does not include per-file execution counts.
+
+| File | Failure details | Failure density |
+| --- | ---: | ---: |
+| proxy/translator_test.go | 10 | 83.3% |
+| proxy/performance_benchmark_test.go | 2 | 16.7% |
+
+## Most Common Failure Patterns
+
+Patterns are grouped from the emitted diagnostic messages, independently of the technical category.
+
+| Pattern | Failure details | Share of failure details |
+| --- | ---: | ---: |
+| Transformation did not report a change | 4 | 33.3% |
+| Memory-allocation limit exceeded | 2 | 16.7% |
+| System field was not converted to a string | 2 | 16.7% |
+| Thinking field was not removed | 2 | 16.7% |
+| Invalid JSON did not return an error | 1 | 8.3% |
+| cache_control was not removed | 1 | 8.3% |
+
+## Rate-limiter Impact
+
+No emitted failure detail is from a rate-limiter test or source file (0 of 12). The extracted failures are concentrated in translator and performance-benchmark tests.
 
 ## Failure Details
 

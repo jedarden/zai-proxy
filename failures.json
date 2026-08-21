@@ -18,12 +18,95 @@
       {
         "category": "unknown",
         "label": "Other: unclassified failure",
-        "count": 8
+        "count": 8,
+        "percentage": 66.7
       },
       {
         "category": "assertion_error",
         "label": "assertion_error",
-        "count": 4
+        "count": 4,
+        "percentage": 33.3
+      }
+    ],
+    "by_test": [
+      {
+        "name": "TestTranslateRequest_CombinedTransformations",
+        "count": 3,
+        "percentage": 25
+      },
+      {
+        "name": "TestTranslateRequest_StripsCacheControlFromMessages",
+        "count": 2,
+        "percentage": 16.7
+      },
+      {
+        "name": "TestTranslateRequest_StripsThinking",
+        "count": 2,
+        "percentage": 16.7
+      },
+      {
+        "name": "TestTranslateRequest_SystemArrayToString",
+        "count": 2,
+        "percentage": 16.7
+      },
+      {
+        "name": "TestMemoryProfile/Long",
+        "count": 1,
+        "percentage": 8.3
+      },
+      {
+        "name": "TestMemoryProfile/Medium",
+        "count": 1,
+        "percentage": 8.3
+      },
+      {
+        "name": "TestTranslateRequest_InvalidJSON",
+        "count": 1,
+        "percentage": 8.3
+      }
+    ],
+    "by_file": [
+      {
+        "name": "proxy/translator_test.go",
+        "count": 10,
+        "percentage": 83.3
+      },
+      {
+        "name": "proxy/performance_benchmark_test.go",
+        "count": 2,
+        "percentage": 16.7
+      }
+    ],
+    "by_pattern": [
+      {
+        "pattern": "Transformation did not report a change",
+        "count": 4,
+        "percentage": 33.3
+      },
+      {
+        "pattern": "Memory-allocation limit exceeded",
+        "count": 2,
+        "percentage": 16.7
+      },
+      {
+        "pattern": "System field was not converted to a string",
+        "count": 2,
+        "percentage": 16.7
+      },
+      {
+        "pattern": "Thinking field was not removed",
+        "count": 2,
+        "percentage": 16.7
+      },
+      {
+        "pattern": "Invalid JSON did not return an error",
+        "count": 1,
+        "percentage": 8.3
+      },
+      {
+        "pattern": "cache_control was not removed",
+        "count": 1,
+        "percentage": 8.3
       }
     ]
   },

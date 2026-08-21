@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -41,9 +42,22 @@ type sourceOutput struct {
 }
 
 type categoryCount struct {
-	Category string `json:"category"`
-	Label    string `json:"label"`
-	Count    int    `json:"count"`
+	Category   string  `json:"category"`
+	Label      string  `json:"label"`
+	Count      int     `json:"count"`
+	Percentage float64 `json:"percentage"`
+}
+
+type rankedCount struct {
+	Name       string  `json:"name"`
+	Count      int     `json:"count"`
+	Percentage float64 `json:"percentage"`
+}
+
+type patternCount struct {
+	Pattern    string  `json:"pattern"`
+	Count      int     `json:"count"`
+	Percentage float64 `json:"percentage"`
 }
 
 type summary struct {
@@ -54,6 +68,9 @@ type summary struct {
 	Uncategorized        int             `json:"uncategorized"`
 	LowConfidence        int             `json:"low_confidence"`
 	ByCategory           []categoryCount `json:"by_category"`
+	ByTest               []rankedCount   `json:"by_test"`
+	ByFile               []rankedCount   `json:"by_file"`
+	ByPattern            []patternCount  `json:"by_pattern"`
 }
 
 type failureRecord struct {
@@ -217,6 +234,9 @@ func buildReport(diagnosticsByTest map[string][]diagnostic, failedTests []string
 		Failures:           make([]failureRecord, 0),
 	}
 	categoryCounts := make(map[string]categoryCount)
+	testCounts := make(map[string]int)
+	fileCounts := make(map[string]int)
+	patternCounts := make(map[string]int)
 	failedTestCases := 0
 	allSourcesExist := true
 
@@ -281,6 +301,9 @@ func buildReport(diagnosticsByTest map[string][]diagnostic, failedTests []string
 			count := categoryCounts[category]
 			count.Category, count.Label, count.Count = category, label, count.Count+1
 			categoryCounts[category] = count
+			testCounts[testName]++
+			fileCounts[sourcePath]++
+			patternCounts[failurePattern(diagnostic.message)]++
 			if category == string(testutil.CategoryUnknown) {
 				report.Summary.Uncategorized++
 			} else {
@@ -296,14 +319,13 @@ func buildReport(diagnosticsByTest map[string][]diagnostic, failedTests []string
 	report.Summary.FailedTestCases = failedTestCases
 	report.Summary.AggregateFailMarkers = failureMarkers - failedTestCases
 	for _, count := range categoryCounts {
+		count.Percentage = percentage(count.Count, report.Summary.TotalFailures)
 		report.Summary.ByCategory = append(report.Summary.ByCategory, count)
 	}
-	sort.Slice(report.Summary.ByCategory, func(i, j int) bool {
-		if report.Summary.ByCategory[i].Count != report.Summary.ByCategory[j].Count {
-			return report.Summary.ByCategory[i].Count > report.Summary.ByCategory[j].Count
-		}
-		return report.Summary.ByCategory[i].Category < report.Summary.ByCategory[j].Category
-	})
+	sortCategoryCounts(report.Summary.ByCategory)
+	report.Summary.ByTest = rankedCounts(testCounts, report.Summary.TotalFailures)
+	report.Summary.ByFile = rankedCounts(fileCounts, report.Summary.TotalFailures)
+	report.Summary.ByPattern = patternCountsForReport(patternCounts, report.Summary.TotalFailures)
 	report.Validation = validation{
 		Complete:                   len(report.Failures) > 0 && failedTestCases > 0,
 		EveryFailureHasSource:      len(report.Failures) > 0,
@@ -312,6 +334,70 @@ func buildReport(diagnosticsByTest map[string][]diagnostic, failedTests []string
 		FailureDetailsMatchTestLog: len(report.Failures) > 0,
 	}
 	return report, nil
+}
+
+func failurePattern(message string) string {
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "memory allocation too high"):
+		return "Memory-allocation limit exceeded"
+	case strings.Contains(lower, "expected changed=true"):
+		return "Transformation did not report a change"
+	case strings.Contains(lower, "'thinking' should have been removed"):
+		return "Thinking field was not removed"
+	case strings.Contains(lower, "'system' should be a string"):
+		return "System field was not converted to a string"
+	case strings.Contains(lower, "cache_control after stripping"):
+		return "cache_control was not removed"
+	case strings.Contains(lower, "expected error for invalid json"):
+		return "Invalid JSON did not return an error"
+	default:
+		return "Other failure message"
+	}
+}
+
+func percentage(count, total int) float64 {
+	if total == 0 {
+		return 0
+	}
+	return math.Round(float64(count)/float64(total)*1000) / 10
+}
+
+func sortCategoryCounts(counts []categoryCount) {
+	sort.Slice(counts, func(i, j int) bool {
+		if counts[i].Count != counts[j].Count {
+			return counts[i].Count > counts[j].Count
+		}
+		return counts[i].Category < counts[j].Category
+	})
+}
+
+func rankedCounts(counts map[string]int, total int) []rankedCount {
+	ranked := make([]rankedCount, 0, len(counts))
+	for name, count := range counts {
+		ranked = append(ranked, rankedCount{Name: name, Count: count, Percentage: percentage(count, total)})
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		if ranked[i].Count != ranked[j].Count {
+			return ranked[i].Count > ranked[j].Count
+		}
+		return ranked[i].Name < ranked[j].Name
+	})
+	return ranked
+}
+
+func patternCountsForReport(counts map[string]int, total int) []patternCount {
+	ranked := make([]patternCount, 0, len(counts))
+	for pattern, count := range counts {
+		ranked = append(ranked, patternCount{Pattern: pattern, Count: count, Percentage: percentage(count, total)})
+	}
+	sort.Slice(ranked, func(i, j int) bool {
+		if ranked[i].Count != ranked[j].Count {
+			return ranked[i].Count > ranked[j].Count
+		}
+		return ranked[i].Pattern < ranked[j].Pattern
+	})
+	return ranked
 }
 
 func failedTestSet(failedTests []string) map[string]bool {
@@ -349,9 +435,35 @@ func renderMarkdown(report report) string {
 	fmt.Fprintf(&builder, "Generated from `%s` at `%s` (revision `%s`; exit code `%d`).\n\n", report.SourceOutput.TestCommand, report.GeneratedAt, report.RepositoryRevision, report.SourceOutput.ExitCode)
 	fmt.Fprintf(&builder, "The raw verbose test log is retained outside the repository at `%s`. `total_failures` counts emitted source diagnostics; a parent Go subtest aggregate is not counted twice.\n\n", report.SourceOutput.RawLog)
 	fmt.Fprintf(&builder, "## Summary\n\n| Metric | Count |\n| --- | ---: |\n| Total failure details | %d |\n| Failed test cases | %d |\n| Aggregate failure markers | %d |\n| Categorized | %d |\n| Other / uncategorized | %d |\n| Low confidence | %d |\n\n", report.Summary.TotalFailures, report.Summary.FailedTestCases, report.Summary.AggregateFailMarkers, report.Summary.Categorized, report.Summary.Uncategorized, report.Summary.LowConfidence)
-	fmt.Fprintf(&builder, "## Failures by Category\n\n| Category | Count |\n| --- | ---: |\n")
+	fmt.Fprintf(&builder, "## Failures by Category\n\n| Category | Count | Share of failure details |\n| --- | ---: | ---: |\n")
 	for _, count := range report.Summary.ByCategory {
-		fmt.Fprintf(&builder, "| %s | %d |\n", markdownCell(count.Label), count.Count)
+		fmt.Fprintf(&builder, "| %s | %d | %.1f%% |\n", markdownCell(count.Label), count.Count, count.Percentage)
+	}
+	if missing := missingStandardCategories(report.Summary.ByCategory); len(missing) > 0 {
+		fmt.Fprintf(&builder, "\nNot observed: %s.\n", strings.Join(missing, ", "))
+	}
+
+	fmt.Fprintf(&builder, "\n## Most Frequently Failing Tests\n\n| Test name | Failure details | Share of failure details |\n| --- | ---: | ---: |\n")
+	for _, count := range report.Summary.ByTest {
+		fmt.Fprintf(&builder, "| %s | %d | %.1f%% |\n", markdownCell(count.Name), count.Count, count.Percentage)
+	}
+
+	fmt.Fprintf(&builder, "\n## Files with Highest Failure Density\n\nFailure density is the share of emitted failure details located in a file; the extracted log does not include per-file execution counts.\n\n| File | Failure details | Failure density |\n| --- | ---: | ---: |\n")
+	for _, count := range report.Summary.ByFile {
+		fmt.Fprintf(&builder, "| %s | %d | %.1f%% |\n", markdownCell(count.Name), count.Count, count.Percentage)
+	}
+
+	fmt.Fprintf(&builder, "\n## Most Common Failure Patterns\n\nPatterns are grouped from the emitted diagnostic messages, independently of the technical category.\n\n| Pattern | Failure details | Share of failure details |\n| --- | ---: | ---: |\n")
+	for _, count := range report.Summary.ByPattern {
+		fmt.Fprintf(&builder, "| %s | %d | %.1f%% |\n", markdownCell(count.Pattern), count.Count, count.Percentage)
+	}
+
+	rateLimiterFailures := rateLimiterFailureCount(report.Failures)
+	fmt.Fprintf(&builder, "\n## Rate-limiter Impact\n\n")
+	if rateLimiterFailures == 0 {
+		fmt.Fprintf(&builder, "No emitted failure detail is from a rate-limiter test or source file (0 of %d). The extracted failures are concentrated in translator and performance-benchmark tests.\n", report.Summary.TotalFailures)
+	} else {
+		fmt.Fprintf(&builder, "%d of %d emitted failure details are from rate-limiter tests or source files (%.1f%%).\n", rateLimiterFailures, report.Summary.TotalFailures, percentage(rateLimiterFailures, report.Summary.TotalFailures))
 	}
 	fmt.Fprintf(&builder, "\n## Failure Details\n\n| Test name | File:line | Error message | Category |\n| --- | --- | --- | --- |\n")
 	for _, failure := range report.Failures {
@@ -364,6 +476,43 @@ func renderMarkdown(report report) string {
 	}
 	fmt.Fprintf(&builder, "\n## Validation\n\nAll %d emitted failure details have a source location that exists at the tested revision, and all were classified by `proxy/testutil`. `%d` details are explicitly `Other: unclassified failure`; these need a taxonomy rule or manual review rather than being silently omitted.\n", report.Summary.TotalFailures, report.Summary.Uncategorized)
 	return builder.String()
+}
+
+func missingStandardCategories(categories []categoryCount) []string {
+	observed := make(map[string]bool, len(categories))
+	for _, category := range categories {
+		observed[category.Category] = true
+	}
+	standard := []struct {
+		category string
+		label    string
+	}{
+		{string(testutil.CategoryTimeout), "timeouts"},
+		{string(testutil.CategoryPanic), "panics"},
+		{string(testutil.CategoryDataRace), "data races"},
+		{string(testutil.CategoryDeadlock), "deadlocks"},
+		{string(testutil.CategoryNilPointer), "nil-pointer dereferences"},
+		{string(testutil.CategoryIOError), "I/O errors"},
+		{string(testutil.CategoryHTTPError), "HTTP errors"},
+	}
+	missing := make([]string, 0, len(standard))
+	for _, candidate := range standard {
+		if !observed[candidate.category] {
+			missing = append(missing, candidate.label)
+		}
+	}
+	return missing
+}
+
+func rateLimiterFailureCount(failures []failureRecord) int {
+	count := 0
+	for _, failure := range failures {
+		name := strings.ToLower(failure.TestName + " " + failure.FilePath)
+		if strings.Contains(name, "ratelimiter") || strings.Contains(name, "rate_limiter") || strings.Contains(name, "rate-limit") {
+			count++
+		}
+	}
+	return count
 }
 
 func markdownCell(value string) string {

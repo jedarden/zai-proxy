@@ -56,4 +56,44 @@ func TestBuildReportOmitsLogDiagnosticsFromFailedTest(t *testing.T) {
 	if failure.LineNumber != 7 || failure.Category != "assertion_error" {
 		t.Errorf("failure = %#v, want line 7 assertion_error", failure)
 	}
+	if len(report.Summary.ByTest) != 1 || report.Summary.ByTest[0].Name != "TestExample" || report.Summary.ByTest[0].Count != 1 || report.Summary.ByTest[0].Percentage != 100 {
+		t.Errorf("ByTest = %#v, want TestExample with one failure at 100%%", report.Summary.ByTest)
+	}
+	if len(report.Summary.ByFile) != 1 || report.Summary.ByFile[0].Count != 1 || report.Summary.ByFile[0].Percentage != 100 {
+		t.Errorf("ByFile = %#v, want one file with one failure at 100%%", report.Summary.ByFile)
+	}
+	if len(report.Summary.ByPattern) != 1 || report.Summary.ByPattern[0].Pattern != "Other failure message" || report.Summary.ByPattern[0].Count != 1 {
+		t.Errorf("ByPattern = %#v, want one fallback pattern", report.Summary.ByPattern)
+	}
+	if report.Summary.ByCategory[0].Percentage != 100 {
+		t.Errorf("ByCategory = %#v, want 100%% assertion_error", report.Summary.ByCategory)
+	}
+	markdown := renderMarkdown(report)
+	for _, heading := range []string{
+		"## Most Frequently Failing Tests",
+		"## Files with Highest Failure Density",
+		"## Most Common Failure Patterns",
+		"## Rate-limiter Impact",
+	} {
+		if !strings.Contains(markdown, heading) {
+			t.Errorf("rendered Markdown does not contain %q:\n%s", heading, markdown)
+		}
+	}
+}
+
+func TestFailurePattern(t *testing.T) {
+	tests := map[string]string{
+		"Memory allocation too high: 999 bytes (max: 1)":        "Memory-allocation limit exceeded",
+		"expected changed=true when thinking is stripped":       "Transformation did not report a change",
+		"'thinking' should have been removed":                   "Thinking field was not removed",
+		"'system' should be a string after translation":         "System field was not converted to a string",
+		"content block still has cache_control after stripping": "cache_control was not removed",
+		"expected error for invalid JSON":                       "Invalid JSON did not return an error",
+		"a diagnostic without a recognized recurring pattern":   "Other failure message",
+	}
+	for message, want := range tests {
+		if got := failurePattern(message); got != want {
+			t.Errorf("failurePattern(%q) = %q, want %q", message, got, want)
+		}
+	}
 }
