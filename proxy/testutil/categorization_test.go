@@ -936,9 +936,10 @@ func TestCategorizeFailure_Contract(t *testing.T) {
 			wantType: CategoryAssertionError,
 		},
 		{
-			name:     "timeout",
-			failure:  Failure{ErrorMessage: "context deadline exceeded"},
-			wantType: CategoryTimeout,
+			name:            "timeout",
+			failure:         Failure{ErrorMessage: "context deadline exceeded"},
+			wantType:        CategoryTimeout,
+			wantSubcategory: "deadline_exceeded",
 		},
 		{
 			name:            "explicit panic takes priority over nil pointer",

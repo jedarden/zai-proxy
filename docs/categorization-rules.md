@@ -47,7 +47,7 @@ categories make common runtime failures actionable without overloading
 | ---: | --- | --- | --- |
 | 100 | `data_race` (Data race) | Race-detector output: `WARNING: DATA RACE`, `data race`, `Write at`, or `Previous`. A normal report also contains `Read at`/`Write at` sections and goroutine frames such as `goroutine 7`. | — |
 | 90 | `deadlock` (Deadlock) | `potential deadlock` or `deadlock detected`. Goroutine dumps with blocked frames support the diagnosis but do not alone match this category. | — |
-| 70 | `timeout` (Timeout) | `context deadline exceeded`, `context canceled`, `timeout.*exceeded`, `timed out`, `timeout waiting for`, `timeout occurred`, `test timed out`, or `exceeded.*timeout`. The Go timeout dump (`panic: test timed out after ...` followed by goroutine frames) is also covered because the timeout text wins over the general panic marker. | — |
+| 70 | `timeout` (Timeout) | `context deadline exceeded`, `context canceled`, `timeout.*exceeded`, `timed out`, `timeout waiting for`, `timeout occurred`, `test timed out`, or `exceeded.*timeout`. The Go timeout dump (`panic: test timed out after ...` followed by goroutine frames) is also covered because the timeout text wins over the general panic marker. | `deadline_exceeded` for an explicit deadline; `context_canceled` for an explicit cancellation; otherwise — |
 | 65 | `nil_pointer_dereference` (Nil pointer dereference) | `null pointer`, `nil pointer dereference`, `panic on nil pointer`, or `assignment to entry in nil map`. The latter is treated as a nil-initialization error rather than a map-key error. | `test_setup` when the text mentions setup, a mock, or a fake; otherwise — |
 | 60 | `index_out_of_range` (Index or slice bounds) | `index out of range` or `slice bounds out of range`, including Go runtime stack traces that show the failing indexing frame. | — |
 | 56 | `channel_error` (Channel operation) | `send on closed channel`, `close of closed channel`, `channel.*closed`, or `receive on closed channel`. A goroutine frame is supporting evidence only. | — |
@@ -96,6 +96,26 @@ There is one intentional exception to the numeric order: if the candidate is
 text remains in the reasoning and stack trace. `panic on nil pointer` without
 a general panic marker remains a nil-pointer dereference.
 
+### Explicit ambiguity resolvers
+
+`ResolveAmbiguity` adds context-sensitive interpretation after the base
+classifier has recorded every matching rule. It uses the confidence scorer with
+a 0.50 ambiguity penalty for competing direct signals; these results remain
+below the 0.70 review threshold rather than claiming certainty from one broad
+regex alone.
+
+| Ambiguous case | Decision criteria | Resolved result |
+| --- | --- | --- |
+| Runtime panic, nil-pointer diagnostic, and assertion text | A Go runtime marker begins a line (`panic:`, `runtime panic`, or `runtime error:`). That direct event wins; nil-pointer evidence becomes the panic subtype and assertion text remains supporting/competing evidence. | `panic` with `nil_pointer_dereference` subcategory. |
+| Nil-pointer diagnostic and generic assertion text, without a runtime marker | A direct nil-pointer diagnostic is more specific than generic assertion wording. | `nil_pointer_dereference` with `assertion_context` subcategory. |
+| Assertion expectation quotes a diagnostic | An `assertion failed`/`expected`/`want` expression also has `got`/`actual`, and the diagnostic appears in that expected or actual value. There must be no line-start runtime marker. This stops a quoted `panic:`, nil-pointer, or context string from winning through regex priority. | `assertion_error`. |
+| `context deadline exceeded` and `context canceled` | Both context terminal markers occur under the one timeout regex. The final marker in the combined error and stack text determines the subtype. | `timeout` with `deadline_exceeded` or `context_canceled`; confidence is reduced for review. |
+
+The assertion-overlap rule is intentionally narrow: a real runtime marker on a
+line of its own still takes priority, even if the test output later includes an
+assertion message. This preserves the root runtime event while avoiding false
+panics from an assertion's quoted expected value.
+
 Other important resolutions are:
 
 | Competing signals | Primary result | Why |
@@ -110,8 +130,8 @@ Other important resolutions are:
 | Channel error and goroutine frame | `channel_error` | A concrete illegal channel operation wins over generic goroutine context. |
 
 When two or more rules match, retain all matches in `reasoning` and lower
-confidence according to the primary rule's ambiguity adjustment. A result at
-or below 0.70 is marked `uncertain` for review; it is not silently changed to
+confidence according to the primary rule's ambiguity adjustment. A result below
+0.70 is marked `uncertain` for review; it is not silently changed to
 Other.
 
 ## Categorization pseudocode
@@ -147,6 +167,9 @@ function categorize(failure):
 
     apply documented edge-case adjustments
     subcategory = primary.default_subcategory
+    if primary.type == "timeout":
+        subcategory = deadline_exceeded or context_canceled when its
+                      respective context marker is present
     if primary.type == "nil_pointer_dereference" and
        text mentions setup, mock, or fake:
         subcategory = "test_setup"
@@ -154,6 +177,10 @@ function categorize(failure):
     return category(primary.type, subcategory, confidence,
                     uncertain=(confidence < 0.70), reasoning=all matches)
 ```
+
+Call `ResolveAmbiguity` on this base result when consuming a triage decision.
+It applies the table above, updates `type`, `category`, and `uncertain`, and
+adds the decision criterion to `reasoning`.
 
 The pseudocode expresses the intended report contract. The current Go API
 uses an empty `subcategory` for a raw `unknown` result because its JSON field

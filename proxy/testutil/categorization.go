@@ -501,6 +501,24 @@ type ConfidenceAdjustment struct {
 	Reason string
 }
 
+var (
+	// explicitPanicLinePattern recognizes a runtime panic marker rather than a
+	// diagnostic string merely quoted by an assertion failure. A panic marker
+	// emitted by Go starts a line in the failure output.
+	explicitPanicLinePattern = regexp.MustCompile(`(?mi)^\s*(?:panic:|runtime panic|runtime error:)`)
+
+	// assertionExpectationPattern identifies a test assertion that compares an
+	// expected value with an actual value. It is deliberately stricter than the
+	// assertion categorization rule because it is only used to prevent a quoted
+	// diagnostic (for example, "panic:") from winning by regex priority.
+	assertionExpectationPattern = regexp.MustCompile(`(?is)\b(?:assertion\s+failed|expected|want)\b.*\b(?:got|actual)\b`)
+
+	// assertionDiagnosticValuePattern requires the diagnostic to occur in an
+	// expected or actual value. This keeps a real nil-pointer failure followed
+	// by an assertion message from being mistaken for a quoted diagnostic.
+	assertionDiagnosticValuePattern = regexp.MustCompile(`(?is)\b(?:expected|want|got|actual)\b[^\n]{0,80}\b(?:panic:|nil pointer|context deadline exceeded|context canceled)`)
+)
+
 // categorizationRules defines the order and patterns for categorization
 // This implements a priority-based decision tree for categorizing test failures.
 // Rules are checked in priority order (highest first) to handle ambiguous cases.
@@ -778,6 +796,9 @@ func CategorizeFailure(failure Failure) Category {
 	// Convert to Confidence type with bounds validation
 	finalConfidence := NewConfidence(confidence)
 	subcategory := primaryRule.Subcategory
+	if primaryRule.Category == CategoryTimeout {
+		subcategory = timeoutSubcategory(fullText)
+	}
 	if primaryRule.Category == CategoryNilPointer &&
 		(strings.Contains(strings.ToLower(fullText), "setup") ||
 			strings.Contains(strings.ToLower(fullText), "mock") ||
@@ -1200,45 +1221,180 @@ func GetSuggestedSubcategory(cat CategorizedFailure) string {
 	}
 }
 
-// ResolveAmbiguity attempts to resolve ambiguous categorizations by
-// analyzing additional context clues
+// ResolveAmbiguity applies the additional decision criteria documented in
+// docs/categorization-rules.md. CategorizeFailure intentionally retains the
+// base priority result; callers that need the more specific interpretation can
+// opt into this resolver and retain its explanation and confidence adjustment.
 func ResolveAmbiguity(cat CategorizedFailure) CategorizedFailure {
-	// If not ambiguous, return as-is
-	if !IsAmbiguous(cat) {
+	fullText := cat.ErrorMessage + "\n" + cat.StackTrace
+	lowerText := strings.ToLower(fullText)
+
+	// Most ambiguity is represented by multiple matching category rules. A
+	// context can expose both cancellation and deadline markers under the same
+	// timeout rule, so it needs an explicit intra-category check as well.
+	if !IsAmbiguous(cat) && !hasIntrinsicAmbiguity(cat.Category, lowerText) {
 		return cat
 	}
 
-	// Apply additional resolution logic
-	fullText := cat.ErrorMessage + " " + cat.StackTrace
-	lowerText := strings.ToLower(fullText)
+	// A framework assertion that quotes a diagnostic is more precise than a
+	// broad diagnostic regex, unless the output also contains an actual Go
+	// runtime marker at the start of a line.
+	if resolveAssertionPatternOverlap(&cat, fullText) {
+		return finalizeAmbiguityResolution(cat)
+	}
 
-	// Resolution rule: If error mentions both HTTP and timeout, check for specific indicators
+	if resolvePanicAssertionAmbiguity(&cat, fullText) {
+		return finalizeAmbiguityResolution(cat)
+	}
+
+	if resolveTimeoutContextAmbiguity(&cat, fullText) {
+		return finalizeAmbiguityResolution(cat)
+	}
+
+	// Resolution rule: If error mentions both HTTP and timeout, check for specific indicators.
 	if cat.Category == CategoryTimeout && strings.Contains(lowerText, "dial") && strings.Contains(lowerText, "tcp") {
-		// This is more likely an HTTP error
 		cat.Category = CategoryHTTPError
 		cat.Subcategory = "timeout"
-		cat.Reasoning += "\n  Ambiguity resolution: 'dial tcp' suggests HTTP error over general timeout"
-		cat.Confidence = 0.75
+		cat.Reasoning += "\n  Ambiguity resolution: 'dial tcp' identifies a network timeout over a general timeout"
+		cat.Confidence = NewConfidence(0.75)
 	}
 
-	// Resolution rule: If panic mentions interface conversion, could be type mismatch
+	// Resolution rule: If panic mentions interface conversion, it can be a type mismatch.
 	if cat.Category == CategoryPanic && strings.Contains(lowerText, "interface conversion") &&
 		!strings.Contains(lowerText, "panic:") && !strings.Contains(lowerText, "runtime panic") {
-		// This might be a type mismatch, not a runtime panic
 		cat.Category = CategoryTypeMismatch
-		cat.Reasoning += "\n  Ambiguity resolution: interface conversion without explicit panic marker suggests type mismatch"
-		cat.Confidence = 0.8
+		cat.Reasoning += "\n  Ambiguity resolution: interface conversion without explicit panic marker identifies a type mismatch"
+		cat.Confidence = NewConfidence(0.8)
 	}
 
-	// Resolution rule: If nil pointer appears in test setup context
+	// Resolution rule: If nil pointer appears in test setup context.
 	if cat.Category == CategoryNilPointer && (strings.Contains(lowerText, "setup") ||
 		strings.Contains(lowerText, "initialize") || strings.Contains(lowerText, "before all")) {
 		cat.Subcategory = "test_setup"
 		cat.Reasoning += "\n  Ambiguity resolution: nil pointer in test setup context"
 	}
 
-	cat.Type = cat.Category
+	return finalizeAmbiguityResolution(cat)
+}
 
+func hasIntrinsicAmbiguity(category FailureCategory, lowerText string) bool {
+	return category == CategoryTimeout &&
+		strings.Contains(lowerText, "context deadline exceeded") &&
+		strings.Contains(lowerText, "context canceled")
+}
+
+func resolveAssertionPatternOverlap(cat *CategorizedFailure, fullText string) bool {
+	if !assertionExpectationPattern.MatchString(fullText) || explicitPanicLinePattern.MatchString(fullText) {
+		return false
+	}
+
+	// This is only an overlap when a broad diagnostic could otherwise win over
+	// the assertion rule. The assertion itself remains the observable failure.
+	if !assertionDiagnosticValuePattern.MatchString(fullText) {
+		return false
+	}
+
+	cat.Category = CategoryAssertionError
+	cat.Subcategory = ""
+	cat.Confidence = CalculateConfidence(ConfidenceCalculationParams{
+		BaseConfidence: 0.7,
+		Signals: []MatchSignal{
+			{Type: SignalExactMatch, Pattern: "assertion expectation"},
+			{Type: SignalPartialMatch, Pattern: "quoted diagnostic"},
+		},
+		AmbiguityPenalty: 0.5,
+	})
+	cat.Reasoning += "\n  Ambiguity resolution: assertion expectation quotes a diagnostic; assertion_error wins over the quoted regex match"
+	return true
+}
+
+func resolvePanicAssertionAmbiguity(cat *CategorizedFailure, fullText string) bool {
+	lowerText := strings.ToLower(fullText)
+	hasNilPointer := strings.Contains(lowerText, "nil pointer") || strings.Contains(lowerText, "null pointer")
+	hasAssertion := strings.Contains(lowerText, "assertion") || assertionExpectationPattern.MatchString(fullText)
+
+	// A Go panic marker is the primary event. The nil-pointer diagnostic gives
+	// the panic a more useful subtype, while assertion text is retained as a
+	// competing signal rather than replacing the runtime failure.
+	if cat.Category == CategoryPanic && hasNilPointer && explicitPanicLinePattern.MatchString(fullText) {
+		cat.Subcategory = "nil_pointer_dereference"
+		params := ConfidenceCalculationParams{
+			BaseConfidence: 0.9,
+			Signals: []MatchSignal{
+				{Type: SignalExactMatch, Pattern: "runtime panic marker"},
+				{Type: SignalExactMatch, Pattern: "nil pointer diagnostic"},
+			},
+			ContextBoost: 0.05,
+		}
+		if hasAssertion {
+			params.Signals = append(params.Signals, MatchSignal{Type: SignalPartialMatch, Pattern: "assertion text"})
+			params.AmbiguityPenalty = 0.5
+		}
+		cat.Confidence = CalculateConfidence(params)
+		cat.Reasoning += "\n  Ambiguity resolution: explicit panic marker is the primary event; nil-pointer evidence is recorded as its subtype"
+		return true
+	}
+
+	// Without an explicit panic marker, a direct nil-pointer diagnostic is more
+	// specific than generic assertion text. Lower confidence keeps this overlap
+	// visible for review rather than silently treating it as unambiguous.
+	if cat.Category == CategoryNilPointer && hasAssertion {
+		cat.Subcategory = "assertion_context"
+		cat.Confidence = CalculateConfidence(ConfidenceCalculationParams{
+			BaseConfidence: 0.85,
+			Signals: []MatchSignal{
+				{Type: SignalExactMatch, Pattern: "nil pointer diagnostic"},
+				{Type: SignalPartialMatch, Pattern: "assertion text"},
+			},
+			AmbiguityPenalty: 0.5,
+		})
+		cat.Reasoning += "\n  Ambiguity resolution: explicit nil-pointer diagnostic outranks generic assertion text"
+		return true
+	}
+
+	return false
+}
+
+func resolveTimeoutContextAmbiguity(cat *CategorizedFailure, fullText string) bool {
+	lowerText := strings.ToLower(fullText)
+	if cat.Category != CategoryTimeout ||
+		!strings.Contains(lowerText, "context deadline exceeded") ||
+		!strings.Contains(lowerText, "context canceled") {
+		return false
+	}
+
+	category := timeoutSubcategory(fullText)
+	cat.Subcategory = category
+	cat.Confidence = CalculateConfidence(ConfidenceCalculationParams{
+		BaseConfidence: 0.85,
+		Signals: []MatchSignal{
+			{Type: SignalExactMatch, Pattern: "context deadline exceeded"},
+			{Type: SignalExactMatch, Pattern: "context canceled"},
+		},
+		AmbiguityPenalty: 0.5,
+	})
+	cat.Reasoning += fmt.Sprintf("\n  Ambiguity detected: both context deadline and cancellation markers matched\n  Ambiguity resolution: the final context marker selects timeout subcategory %q", category)
+	return true
+}
+
+func timeoutSubcategory(fullText string) string {
+	lowerText := strings.ToLower(fullText)
+	deadlineIndex := strings.LastIndex(lowerText, "context deadline exceeded")
+	canceledIndex := strings.LastIndex(lowerText, "context canceled")
+
+	switch {
+	case deadlineIndex < 0 && canceledIndex < 0:
+		return ""
+	case canceledIndex > deadlineIndex:
+		return "context_canceled"
+	default:
+		return "deadline_exceeded"
+	}
+}
+
+func finalizeAmbiguityResolution(cat CategorizedFailure) CategorizedFailure {
+	cat.Type = cat.Category
+	cat.Uncertain = cat.Confidence.IsUncertain()
 	return cat
 }
 
