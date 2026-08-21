@@ -7,9 +7,10 @@ import (
 )
 
 const (
-	clean429s    = 9
-	nonClean429s = 11
-	windowTotal  = 1000
+	clean429s          = 9
+	cleanThreshold429s = 10
+	nonClean429s       = 11
+	windowTotal        = 1000
 )
 
 // recordWindow records one complete accounting window, then evaluates it without
@@ -61,6 +62,33 @@ func newStateTransitionLimiter() *AdaptiveRateLimiter {
 	// Probes reset cleanWindows, so defer them past every sequence in this file.
 	arl.probeInterval = 100
 	return arl
+}
+
+func TestAdaptiveRateLimiterCleanWindowDetection(t *testing.T) {
+	tests := []struct {
+		name            string
+		count429        int
+		wantCleanWindow bool
+	}{
+		{name: "zero percent is clean", count429: 0, wantCleanWindow: true},
+		{name: "below one percent is clean", count429: clean429s, wantCleanWindow: true},
+		{name: "exactly one percent is non-clean", count429: cleanThreshold429s, wantCleanWindow: false},
+		{name: "above one percent is non-clean", count429: nonClean429s, wantCleanWindow: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			arl := newStateTransitionLimiter()
+
+			recordWindow(t, arl, tt.count429, windowTotal)
+
+			gotCleanWindow := arl.cleanWindows == 1
+			if gotCleanWindow != tt.wantCleanWindow {
+				t.Errorf("%d/%d 429s: clean window = %t, want %t (clean requires a rate below 1%%)",
+					tt.count429, windowTotal, gotCleanWindow, tt.wantCleanWindow)
+			}
+		})
+	}
 }
 
 func TestAdaptiveRateLimiterStateTransitionCleanToNonClean(t *testing.T) {
