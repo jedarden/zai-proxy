@@ -134,3 +134,99 @@ func TestResolveAmbiguity_AssertionQuotedDiagnosticRegexOverlap(t *testing.T) {
 		t.Fatalf("Reasoning = %q, want regex-priority decision criterion", resolved.Reasoning)
 	}
 }
+
+func TestResolveAmbiguity_ConfidencePenaltyForCompetingSignals(t *testing.T) {
+	testCases := []struct {
+		name            string
+		failure         Failure
+		baseCategory    FailureCategory
+		category        FailureCategory
+		subcategory     string
+		confidenceFloor float64
+		confidenceCeil  float64
+		matches         []FailureCategory
+	}{
+		{
+			name: "runtime panic and assertion signals split across output sources",
+			failure: Failure{
+				ErrorMessage: "panic: runtime error: invalid memory address or nil pointer dereference",
+				StackTrace:   "assertion failed: expected initialized response, got nil",
+			},
+			baseCategory:    CategoryPanic,
+			category:        CategoryPanic,
+			subcategory:     "nil_pointer_dereference",
+			confidenceFloor: 0.64,
+			confidenceCeil:  0.66,
+			matches:         []FailureCategory{CategoryPanic, CategoryNilPointer, CategoryAssertionError},
+		},
+		{
+			name:            "nil pointer diagnostic overlaps a generic assertion",
+			failure:         Failure{ErrorMessage: "nil pointer dereference; assertion failed: expected value, got nil"},
+			baseCategory:    CategoryNilPointer,
+			category:        CategoryNilPointer,
+			subcategory:     "assertion_context",
+			confidenceFloor: 0.57,
+			confidenceCeil:  0.59,
+			matches:         []FailureCategory{CategoryNilPointer, CategoryAssertionError},
+		},
+		{
+			name: "deadline and cancellation markers use their final combined-text occurrence",
+			failure: Failure{
+				ErrorMessage: "request context deadline exceeded",
+				StackTrace:   "cleanup returned context canceled",
+			},
+			baseCategory:    CategoryTimeout,
+			category:        CategoryTimeout,
+			subcategory:     "context_canceled",
+			confidenceFloor: 0.59,
+			confidenceCeil:  0.60,
+			matches:         []FailureCategory{CategoryTimeout},
+		},
+		{
+			name:            "assertion quoting competing context diagnostics stays an assertion",
+			failure:         Failure{ErrorMessage: "assertion failed: expected context deadline exceeded, got context canceled"},
+			baseCategory:    CategoryTimeout,
+			category:        CategoryAssertionError,
+			confidenceFloor: 0.50,
+			confidenceCeil:  0.51,
+			matches:         []FailureCategory{CategoryTimeout, CategoryAssertionError},
+		},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			categorized := CategorizeFailure(tt.failure)
+			if categorized.Category != tt.baseCategory {
+				t.Fatalf("base category = %q, want %q", categorized.Category, tt.baseCategory)
+			}
+
+			matched := GetMatchingCategoriesForFailure(tt.failure)
+			for _, want := range tt.matches {
+				found := false
+				for _, got := range matched {
+					if got == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("matching categories = %v, want to include %q", matched, want)
+				}
+			}
+
+			resolved := ResolveAmbiguity(categorized)
+			if resolved.Category != tt.category || resolved.Type != tt.category {
+				t.Fatalf("resolved category/type = %q/%q, want %q", resolved.Category, resolved.Type, tt.category)
+			}
+			if resolved.Subcategory != tt.subcategory {
+				t.Fatalf("resolved subcategory = %q, want %q", resolved.Subcategory, tt.subcategory)
+			}
+			if resolved.Confidence.Float64() < tt.confidenceFloor || resolved.Confidence.Float64() > tt.confidenceCeil {
+				t.Fatalf("resolved confidence = %.3f, want [%.2f, %.2f]", resolved.Confidence, tt.confidenceFloor, tt.confidenceCeil)
+			}
+			if !resolved.Uncertain {
+				t.Fatal("resolved ambiguity must remain flagged for review")
+			}
+		})
+	}
+}
