@@ -43,16 +43,46 @@ The proxy uses a **token bucket rate limiter** with automatic adjustment based o
 1. **Calculate 429 rate**: `count(429) / count(total)`
 
 2. **If 429 rate > 5%**:
-   - **Decrease rate by 50%** (aggressive backoff)
-   - Example: 20 req/s → 10 req/s
+   - Update the estimated ceiling with an exponentially weighted moving average.
+   - Hold at `estimated_ceiling × (1 - RATE_LIMIT_HOLD_MARGIN)`.
+   - Reset the clean-window counter.
 
 3. **If 429 rate < 1%**:
-   - **Increase rate by 10%** (gradual ramp-up)
-   - Example: 10 req/s → 11 req/s
+   - Increment the clean-window counter and move half of the remaining gap toward
+     the hold position (with a 0.25 req/s minimum step).
+   - After `RATE_LIMIT_PROBE_INTERVAL` clean windows, probe above the estimated
+     ceiling, then reset the counter.
 
-4. **Rate bounds**:
+4. **If 429 rate is from 1% through 5%, inclusive**:
+   - Preserve the clean-window counter and keep the current rate.
+
+5. **Rate bounds**:
    - Never go below `RATE_LIMIT_MIN` (default: 1 req/s)
    - Never exceed `RATE_LIMIT_MAX` (default: 50 req/s)
+
+### Clean-Window Test Coverage
+
+Clean-window behavior is covered by deterministic unit tests in
+`proxy/ratelimiter_statetransition_test.go` and `proxy/ratelimiter_test.go`.
+They account for a complete request window and then evaluate it directly, so no
+extra synthetic success can move a boundary case below its intended rate.
+
+The tests cover:
+
+- clean rates below 1%, including 0.99%;
+- the exact 1% boundary and a just-above 1% rate, both of which preserve the
+  counter;
+- transitions between clean and middle windows, repeated crossings, and
+  persistence across consecutive windows;
+- the 5% boundary, high-rate reset behavior, probe activation, and rate
+  convergence.
+
+They are part of the main Go suite. Run all packages with `go test ./...`, or
+run the focused group with:
+
+```bash
+go test ./proxy -run 'CleanWindow|NonCleanWindow|StateTransition|Probe'
+```
 
 ### Retry Logic
 
@@ -74,6 +104,9 @@ This means most transient rate limits are absorbed by the proxy.
 | `RATE_LIMIT_INITIAL` | `10` | Starting rate in requests/second |
 | `RATE_LIMIT_MIN` | `1` | Minimum rate (never go below) |
 | `RATE_LIMIT_MAX` | `50` | Maximum rate (never exceed) |
+| `RATE_LIMIT_CEILING_ALPHA` | `0.3` | EWMA weight for new ceiling observations |
+| `RATE_LIMIT_HOLD_MARGIN` | `0.02` | Fraction held below the estimated ceiling |
+| `RATE_LIMIT_PROBE_INTERVAL` | `10` | Clean windows before a ceiling probe |
 | `MAX_RETRIES` | `3` | Number of retry attempts on 429/errors |
 | `MAX_WORKERS` | `20` | Max concurrent requests (separate from rate) |
 

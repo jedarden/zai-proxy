@@ -150,15 +150,15 @@ func TestAdaptiveRateLimiter_Bounds(t *testing.T) {
 // TestAdaptiveRateLimiter_EWMACeilingUpdate tests 429-rate > 5% triggers EWMA update
 func TestAdaptiveRateLimiter_EWMACeilingUpdate(t *testing.T) {
 	tests := []struct {
-		name               string
-		initialRate        float64
-		minRate            float64
-		maxRate            float64
-		alpha              float64
-		holdMargin         float64
-		operations         []operation
+		name                string
+		initialRate         float64
+		minRate             float64
+		maxRate             float64
+		alpha               float64
+		holdMargin          float64
+		operations          []operation
 		wantCeilingDecrease bool
-		wantRateDrop       bool
+		wantRateDrop        bool
 	}{
 		{
 			name:        "high 429 rate updates ceiling and drops rate",
@@ -173,7 +173,7 @@ func TestAdaptiveRateLimiter_EWMACeilingUpdate(t *testing.T) {
 				advanceWindow(),
 			},
 			wantCeilingDecrease: true,
-			wantRateDrop:       true,
+			wantRateDrop:        true,
 		},
 		{
 			name:        "exactly 5% 429 rate triggers decrease",
@@ -188,7 +188,7 @@ func TestAdaptiveRateLimiter_EWMACeilingUpdate(t *testing.T) {
 				advanceWindow(),
 			},
 			wantCeilingDecrease: true,
-			wantRateDrop:       true,
+			wantRateDrop:        true,
 		},
 		{
 			name:        "just above 5% threshold (5.1%)",
@@ -203,7 +203,7 @@ func TestAdaptiveRateLimiter_EWMACeilingUpdate(t *testing.T) {
 				advanceWindow(),
 			},
 			wantCeilingDecrease: true,
-			wantRateDrop:       true,
+			wantRateDrop:        true,
 		},
 		{
 			name:        "just below 5% threshold (4.9%)",
@@ -218,7 +218,7 @@ func TestAdaptiveRateLimiter_EWMACeilingUpdate(t *testing.T) {
 				advanceWindow(),
 			},
 			wantCeilingDecrease: false,
-			wantRateDrop:       false,
+			wantRateDrop:        false,
 		},
 		{
 			name:        "severe 429 burst (50%) drops ceiling aggressively",
@@ -233,7 +233,7 @@ func TestAdaptiveRateLimiter_EWMACeilingUpdate(t *testing.T) {
 				advanceWindow(),
 			},
 			wantCeilingDecrease: true,
-			wantRateDrop:       true,
+			wantRateDrop:        true,
 		},
 		{
 			name:        "100% 429 rate drops ceiling to near current rate",
@@ -247,7 +247,7 @@ func TestAdaptiveRateLimiter_EWMACeilingUpdate(t *testing.T) {
 				advanceWindow(),
 			},
 			wantCeilingDecrease: true,
-			wantRateDrop:       true,
+			wantRateDrop:        true,
 		},
 		{
 			name:        "custom alpha (0.5) makes ceiling more reactive",
@@ -262,7 +262,7 @@ func TestAdaptiveRateLimiter_EWMACeilingUpdate(t *testing.T) {
 				advanceWindow(),
 			},
 			wantCeilingDecrease: true,
-			wantRateDrop:       true,
+			wantRateDrop:        true,
 		},
 		{
 			name:        "custom alpha (0.1) makes ceiling less reactive",
@@ -277,7 +277,7 @@ func TestAdaptiveRateLimiter_EWMACeilingUpdate(t *testing.T) {
 				advanceWindow(),
 			},
 			wantCeilingDecrease: true,
-			wantRateDrop:       true,
+			wantRateDrop:        true,
 		},
 	}
 
@@ -607,11 +607,11 @@ func TestAdaptiveRateLimiter_Reset(t *testing.T) {
 		wantCleanWindows int
 	}{
 		{
-			name:             "reset after heavy 429 load",
-			initialRate:      10.0,
-			minRate:          1.0,
-			maxRate:          50.0,
-			resetTo:          10.0,
+			name:        "reset after heavy 429 load",
+			initialRate: 10.0,
+			minRate:     1.0,
+			maxRate:     50.0,
+			resetTo:     10.0,
 			preResetOps: []operation{
 				record429s(100),
 				advanceWindow(),
@@ -623,11 +623,11 @@ func TestAdaptiveRateLimiter_Reset(t *testing.T) {
 			wantCleanWindows: 0,
 		},
 		{
-			name:             "reset to different rate",
-			initialRate:      10.0,
-			minRate:          1.0,
-			maxRate:          50.0,
-			resetTo:          25.0,
+			name:        "reset to different rate",
+			initialRate: 10.0,
+			minRate:     1.0,
+			maxRate:     50.0,
+			resetTo:     25.0,
 			preResetOps: []operation{
 				record429s(50),
 				advanceWindow(),
@@ -637,11 +637,11 @@ func TestAdaptiveRateLimiter_Reset(t *testing.T) {
 			wantCleanWindows: 0,
 		},
 		{
-			name:             "reset clears atomic counters",
-			initialRate:      10.0,
-			minRate:          1.0,
-			maxRate:          50.0,
-			resetTo:          10.0,
+			name:        "reset clears atomic counters",
+			initialRate: 10.0,
+			minRate:     1.0,
+			maxRate:     50.0,
+			resetTo:     10.0,
 			preResetOps: []operation{
 				record429s(10),
 				recordSuccesses(10),
@@ -844,63 +844,63 @@ func TestAdaptiveRateLimiter_EnvVars(t *testing.T) {
 		wantProbeInterval int
 	}{
 		{
-			name:             "default values",
-			initialRate:      10.0,
-			minRate:          1.0,
-			maxRate:          50.0,
-			setAlpha:         0.3,
-			setHoldMargin:    0.02,
-			setProbeInterval: 10,
-			wantAlpha:        0.3,
-			wantHoldMargin:   0.02,
+			name:              "default values",
+			initialRate:       10.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			setAlpha:          0.3,
+			setHoldMargin:     0.02,
+			setProbeInterval:  10,
+			wantAlpha:         0.3,
+			wantHoldMargin:    0.02,
 			wantProbeInterval: 10,
 		},
 		{
-			name:             "custom alpha 0.5",
-			initialRate:      10.0,
-			minRate:          1.0,
-			maxRate:          50.0,
-			setAlpha:         0.5,
-			setHoldMargin:    0.02,
-			setProbeInterval: 10,
-			wantAlpha:        0.5,
-			wantHoldMargin:   0.02,
+			name:              "custom alpha 0.5",
+			initialRate:       10.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			setAlpha:          0.5,
+			setHoldMargin:     0.02,
+			setProbeInterval:  10,
+			wantAlpha:         0.5,
+			wantHoldMargin:    0.02,
 			wantProbeInterval: 10,
 		},
 		{
-			name:             "custom hold margin 5%",
-			initialRate:      10.0,
-			minRate:          1.0,
-			maxRate:          50.0,
-			setAlpha:         0.3,
-			setHoldMargin:    0.05,
-			setProbeInterval: 10,
-			wantAlpha:        0.3,
-			wantHoldMargin:   0.05,
+			name:              "custom hold margin 5%",
+			initialRate:       10.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			setAlpha:          0.3,
+			setHoldMargin:     0.05,
+			setProbeInterval:  10,
+			wantAlpha:         0.3,
+			wantHoldMargin:    0.05,
 			wantProbeInterval: 10,
 		},
 		{
-			name:             "custom probe interval 20",
-			initialRate:      10.0,
-			minRate:          1.0,
-			maxRate:          50.0,
-			setAlpha:         0.3,
-			setHoldMargin:    0.02,
-			setProbeInterval: 20,
-			wantAlpha:        0.3,
-			wantHoldMargin:   0.02,
+			name:              "custom probe interval 20",
+			initialRate:       10.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			setAlpha:          0.3,
+			setHoldMargin:     0.02,
+			setProbeInterval:  20,
+			wantAlpha:         0.3,
+			wantHoldMargin:    0.02,
 			wantProbeInterval: 20,
 		},
 		{
-			name:             "all custom values",
-			initialRate:      10.0,
-			minRate:          1.0,
-			maxRate:          50.0,
-			setAlpha:         0.7,
-			setHoldMargin:    0.10,
-			setProbeInterval: 15,
-			wantAlpha:        0.7,
-			wantHoldMargin:   0.10,
+			name:              "all custom values",
+			initialRate:       10.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			setAlpha:          0.7,
+			setHoldMargin:     0.10,
+			setProbeInterval:  15,
+			wantAlpha:         0.7,
+			wantHoldMargin:    0.10,
 			wantProbeInterval: 15,
 		},
 	}
@@ -929,12 +929,12 @@ func TestAdaptiveRateLimiter_EnvVars(t *testing.T) {
 // TestAdaptiveRateLimiter_BasicState tests basic state initialization and access
 func TestAdaptiveRateLimiter_BasicState(t *testing.T) {
 	tests := []struct {
-		name             string
-		initialRate      float64
-		minRate          float64
-		maxRate          float64
-		wantInitialRate  float64
-		wantCeiling      float64
+		name            string
+		initialRate     float64
+		minRate         float64
+		maxRate         float64
+		wantInitialRate float64
+		wantCeiling     float64
 	}{
 		{
 			name:            "default initialization",
@@ -1492,18 +1492,18 @@ func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
 	// Default alpha is 0.3, so: new_ceiling = 0.3 * current_rate + 0.7 * old_ceiling
 
 	tests := []struct {
-		name               string
-		initialRate        float64
-		minRate            float64
-		maxRate            float64
-		alpha              float64
-		holdMargin         float64
-		initialCeiling     float64
-		currentRate        float64  // Rate when 429s are detected
-		percent429         float64  // 429 rate percentage (0-100)
-		wantNewCeiling     float64
-		wantHoldRate       float64
-		description        string
+		name           string
+		initialRate    float64
+		minRate        float64
+		maxRate        float64
+		alpha          float64
+		holdMargin     float64
+		initialCeiling float64
+		currentRate    float64 // Rate when 429s are detected
+		percent429     float64 // 429 rate percentage (0-100)
+		wantNewCeiling float64
+		wantHoldRate   float64
+		description    string
 	}{
 		{
 			name:           "alpha=0.3 basic EWMA calculation",
@@ -1518,8 +1518,8 @@ func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
 			// new_ceiling = 0.3 * 30 + 0.7 * 50 = 9 + 35 = 44
 			wantNewCeiling: 44.0,
 			// hold_rate = 44 * (1 - 0.02) = 44 * 0.98 = 43.12
-			wantHoldRate:   43.12,
-			description:    "Standard EWMA: 30% weight to current rate, 70% to old ceiling",
+			wantHoldRate: 43.12,
+			description:  "Standard EWMA: 30% weight to current rate, 70% to old ceiling",
 		},
 		{
 			name:           "alpha=0.3 severe 429 burst at high rate",
@@ -1534,8 +1534,8 @@ func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
 			// new_ceiling = 0.3 * 48 + 0.7 * 50 = 14.4 + 35 = 49.4
 			wantNewCeiling: 49.4,
 			// hold_rate = 49.4 * 0.98 = 48.412
-			wantHoldRate:   48.412,
-			description:    "High current rate near ceiling still reduces ceiling slightly",
+			wantHoldRate: 48.412,
+			description:  "High current rate near ceiling still reduces ceiling slightly",
 		},
 		{
 			name:           "alpha=0.3 moderate drop from ceiling",
@@ -1550,8 +1550,8 @@ func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
 			// new_ceiling = 0.3 * 40 + 0.7 * 50 = 12 + 35 = 47
 			wantNewCeiling: 47.0,
 			// hold_rate = 47 * 0.98 = 46.06
-			wantHoldRate:   46.06,
-			description:    "Current rate 10 below ceiling pulls ceiling down by 3",
+			wantHoldRate: 46.06,
+			description:  "Current rate 10 below ceiling pulls ceiling down by 3",
 		},
 		{
 			name:           "alpha=0.5 more reactive smoothing",
@@ -1566,8 +1566,8 @@ func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
 			// new_ceiling = 0.5 * 30 + 0.5 * 50 = 15 + 25 = 40
 			wantNewCeiling: 40.0,
 			// hold_rate = 40 * 0.98 = 39.2
-			wantHoldRate:   39.2,
-			description:    "Higher alpha (0.5) gives more weight to current observation",
+			wantHoldRate: 39.2,
+			description:  "Higher alpha (0.5) gives more weight to current observation",
 		},
 		{
 			name:           "alpha=0.1 less reactive smoothing",
@@ -1582,8 +1582,8 @@ func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
 			// new_ceiling = 0.1 * 30 + 0.9 * 50 = 3 + 45 = 48
 			wantNewCeiling: 48.0,
 			// hold_rate = 48 * 0.98 = 47.04
-			wantHoldRate:   47.04,
-			description:    "Lower alpha (0.1) gives more weight to historical ceiling",
+			wantHoldRate: 47.04,
+			description:  "Lower alpha (0.1) gives more weight to historical ceiling",
 		},
 		{
 			name:           "alpha=0.3 multiple consecutive updates compound",
@@ -1599,8 +1599,8 @@ func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
 			// But we only do one window here, so ceiling = 42.5
 			wantNewCeiling: 42.5,
 			// hold_rate = 42.5 * 0.98 = 41.65
-			wantHoldRate:   41.65,
-			description:    "First EWMA update from 50 to 42.5",
+			wantHoldRate: 41.65,
+			description:  "First EWMA update from 50 to 42.5",
 		},
 		{
 			name:           "alpha=0.3 near-minimum rate preserves floor",
@@ -1615,8 +1615,8 @@ func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
 			// new_ceiling = 0.3 * 2 + 0.7 * 50 = 0.6 + 35 = 35.6
 			wantNewCeiling: 35.6,
 			// hold_rate = 35.6 * 0.98 = 34.888, but min is 1.0, so final rate is clamped
-			wantHoldRate:   34.888,
-			description:    "Even extreme 429s at low rate still produce valid ceiling",
+			wantHoldRate: 34.888,
+			description:  "Even extreme 429s at low rate still produce valid ceiling",
 		},
 		{
 			name:           "alpha=0.3 zero current rate edge case",
@@ -1631,8 +1631,8 @@ func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
 			// new_ceiling = 0.3 * 0 + 0.7 * 50 = 0 + 35 = 35
 			wantNewCeiling: 35.0,
 			// hold_rate = 35 * 0.98 = 34.3
-			wantHoldRate:   34.3,
-			description:    "Zero current rate still yields valid EWMA calculation",
+			wantHoldRate: 34.3,
+			description:  "Zero current rate still yields valid EWMA calculation",
 		},
 	}
 
@@ -1711,14 +1711,14 @@ func TestAdaptiveRateLimiter_ConvergenceSteps(t *testing.T) {
 	// new_rate = current_rate + step
 
 	tests := []struct {
-		name            string
-		initialRate     float64
-		minRate         float64
-		maxRate         float64
-		holdMargin      float64
-		ceiling         float64
-		wantRatesAfter  []float64  // Expected rates after each clean window
-		description     string
+		name           string
+		initialRate    float64
+		minRate        float64
+		maxRate        float64
+		holdMargin     float64
+		ceiling        float64
+		wantRatesAfter []float64 // Expected rates after each clean window
+		description    string
 	}{
 		{
 			name:        "convergence from 10 to hold position 49",
@@ -1734,7 +1734,7 @@ func TestAdaptiveRateLimiter_ConvergenceSteps(t *testing.T) {
 			// Window 4: gap = 49 - 44.125 = 4.875, step = 4.875 * 0.5 = 2.4375, new = 44.125 + 2.4375 = 46.5625
 			// Window 5: gap = 49 - 46.5625 = 2.4375, step = 2.4375 * 0.5 = 1.21875, new = 46.5625 + 1.21875 = 47.78125
 			wantRatesAfter: []float64{29.5, 39.25, 44.125, 46.5625, 47.78125},
-			description: "Geometric convergence: each step halves the remaining gap",
+			description:    "Geometric convergence: each step halves the remaining gap",
 		},
 		{
 			name:        "convergence from 40 to hold position 49",
@@ -1749,7 +1749,7 @@ func TestAdaptiveRateLimiter_ConvergenceSteps(t *testing.T) {
 			// Window 3: gap = 2.25, step = 1.125, new = 47.875
 			// Window 4: gap = 1.125, step = 0.5625, new = 48.4375
 			wantRatesAfter: []float64{44.5, 46.75, 47.875, 48.4375},
-			description: "Closer starting point, fewer steps to converge",
+			description:    "Closer starting point, fewer steps to converge",
 		},
 		{
 			name:        "convergence with 5% hold margin",
@@ -1763,7 +1763,7 @@ func TestAdaptiveRateLimiter_ConvergenceSteps(t *testing.T) {
 			// Window 2: gap = 18.75, step = 9.375, new = 38.125
 			// Window 3: gap = 9.375, step = 4.6875, new = 42.8125
 			wantRatesAfter: []float64{28.75, 38.125, 42.8125},
-			description: "Different hold margin changes convergence target",
+			description:    "Different hold margin changes convergence target",
 		},
 		{
 			name:        "convergence from near-zero to hold position",
@@ -1779,7 +1779,7 @@ func TestAdaptiveRateLimiter_ConvergenceSteps(t *testing.T) {
 			// Window 4: gap = 6, step = 3, new = 46
 			// Window 5: gap = 3, step = 1.5, new = 47.5
 			wantRatesAfter: []float64{25.0, 37.0, 43.0, 46.0, 47.5},
-			description: "Large gap from minimum to hold position",
+			description:    "Large gap from minimum to hold position",
 		},
 		{
 			name:        "minimum step size 0.25 applies for tiny gaps",
@@ -1792,7 +1792,7 @@ func TestAdaptiveRateLimiter_ConvergenceSteps(t *testing.T) {
 			// Window 1: gap = 0.5, step = 0.5 * 0.5 = 0.25, but minimum is 0.25, so step = 0.25, new = 48.75
 			// Window 2: gap = 0.25, step = 0.25 * 0.5 = 0.125, but minimum is 0.25, so step = 0.25, new = 49.0 (clamped to hold)
 			wantRatesAfter: []float64{48.75, 49.0},
-			description: "Minimum step of 0.25 prevents slow convergence for tiny gaps",
+			description:    "Minimum step of 0.25 prevents slow convergence for tiny gaps",
 		},
 		{
 			name:        "asymptotic approach never exceeds hold position",
@@ -1805,7 +1805,7 @@ func TestAdaptiveRateLimiter_ConvergenceSteps(t *testing.T) {
 			// Verify convergence approaches but never exceeds hold position
 			// After many windows, rate should approach but not reach 49.0
 			wantRatesAfter: []float64{34.5, 41.75, 45.375, 47.1875, 48.09375, 48.546875},
-			description: "Geometric progression asymptotically approaches target",
+			description:    "Geometric progression asymptotically approaches target",
 		},
 	}
 
@@ -1876,158 +1876,158 @@ func TestAdaptiveRateLimiter_ConvergenceSteps(t *testing.T) {
 // TestAdaptiveRateLimiter_ThreeRegimes tests the three 429-rate regimes
 func TestAdaptiveRateLimiter_ThreeRegimes(t *testing.T) {
 	tests := []struct {
-		name           string
-		initialRate    float64
-		minRate        float64
-		maxRate        float64
-		alpha          float64
-		holdMargin     float64
-		initialCeiling float64
-		regime         string  // "high", "middle", "low"
-		percent429     float64
-		wantRateChange bool    // true if rate should change
-		wantCeilingChange bool  // true if ceiling should change
-		description    string
+		name              string
+		initialRate       float64
+		minRate           float64
+		maxRate           float64
+		alpha             float64
+		holdMargin        float64
+		initialCeiling    float64
+		regime            string // "high", "middle", "low"
+		percent429        float64
+		wantRateChange    bool // true if rate should change
+		wantCeilingChange bool // true if ceiling should change
+		description       string
 	}{
 		{
-			name:           "high regime: 10% 429 triggers ceiling update and rate drop",
-			initialRate:    30.0,
-			minRate:        1.0,
-			maxRate:        50.0,
-			alpha:          0.3,
-			holdMargin:     0.02,
-			initialCeiling: 50.0,
-			regime:         "high",
-			percent429:     10.0,
-			wantRateChange: true,
+			name:              "high regime: 10% 429 triggers ceiling update and rate drop",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			alpha:             0.3,
+			holdMargin:        0.02,
+			initialCeiling:    50.0,
+			regime:            "high",
+			percent429:        10.0,
+			wantRateChange:    true,
 			wantCeilingChange: true,
-			description:    "429-rate > 5%: EWMA ceiling update, rate drops to hold position",
+			description:       "429-rate > 5%: EWMA ceiling update, rate drops to hold position",
 		},
 		{
-			name:           "middle regime: exactly 5% 429 holds position (boundary)",
-			initialRate:    30.0,
-			minRate:        1.0,
-			maxRate:        50.0,
-			alpha:          0.3,
-			holdMargin:     0.02,
-			initialCeiling: 50.0,
-			regime:         "middle",
-			percent429:     5.0,
-			wantRateChange: false,
+			name:              "middle regime: exactly 5% 429 holds position (boundary)",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			alpha:             0.3,
+			holdMargin:        0.02,
+			initialCeiling:    50.0,
+			regime:            "middle",
+			percent429:        5.0,
+			wantRateChange:    false,
 			wantCeilingChange: false,
-			description:    "429-rate at threshold (5%) uses strict >, falls to middle regime",
+			description:       "429-rate at threshold (5%) uses strict >, falls to middle regime",
 		},
 		{
-			name:           "high regime: 50% 429 aggressive ceiling drop",
-			initialRate:    40.0,
-			minRate:        1.0,
-			maxRate:        50.0,
-			alpha:          0.3,
-			holdMargin:     0.02,
-			initialCeiling: 50.0,
-			regime:         "high",
-			percent429:     50.0,
-			wantRateChange: true,
+			name:              "high regime: 50% 429 aggressive ceiling drop",
+			initialRate:       40.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			alpha:             0.3,
+			holdMargin:        0.02,
+			initialCeiling:    50.0,
+			regime:            "high",
+			percent429:        50.0,
+			wantRateChange:    true,
 			wantCeilingChange: true,
-			description:    "Very high 429 rate forces significant ceiling adjustment",
+			description:       "Very high 429 rate forces significant ceiling adjustment",
 		},
 		{
-			name:           "middle regime: 3% 429 holds position",
-			initialRate:    30.0,
-			minRate:        1.0,
-			maxRate:        50.0,
-			alpha:          0.3,
-			holdMargin:     0.02,
-			initialCeiling: 50.0,
-			regime:         "middle",
-			percent429:     3.0,
-			wantRateChange: false,
+			name:              "middle regime: 3% 429 holds position",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			alpha:             0.3,
+			holdMargin:        0.02,
+			initialCeiling:    50.0,
+			regime:            "middle",
+			percent429:        3.0,
+			wantRateChange:    false,
 			wantCeilingChange: false,
-			description:    "429-rate 1-5%: hold position, no change",
+			description:       "429-rate 1-5%: hold position, no change",
 		},
 		{
-			name:           "middle regime: 2% 429 holds position",
-			initialRate:    30.0,
-			minRate:        1.0,
-			maxRate:        50.0,
-			alpha:          0.3,
-			holdMargin:     0.02,
-			initialCeiling: 50.0,
-			regime:         "middle",
-			percent429:     2.0,
-			wantRateChange: false,
+			name:              "middle regime: 2% 429 holds position",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			alpha:             0.3,
+			holdMargin:        0.02,
+			initialCeiling:    50.0,
+			regime:            "middle",
+			percent429:        2.0,
+			wantRateChange:    false,
 			wantCeilingChange: false,
-			description:    "429-rate in middle of 1-5% range holds steady",
+			description:       "429-rate in middle of 1-5% range holds steady",
 		},
 		{
-			name:           "middle regime: 4.9% 429 holds position",
-			initialRate:    30.0,
-			minRate:        1.0,
-			maxRate:        50.0,
-			alpha:          0.3,
-			holdMargin:     0.02,
-			initialCeiling: 50.0,
-			regime:         "middle",
-			percent429:     4.9,
-			wantRateChange: false,
+			name:              "middle regime: 4.9% 429 holds position",
+			initialRate:       30.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			alpha:             0.3,
+			holdMargin:        0.02,
+			initialCeiling:    50.0,
+			regime:            "middle",
+			percent429:        4.9,
+			wantRateChange:    false,
 			wantCeilingChange: false,
-			description:    "Just below 5% threshold holds position",
+			description:       "Just below 5% threshold holds position",
 		},
 		{
-			name:           "low regime: 0% 429 converges to hold",
-			initialRate:    20.0,
-			minRate:        1.0,
-			maxRate:        50.0,
-			alpha:          0.3,
-			holdMargin:     0.02,
-			initialCeiling: 50.0,
-			regime:         "low",
-			percent429:     0.0,
-			wantRateChange: true,
+			name:              "low regime: 0% 429 converges to hold",
+			initialRate:       20.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			alpha:             0.3,
+			holdMargin:        0.02,
+			initialCeiling:    50.0,
+			regime:            "low",
+			percent429:        0.0,
+			wantRateChange:    true,
 			wantCeilingChange: false,
-			description:    "429-rate < 1%: converge toward hold position in 50% steps",
+			description:       "429-rate < 1%: converge toward hold position in 50% steps",
 		},
 		{
-			name:           "low regime: 0.5% 429 converges to hold",
-			initialRate:    20.0,
-			minRate:        1.0,
-			maxRate:        50.0,
-			alpha:          0.3,
-			holdMargin:     0.02,
-			initialCeiling: 50.0,
-			regime:         "low",
-			percent429:     0.5,
-			wantRateChange: true,
+			name:              "low regime: 0.5% 429 converges to hold",
+			initialRate:       20.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			alpha:             0.3,
+			holdMargin:        0.02,
+			initialCeiling:    50.0,
+			regime:            "low",
+			percent429:        0.5,
+			wantRateChange:    true,
 			wantCeilingChange: false,
-			description:    "429-rate below 1% threshold allows convergence",
+			description:       "429-rate below 1% threshold allows convergence",
 		},
 		{
-			name:           "low regime: just below 1% (0.99%) allows convergence",
-			initialRate:    20.0,
-			minRate:        1.0,
-			maxRate:        50.0,
-			alpha:          0.3,
-			holdMargin:     0.02,
-			initialCeiling: 50.0,
-			regime:         "low",
-			percent429:     0.99,
-			wantRateChange: true,
+			name:              "low regime: just below 1% (0.99%) allows convergence",
+			initialRate:       20.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			alpha:             0.3,
+			holdMargin:        0.02,
+			initialCeiling:    50.0,
+			regime:            "low",
+			percent429:        0.99,
+			wantRateChange:    true,
 			wantCeilingChange: false,
-			description:    "429-rate < 1% (0.99% is strictly less than 0.01) allows convergence",
+			description:       "429-rate < 1% (0.99% is strictly less than 0.01) allows convergence",
 		},
 		{
-			name:           "low regime: 0.9% 429 allows convergence",
-			initialRate:    20.0,
-			minRate:        1.0,
-			maxRate:        50.0,
-			alpha:          0.3,
-			holdMargin:     0.02,
-			initialCeiling: 50.0,
-			regime:         "low",
-			percent429:     0.9,
-			wantRateChange: true,
+			name:              "low regime: 0.9% 429 allows convergence",
+			initialRate:       20.0,
+			minRate:           1.0,
+			maxRate:           50.0,
+			alpha:             0.3,
+			holdMargin:        0.02,
+			initialCeiling:    50.0,
+			regime:            "low",
+			percent429:        0.9,
+			wantRateChange:    true,
 			wantCeilingChange: false,
-			description:    "Just below 1% threshold allows convergence",
+			description:       "Just below 1% threshold allows convergence",
 		},
 	}
 
@@ -2669,84 +2669,84 @@ func TestProbeRateAboveCeiling(t *testing.T) {
 // TestCleanWindowDetection validates 429-rate < 1% threshold
 func TestCleanWindowDetection(t *testing.T) {
 	tests := []struct {
-		name          string
-		initialRate   float64
-		minRate       float64
-		maxRate       float64
-		holdMargin    float64
-		percent429    float64
-		isClean       bool
-		description   string
+		name        string
+		initialRate float64
+		minRate     float64
+		maxRate     float64
+		holdMargin  float64
+		percent429  float64
+		isClean     bool
+		description string
 	}{
 		{
-			name:          "0% 429 rate is clean",
-			initialRate:   30.0,
-			minRate:       1.0,
-			maxRate:       50.0,
-			holdMargin:    0.02,
-			percent429:    0.0,
-			isClean:       true,
-			description:   "Zero 429s should increment cleanWindows counter",
+			name:        "0% 429 rate is clean",
+			initialRate: 30.0,
+			minRate:     1.0,
+			maxRate:     50.0,
+			holdMargin:  0.02,
+			percent429:  0.0,
+			isClean:     true,
+			description: "Zero 429s should increment cleanWindows counter",
 		},
 		{
-			name:          "0.5% 429 rate is clean",
-			initialRate:   30.0,
-			minRate:       1.0,
-			maxRate:       50.0,
-			holdMargin:    0.02,
-			percent429:    0.5,
-			isClean:       true,
-			description:   "0.5% 429 rate is below 1% threshold, should be clean",
+			name:        "0.5% 429 rate is clean",
+			initialRate: 30.0,
+			minRate:     1.0,
+			maxRate:     50.0,
+			holdMargin:  0.02,
+			percent429:  0.5,
+			isClean:     true,
+			description: "0.5% 429 rate is below 1% threshold, should be clean",
 		},
 		{
-			name:          "0.99% 429 rate is clean",
-			initialRate:   30.0,
-			minRate:       1.0,
-			maxRate:       50.0,
-			holdMargin:    0.02,
-			percent429:    0.99,
-			isClean:       true,
-			description:   "0.99% 429 rate is still below 1% threshold (strict inequality)",
+			name:        "0.99% 429 rate is clean",
+			initialRate: 30.0,
+			minRate:     1.0,
+			maxRate:     50.0,
+			holdMargin:  0.02,
+			percent429:  0.99,
+			isClean:     true,
+			description: "0.99% 429 rate is still below 1% threshold (strict inequality)",
 		},
 		{
-			name:          "1.0% 429 rate is not clean",
-			initialRate:   30.0,
-			minRate:       1.0,
-			maxRate:       50.0,
-			holdMargin:    0.02,
-			percent429:    1.0,
-			isClean:       false,
-			description:   "Exactly 1% 429 rate should NOT be clean (threshold is < 1%)",
+			name:        "1.0% 429 rate is not clean",
+			initialRate: 30.0,
+			minRate:     1.0,
+			maxRate:     50.0,
+			holdMargin:  0.02,
+			percent429:  1.0,
+			isClean:     false,
+			description: "Exactly 1% 429 rate should NOT be clean (threshold is < 1%)",
 		},
 		{
-			name:          "1.01% 429 rate is not clean",
-			initialRate:   30.0,
-			minRate:       1.0,
-			maxRate:       50.0,
-			holdMargin:    0.02,
-			percent429:    1.01,
-			isClean:       false,
-			description:   "1.01% 429 rate exceeds 1% threshold",
+			name:        "1.01% 429 rate is not clean",
+			initialRate: 30.0,
+			minRate:     1.0,
+			maxRate:     50.0,
+			holdMargin:  0.02,
+			percent429:  1.01,
+			isClean:     false,
+			description: "1.01% 429 rate exceeds 1% threshold",
 		},
 		{
-			name:          "2% 429 rate is not clean",
-			initialRate:   30.0,
-			minRate:       1.0,
-			maxRate:       50.0,
-			holdMargin:    0.02,
-			percent429:    2.0,
-			isClean:       false,
-			description:   "2% 429 rate is in middle regime (1-5%), not clean",
+			name:        "2% 429 rate is not clean",
+			initialRate: 30.0,
+			minRate:     1.0,
+			maxRate:     50.0,
+			holdMargin:  0.02,
+			percent429:  2.0,
+			isClean:     false,
+			description: "2% 429 rate is in middle regime (1-5%), not clean",
 		},
 		{
-			name:          "5% 429 rate is not clean",
-			initialRate:   30.0,
-			minRate:       1.0,
-			maxRate:       50.0,
-			holdMargin:    0.02,
-			percent429:    5.0,
-			isClean:       false,
-			description:   "5% 429 rate is at high regime threshold, not clean",
+			name:        "5% 429 rate is not clean",
+			initialRate: 30.0,
+			minRate:     1.0,
+			maxRate:     50.0,
+			holdMargin:  0.02,
+			percent429:  5.0,
+			isClean:     false,
+			description: "5% 429 rate is at high regime threshold, not clean",
 		},
 	}
 
@@ -2759,61 +2759,21 @@ func TestCleanWindowDetection(t *testing.T) {
 			t.Logf(tt.description)
 			t.Logf("  429 rate: %.2f%%, isClean: %v", tt.percent429, tt.isClean)
 
-			// Record requests to achieve desired 429 percentage
-			totalRequests := int64(1000) // Use 1000 for finer granularity
-			count429 := int64(float64(totalRequests) * tt.percent429 / 100.0)
-			countSuccess := totalRequests - count429
-
-			// Ensure at least 1 request for accurate percentage
-			if count429 == 0 && tt.percent429 > 0 {
-				count429 = 1
-				countSuccess = totalRequests - 1
-			}
-
-			// Get initial cleanWindows count
 			initialCleanWindows := arl.cleanWindows
-
-			// Record the requests
-			for i := int64(0); i < count429; i++ {
-				arl.Record429()
-			}
-			for i := int64(0); i < countSuccess; i++ {
-				arl.RecordSuccess()
-			}
-
-			// Force window advancement to trigger tryAdjustRate
-			arl.mu.Lock()
-			arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
-			arl.mu.Unlock()
-			arl.RecordSuccess()
+			recordWindowAtPercent(t, arl, tt.percent429)
 
 			finalCleanWindows := arl.cleanWindows
 
+			wantCleanWindows := initialCleanWindows
 			if tt.isClean {
-				// Clean window should increment counter
-				if finalCleanWindows <= initialCleanWindows {
-					t.Errorf("429 rate %.2f%% should be clean (increment counter), but cleanWindows stayed at %d",
-						tt.percent429, finalCleanWindows)
-				}
-				t.Logf("✓ Clean window detected: cleanWindows incremented from %d to %d",
-					initialCleanWindows, finalCleanWindows)
-			} else {
-				// Non-clean window should reset counter to 0 (if 429 rate > 5%)
-				// or leave unchanged (if 1-5% range)
-				if tt.percent429 >= 5.0 {
-					if finalCleanWindows != 0 {
-						t.Errorf("429 rate %.2f%% should reset cleanWindows to 0, got %d",
-							tt.percent429, finalCleanWindows)
-					}
-					t.Logf("✓ High 429 rate detected: cleanWindows reset to 0")
-				} else {
-					// In middle regime (1-5%), cleanWindows should not increment
-					if finalCleanWindows != initialCleanWindows {
-						t.Logf("  Note: cleanWindows changed from %d to %d (middle regime behavior)",
-							initialCleanWindows, finalCleanWindows)
-					}
-					t.Logf("✓ Middle regime: cleanWindows unchanged (as expected for 1-5%% range)")
-				}
+				wantCleanWindows++
+			}
+			if tt.percent429 > 5.0 {
+				wantCleanWindows = 0
+			}
+			if finalCleanWindows != wantCleanWindows {
+				t.Errorf("429 rate %.2f%%: cleanWindows = %d, want %d",
+					tt.percent429, finalCleanWindows, wantCleanWindows)
 			}
 		})
 	}
@@ -2829,8 +2789,8 @@ func TestCleanWindowStateTransitions(t *testing.T) {
 		holdMargin    float64
 		probeInterval int
 		sequence      []struct {
-			percent429    float64
-			windows       int
+			percent429     float64
+			windows        int
 			wantCountAfter int // Expected cleanWindows count after this sequence
 		}
 		description string
@@ -2843,12 +2803,12 @@ func TestCleanWindowStateTransitions(t *testing.T) {
 			holdMargin:    0.02,
 			probeInterval: 10,
 			sequence: []struct {
-				percent429    float64
-				windows       int
+				percent429     float64
+				windows        int
 				wantCountAfter int
 			}{
-				{percent429: 0.0, windows: 5, wantCountAfter: 5},   // 5 clean windows
-				{percent429: 10.0, windows: 1, wantCountAfter: 0},  // High 429 rate resets counter
+				{percent429: 0.0, windows: 5, wantCountAfter: 5},  // 5 clean windows
+				{percent429: 10.0, windows: 1, wantCountAfter: 0}, // High 429 rate resets counter
 			},
 			description: "Counter should increment during clean windows, then reset to 0 when 429 rate exceeds 5%",
 		},
@@ -2860,12 +2820,12 @@ func TestCleanWindowStateTransitions(t *testing.T) {
 			holdMargin:    0.02,
 			probeInterval: 10,
 			sequence: []struct {
-				percent429    float64
-				windows       int
+				percent429     float64
+				windows        int
 				wantCountAfter int
 			}{
-				{percent429: 20.0, windows: 1, wantCountAfter: 0},  // High 429 rate resets counter
-				{percent429: 0.0, windows: 3, wantCountAfter: 3},   // Clean windows increment counter
+				{percent429: 20.0, windows: 1, wantCountAfter: 0}, // High 429 rate resets counter
+				{percent429: 0.0, windows: 3, wantCountAfter: 3},  // Clean windows increment counter
 			},
 			description: "After high 429 rate resets counter to 0, clean windows should increment it again",
 		},
@@ -2877,12 +2837,12 @@ func TestCleanWindowStateTransitions(t *testing.T) {
 			holdMargin:    0.02,
 			probeInterval: 10,
 			sequence: []struct {
-				percent429    float64
-				windows       int
+				percent429     float64
+				windows        int
 				wantCountAfter int
 			}{
-				{percent429: 0.0, windows: 4, wantCountAfter: 4},   // 4 clean windows
-				{percent429: 2.0, windows: 2, wantCountAfter: 4},   // Middle regime (1-5%) preserves counter
+				{percent429: 0.0, windows: 4, wantCountAfter: 4}, // 4 clean windows
+				{percent429: 2.0, windows: 2, wantCountAfter: 4}, // Middle regime (1-5%) preserves counter
 			},
 			description: "Transition from clean (<1%) to middle regime (1-5%) should preserve counter value",
 		},
@@ -2894,13 +2854,13 @@ func TestCleanWindowStateTransitions(t *testing.T) {
 			holdMargin:    0.02,
 			probeInterval: 10,
 			sequence: []struct {
-				percent429    float64
-				windows       int
+				percent429     float64
+				windows        int
 				wantCountAfter int
 			}{
-				{percent429: 0.0, windows: 2, wantCountAfter: 2},   // 2 clean windows
-				{percent429: 3.0, windows: 3, wantCountAfter: 2},   // Middle regime preserves counter at 2
-				{percent429: 0.0, windows: 2, wantCountAfter: 4},   // Clean windows resume incrementing: 2 + 2 = 4
+				{percent429: 0.0, windows: 2, wantCountAfter: 2}, // 2 clean windows
+				{percent429: 3.0, windows: 3, wantCountAfter: 2}, // Middle regime preserves counter at 2
+				{percent429: 0.0, windows: 2, wantCountAfter: 4}, // Clean windows resume incrementing: 2 + 2 = 4
 			},
 			description: "After middle regime, returning to clean windows should resume incrementing counter",
 		},
@@ -2912,17 +2872,17 @@ func TestCleanWindowStateTransitions(t *testing.T) {
 			holdMargin:    0.02,
 			probeInterval: 10,
 			sequence: []struct {
-				percent429    float64
-				windows       int
+				percent429     float64
+				windows        int
 				wantCountAfter int
 			}{
-				{percent429: 0.0, windows: 3, wantCountAfter: 3},   // Clean: counter = 3
-				{percent429: 10.0, windows: 1, wantCountAfter: 0},  // High 429: reset to 0
-				{percent429: 0.0, windows: 2, wantCountAfter: 2},   // Clean: counter = 2
+				{percent429: 0.0, windows: 3, wantCountAfter: 3},  // Clean: counter = 3
+				{percent429: 10.0, windows: 1, wantCountAfter: 0}, // High 429: reset to 0
+				{percent429: 0.0, windows: 2, wantCountAfter: 2},  // Clean: counter = 2
 				{percent429: 2.5, windows: 2, wantCountAfter: 2},  // Middle: preserve at 2
-				{percent429: 0.5, windows: 1, wantCountAfter: 3},   // Clean: counter = 3
-				{percent429: 50.0, windows: 1, wantCountAfter: 0},  // Very high 429: reset to 0
-				{percent429: 0.0, windows: 1, wantCountAfter: 1},   // Clean: counter = 1
+				{percent429: 0.5, windows: 1, wantCountAfter: 3},  // Clean: counter = 3
+				{percent429: 50.0, windows: 1, wantCountAfter: 0}, // Very high 429: reset to 0
+				{percent429: 0.0, windows: 1, wantCountAfter: 1},  // Clean: counter = 1
 			},
 			description: "Multiple transitions between clean, middle, and high regimes should update counter correctly",
 		},
@@ -2934,12 +2894,12 @@ func TestCleanWindowStateTransitions(t *testing.T) {
 			holdMargin:    0.02,
 			probeInterval: 5,
 			sequence: []struct {
-				percent429    float64
-				windows       int
+				percent429     float64
+				windows        int
 				wantCountAfter int
 			}{
-				{percent429: 0.0, windows: 4, wantCountAfter: 4},   // 4 clean windows (not yet at probe interval)
-				{percent429: 0.0, windows: 1, wantCountAfter: 0},   // 5th clean window triggers probe, resets to 0
+				{percent429: 0.0, windows: 4, wantCountAfter: 4}, // 4 clean windows (not yet at probe interval)
+				{percent429: 0.0, windows: 1, wantCountAfter: 0}, // 5th clean window triggers probe, resets to 0
 			},
 			description: "Counter should reach probe interval, trigger probe, and reset to 0",
 		},
@@ -2951,12 +2911,12 @@ func TestCleanWindowStateTransitions(t *testing.T) {
 			holdMargin:    0.02,
 			probeInterval: 10,
 			sequence: []struct {
-				percent429    float64
-				windows       int
+				percent429     float64
+				windows        int
 				wantCountAfter int
 			}{
-				{percent429: 1.5, windows: 5, wantCountAfter: 0},   // Middle regime: counter stays at 0
-				{percent429: 4.0, windows: 5, wantCountAfter: 0},   // Middle regime: counter stays at 0
+				{percent429: 1.5, windows: 5, wantCountAfter: 0}, // Middle regime: counter stays at 0
+				{percent429: 4.0, windows: 5, wantCountAfter: 0}, // Middle regime: counter stays at 0
 			},
 			description: "Middle regime (1-5% 429 rate) should never increment cleanWindows counter",
 		},
@@ -2968,13 +2928,13 @@ func TestCleanWindowStateTransitions(t *testing.T) {
 			holdMargin:    0.02,
 			probeInterval: 10,
 			sequence: []struct {
-				percent429    float64
-				windows       int
+				percent429     float64
+				windows        int
 				wantCountAfter int
 			}{
-				{percent429: 0.5, windows: 3, wantCountAfter: 3},   // Clean: counter = 3
-				{percent429: 1.0, windows: 2, wantCountAfter: 3},   // Exactly 1%: not clean, preserve at 3
-				{percent429: 0.9, windows: 1, wantCountAfter: 4},   // Below 1%: clean, increment to 4
+				{percent429: 0.5, windows: 3, wantCountAfter: 3}, // Clean: counter = 3
+				{percent429: 1.0, windows: 2, wantCountAfter: 3}, // Exactly 1%: not clean, preserve at 3
+				{percent429: 0.9, windows: 1, wantCountAfter: 4}, // Below 1%: clean, increment to 4
 			},
 			description: "Exactly 1% 429 rate is not clean (uses < 1% threshold), counter should be preserved",
 		},
@@ -2986,8 +2946,8 @@ func TestCleanWindowStateTransitions(t *testing.T) {
 			holdMargin:    0.02,
 			probeInterval: 10,
 			sequence: []struct {
-				percent429    float64
-				windows       int
+				percent429     float64
+				windows        int
 				wantCountAfter int
 			}{
 				{percent429: 0.99, windows: 5, wantCountAfter: 5},  // 0.99% is clean, counter = 5
@@ -3003,12 +2963,12 @@ func TestCleanWindowStateTransitions(t *testing.T) {
 			holdMargin:    0.02,
 			probeInterval: 10,
 			sequence: []struct {
-				percent429    float64
-				windows       int
+				percent429     float64
+				windows        int
 				wantCountAfter int
 			}{
-				{percent429: 0.5, windows: 4, wantCountAfter: 4},   // Clean: counter = 4
-				{percent429: 1.01, windows: 3, wantCountAfter: 4},  // 1.01%: not clean, preserve at 4
+				{percent429: 0.5, windows: 4, wantCountAfter: 4},  // Clean: counter = 4
+				{percent429: 1.01, windows: 3, wantCountAfter: 4}, // 1.01%: not clean, preserve at 4
 			},
 			description: "429 rate just above 1% threshold should preserve counter (middle regime)",
 		},
@@ -3030,29 +2990,7 @@ func TestCleanWindowStateTransitions(t *testing.T) {
 					seqIdx+1, seq.percent429, seq.windows)
 
 				for i := 0; i < seq.windows; i++ {
-					totalRequests := int64(1000) // Use 1000 for finer granularity
-					count429 := int64(float64(totalRequests) * seq.percent429 / 100.0)
-					countSuccess := totalRequests - count429
-
-					// Ensure at least 1 request for accurate percentage
-					if count429 == 0 && seq.percent429 > 0 {
-						count429 = 1
-						countSuccess = totalRequests - 1
-					}
-
-					// Record the requests
-					for j := int64(0); j < count429; j++ {
-						arl.Record429()
-					}
-					for j := int64(0); j < countSuccess; j++ {
-						arl.RecordSuccess()
-					}
-
-					// Force window advancement to trigger tryAdjustRate
-					arl.mu.Lock()
-					arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
-					arl.mu.Unlock()
-					arl.RecordSuccess()
+					recordWindowAtPercent(t, arl, seq.percent429)
 
 					t.Logf("    Window %d: 429 rate=%.2f%%, cleanWindows=%d",
 						i+1, seq.percent429, arl.cleanWindows)
@@ -3147,16 +3085,7 @@ func TestCleanWindowCounterAccumulation(t *testing.T) {
 
 			// Accumulate clean windows
 			for i := 0; i < tt.cleanWindows; i++ {
-				// Record a clean window (0% 429 rate)
-				for j := 0; j < 100; j++ {
-					arl.RecordSuccess()
-				}
-
-				// Force window advancement
-				arl.mu.Lock()
-				arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
-				arl.mu.Unlock()
-				arl.RecordSuccess()
+				recordWindowAtPercent(t, arl, 0)
 
 				t.Logf("  Window %d: cleanWindows=%d", i+1, arl.cleanWindows)
 			}
@@ -3170,7 +3099,7 @@ func TestCleanWindowCounterAccumulation(t *testing.T) {
 			// Verify rate is at or below hold position (no probe yet)
 			holdRate := arl.estimatedCeiling * (1 - tt.holdMargin)
 			currentRate := arl.GetCurrentRate()
-			if currentRate > holdRate + 0.01 {
+			if currentRate > holdRate+0.01 {
 				t.Errorf("After %d clean windows (below probe interval), rate %.2f should not exceed hold %.2f",
 					tt.cleanWindows, currentRate, holdRate)
 			}
@@ -3262,41 +3191,13 @@ func TestCleanWindowResetBehavior(t *testing.T) {
 
 			// Accumulate clean windows
 			for i := 0; i < tt.preResetCount; i++ {
-				for j := 0; j < 100; j++ {
-					arl.RecordSuccess()
-				}
-				arl.mu.Lock()
-				arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
-				arl.mu.Unlock()
-				arl.RecordSuccess()
+				recordWindowAtPercent(t, arl, 0)
 			}
 
 			countBeforeReset := arl.cleanWindows
 			t.Logf("  After %d clean windows: counter=%d", tt.preResetCount, countBeforeReset)
 
-			// Apply reset trigger
-			totalRequests := int64(1000)
-			count429 := int64(float64(totalRequests) * tt.resetTrigger / 100.0)
-			countSuccess := totalRequests - count429
-
-			// Ensure at least 1 request for accuracy
-			if count429 == 0 && tt.resetTrigger > 0 {
-				count429 = 1
-				countSuccess = totalRequests - 1
-			}
-
-			for j := int64(0); j < count429; j++ {
-				arl.Record429()
-			}
-			for j := int64(0); j < countSuccess; j++ {
-				arl.RecordSuccess()
-			}
-
-			// Force window advancement
-			arl.mu.Lock()
-			arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
-			arl.mu.Unlock()
-			arl.RecordSuccess()
+			recordWindowAtPercent(t, arl, tt.resetTrigger)
 
 			countAfterReset := arl.cleanWindows
 			t.Logf("  After %.2f%% 429 rate: counter=%d", tt.resetTrigger, countAfterReset)
@@ -3325,15 +3226,15 @@ func TestCleanWindowResetBehavior(t *testing.T) {
 // TestCleanWindowRateConvergence tests rate convergence during clean windows
 func TestCleanWindowRateConvergence(t *testing.T) {
 	tests := []struct {
-		name              string
-		initialRate       float64
-		minRate           float64
-		maxRate           float64
-		holdMargin        float64
-		startRate         float64
-		cleanWindows      int
-		wantRateIncrease  bool
-		description       string
+		name             string
+		initialRate      float64
+		minRate          float64
+		maxRate          float64
+		holdMargin       float64
+		startRate        float64
+		cleanWindows     int
+		wantRateIncrease bool
+		description      string
 	}{
 		{
 			name:             "rate increases during clean windows when below hold",
@@ -3387,13 +3288,7 @@ func TestCleanWindowRateConvergence(t *testing.T) {
 
 			// Apply clean windows
 			for i := 0; i < tt.cleanWindows; i++ {
-				for j := 0; j < 100; j++ {
-					arl.RecordSuccess()
-				}
-				arl.mu.Lock()
-				arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
-				arl.mu.Unlock()
-				arl.RecordSuccess()
+				recordWindowAtPercent(t, arl, 0)
 
 				t.Logf("  Window %d: rate=%.2f, cleanWindows=%d",
 					i+1, arl.GetCurrentRate(), arl.cleanWindows)
@@ -3408,7 +3303,7 @@ func TestCleanWindowRateConvergence(t *testing.T) {
 						initialRate, finalRate)
 				}
 				// But should not exceed hold position
-				if finalRate > holdRate + 0.01 {
+				if finalRate > holdRate+0.01 {
 					t.Errorf("During clean windows, rate %.2f should not exceed hold %.2f",
 						finalRate, holdRate)
 				}
@@ -3434,189 +3329,189 @@ func TestCleanWindowRateConvergence(t *testing.T) {
 // TestNonCleanWindowDetection tests scenarios where 429-rate >= 1% (non-clean windows)
 func TestNonCleanWindowDetection(t *testing.T) {
 	tests := []struct {
-		name          string
-		initialRate   float64
-		minRate       float64
-		maxRate       float64
-		holdMargin    float64
-		percent429    float64
-		wantClean     bool
+		name             string
+		initialRate      float64
+		minRate          float64
+		maxRate          float64
+		holdMargin       float64
+		percent429       float64
+		wantClean        bool
 		wantCounterReset bool // Whether cleanWindows should reset to 0
-		description   string
+		description      string
 	}{
 		// Exactly at threshold (1%)
 		{
-			name:              "exactly 1% threshold is not clean",
-			initialRate:       30.0,
-			minRate:           1.0,
-			maxRate:           50.0,
-			holdMargin:        0.02,
-			percent429:        1.0,
-			wantClean:         false,
-			wantCounterReset:  false, // Middle regime (1-5%) preserves counter
-			description:       "429-rate at exactly 1% threshold should NOT be clean",
+			name:             "exactly 1% threshold is not clean",
+			initialRate:      30.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			percent429:       1.0,
+			wantClean:        false,
+			wantCounterReset: false, // Middle regime (1-5%) preserves counter
+			description:      "429-rate at exactly 1% threshold should NOT be clean",
 		},
 
 		// Just above threshold
 		{
-			name:              "1.01% just above threshold is not clean",
-			initialRate:       30.0,
-			minRate:           1.0,
-			maxRate:           50.0,
-			holdMargin:        0.02,
-			percent429:        1.01,
-			wantClean:         false,
-			wantCounterReset:  false, // Middle regime (1-5%) preserves counter
-			description:       "429-rate just above 1% threshold should NOT be clean",
+			name:             "1.01% just above threshold is not clean",
+			initialRate:      30.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			percent429:       1.01,
+			wantClean:        false,
+			wantCounterReset: false, // Middle regime (1-5%) preserves counter
+			description:      "429-rate just above 1% threshold should NOT be clean",
 		},
 		{
-			name:              "1.1% is not clean",
-			initialRate:       30.0,
-			minRate:           1.0,
-			maxRate:           50.0,
-			holdMargin:        0.02,
-			percent429:        1.1,
-			wantClean:         false,
-			wantCounterReset:  false, // Middle regime (1-5%) preserves counter
-			description:       "429-rate of 1.1% should NOT be clean",
+			name:             "1.1% is not clean",
+			initialRate:      30.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			percent429:       1.1,
+			wantClean:        false,
+			wantCounterReset: false, // Middle regime (1-5%) preserves counter
+			description:      "429-rate of 1.1% should NOT be clean",
 		},
 		{
-			name:              "1.5% is not clean",
-			initialRate:       30.0,
-			minRate:           1.0,
-			maxRate:           50.0,
-			holdMargin:        0.02,
-			percent429:        1.5,
-			wantClean:         false,
-			wantCounterReset:  false, // Middle regime (1-5%) preserves counter
-			description:       "429-rate of 1.5% should NOT be clean",
+			name:             "1.5% is not clean",
+			initialRate:      30.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			percent429:       1.5,
+			wantClean:        false,
+			wantCounterReset: false, // Middle regime (1-5%) preserves counter
+			description:      "429-rate of 1.5% should NOT be clean",
 		},
 
 		// Middle regime (1-5%)
 		{
-			name:              "2% middle regime is not clean",
-			initialRate:       30.0,
-			minRate:           1.0,
-			maxRate:           50.0,
-			holdMargin:        0.02,
-			percent429:        2.0,
-			wantClean:         false,
-			wantCounterReset:  false, // Middle regime preserves counter
-			description:       "429-rate of 2% (middle regime) should NOT be clean",
+			name:             "2% middle regime is not clean",
+			initialRate:      30.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			percent429:       2.0,
+			wantClean:        false,
+			wantCounterReset: false, // Middle regime preserves counter
+			description:      "429-rate of 2% (middle regime) should NOT be clean",
 		},
 		{
-			name:              "3% middle regime is not clean",
-			initialRate:       30.0,
-			minRate:           1.0,
-			maxRate:           50.0,
-			holdMargin:        0.02,
-			percent429:        3.0,
-			wantClean:         false,
-			wantCounterReset:  false, // Middle regime preserves counter
-			description:       "429-rate of 3% (middle regime) should NOT be clean",
+			name:             "3% middle regime is not clean",
+			initialRate:      30.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			percent429:       3.0,
+			wantClean:        false,
+			wantCounterReset: false, // Middle regime preserves counter
+			description:      "429-rate of 3% (middle regime) should NOT be clean",
 		},
 		{
-			name:              "4% middle regime is not clean",
-			initialRate:       30.0,
-			minRate:           1.0,
-			maxRate:           50.0,
-			holdMargin:        0.02,
-			percent429:        4.0,
-			wantClean:         false,
-			wantCounterReset:  false, // Middle regime preserves counter
-			description:       "429-rate of 4% (middle regime) should NOT be clean",
+			name:             "4% middle regime is not clean",
+			initialRate:      30.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			percent429:       4.0,
+			wantClean:        false,
+			wantCounterReset: false, // Middle regime preserves counter
+			description:      "429-rate of 4% (middle regime) should NOT be clean",
 		},
 		{
-			name:              "4.9% just below high regime is not clean",
-			initialRate:       30.0,
-			minRate:           1.0,
-			maxRate:           50.0,
-			holdMargin:        0.02,
-			percent429:        4.9,
-			wantClean:         false,
-			wantCounterReset:  false, // Middle regime preserves counter
-			description:       "429-rate of 4.9% (just below 5% threshold) should NOT be clean",
+			name:             "4.9% just below high regime is not clean",
+			initialRate:      30.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			percent429:       4.9,
+			wantClean:        false,
+			wantCounterReset: false, // Middle regime preserves counter
+			description:      "429-rate of 4.9% (just below 5% threshold) should NOT be clean",
 		},
 
 		// At high regime threshold (5%)
 		{
-			name:              "exactly 5% high regime threshold is not clean",
-			initialRate:       30.0,
-			minRate:           1.0,
-			maxRate:           50.0,
-			holdMargin:        0.02,
-			percent429:        5.0,
-			wantClean:         false,
-			wantCounterReset:  false, // Exactly 5% is middle regime (uses >)
-			description:       "429-rate at exactly 5% threshold should NOT be clean (falls to middle regime)",
+			name:             "exactly 5% high regime threshold is not clean",
+			initialRate:      30.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			percent429:       5.0,
+			wantClean:        false,
+			wantCounterReset: false, // Exactly 5% is middle regime (uses >)
+			description:      "429-rate at exactly 5% threshold should NOT be clean (falls to middle regime)",
 		},
 
 		// High regime (>5%)
 		{
-			name:              "5.1% just above high regime threshold is not clean",
-			initialRate:       30.0,
-			minRate:           1.0,
-			maxRate:           50.0,
-			holdMargin:        0.02,
-			percent429:        5.1,
-			wantClean:         false,
-			wantCounterReset:  true, // High regime (>5%) resets counter
-			description:       "429-rate of 5.1% (just above 5% threshold) should NOT be clean and should reset counter",
+			name:             "5.1% just above high regime threshold is not clean",
+			initialRate:      30.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			percent429:       5.1,
+			wantClean:        false,
+			wantCounterReset: true, // High regime (>5%) resets counter
+			description:      "429-rate of 5.1% (just above 5% threshold) should NOT be clean and should reset counter",
 		},
 		{
-			name:              "6% high regime is not clean",
-			initialRate:       30.0,
-			minRate:           1.0,
-			maxRate:           50.0,
-			holdMargin:        0.02,
-			percent429:        6.0,
-			wantClean:         false,
-			wantCounterReset:  true, // High regime resets counter
-			description:       "429-rate of 6% (high regime) should NOT be clean and should reset counter",
+			name:             "6% high regime is not clean",
+			initialRate:      30.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			percent429:       6.0,
+			wantClean:        false,
+			wantCounterReset: true, // High regime resets counter
+			description:      "429-rate of 6% (high regime) should NOT be clean and should reset counter",
 		},
 		{
-			name:              "10% high regime is not clean",
-			initialRate:       30.0,
-			minRate:           1.0,
-			maxRate:           50.0,
-			holdMargin:        0.02,
-			percent429:        10.0,
-			wantClean:         false,
-			wantCounterReset:  true, // High regime resets counter
-			description:       "429-rate of 10% (high regime) should NOT be clean and should reset counter",
+			name:             "10% high regime is not clean",
+			initialRate:      30.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			percent429:       10.0,
+			wantClean:        false,
+			wantCounterReset: true, // High regime resets counter
+			description:      "429-rate of 10% (high regime) should NOT be clean and should reset counter",
 		},
 		{
-			name:              "20% high regime is not clean",
-			initialRate:       30.0,
-			minRate:           1.0,
-			maxRate:           50.0,
-			holdMargin:        0.02,
-			percent429:        20.0,
-			wantClean:         false,
-			wantCounterReset:  true, // High regime resets counter
-			description:       "429-rate of 20% (high regime) should NOT be clean and should reset counter",
+			name:             "20% high regime is not clean",
+			initialRate:      30.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			percent429:       20.0,
+			wantClean:        false,
+			wantCounterReset: true, // High regime resets counter
+			description:      "429-rate of 20% (high regime) should NOT be clean and should reset counter",
 		},
 		{
-			name:              "50% high regime is not clean",
-			initialRate:       30.0,
-			minRate:           1.0,
-			maxRate:           50.0,
-			holdMargin:        0.02,
-			percent429:        50.0,
-			wantClean:         false,
-			wantCounterReset:  true, // High regime resets counter
-			description:       "429-rate of 50% (high regime) should NOT be clean and should reset counter",
+			name:             "50% high regime is not clean",
+			initialRate:      30.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			percent429:       50.0,
+			wantClean:        false,
+			wantCounterReset: true, // High regime resets counter
+			description:      "429-rate of 50% (high regime) should NOT be clean and should reset counter",
 		},
 		{
-			name:              "100% high regime is not clean",
-			initialRate:       30.0,
-			minRate:           1.0,
-			maxRate:           50.0,
-			holdMargin:        0.02,
-			percent429:        100.0,
-			wantClean:         false,
-			wantCounterReset:  true, // High regime resets counter
-			description:       "429-rate of 100% (all requests failing) should NOT be clean and should reset counter",
+			name:             "100% high regime is not clean",
+			initialRate:      30.0,
+			minRate:          1.0,
+			maxRate:          50.0,
+			holdMargin:       0.02,
+			percent429:       100.0,
+			wantClean:        false,
+			wantCounterReset: true, // High regime resets counter
+			description:      "429-rate of 100% (all requests failing) should NOT be clean and should reset counter",
 		},
 	}
 
@@ -3635,29 +3530,7 @@ func TestNonCleanWindowDetection(t *testing.T) {
 			t.Logf("  Initial cleanWindows counter: %d", initialCleanWindows)
 
 			// Record requests to achieve desired 429 percentage
-			totalRequests := int64(1000) // Use 1000 for finer granularity
-			count429 := int64(float64(totalRequests) * tt.percent429 / 100.0)
-			countSuccess := totalRequests - count429
-
-			// Ensure at least 1 request for accurate percentage
-			if count429 == 0 && tt.percent429 > 0 {
-				count429 = 1
-				countSuccess = totalRequests - 1
-			}
-
-			// Record the requests
-			for i := int64(0); i < count429; i++ {
-				arl.Record429()
-			}
-			for i := int64(0); i < countSuccess; i++ {
-				arl.RecordSuccess()
-			}
-
-			// Force window advancement to trigger tryAdjustRate
-			arl.mu.Lock()
-			arl.lastAdjustment = arl.lastAdjustment.Add(-testWindow - time.Millisecond)
-			arl.mu.Unlock()
-			arl.RecordSuccess()
+			recordWindowAtPercent(t, arl, tt.percent429)
 
 			finalCleanWindows := arl.cleanWindows
 

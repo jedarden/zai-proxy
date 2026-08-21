@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -20,6 +21,12 @@ func recordWindow(t *testing.T, arl *AdaptiveRateLimiter, count429, total int) {
 		t.Fatalf("invalid window: %d 429s in %d requests", count429, total)
 	}
 
+	// Prevent the request loop from crossing a short test window under the race
+	// detector. The complete window must be evaluated as one accounting unit.
+	arl.mu.Lock()
+	arl.lastAdjustment = time.Now().Add(arl.adjustmentWindow + time.Hour)
+	arl.mu.Unlock()
+
 	for i := 0; i < count429; i++ {
 		arl.Record429()
 	}
@@ -31,6 +38,22 @@ func recordWindow(t *testing.T, arl *AdaptiveRateLimiter, count429, total int) {
 	arl.lastAdjustment = time.Now().Add(-arl.adjustmentWindow - time.Millisecond)
 	arl.mu.Unlock()
 	arl.tryAdjustRate()
+}
+
+// recordWindowAtPercent is the shared fixture for clean-window tests that use
+// human-readable percentages. The 0.001% resolution keeps every threshold
+// case exact while avoiding an extra request merely to trigger evaluation.
+func recordWindowAtPercent(t *testing.T, arl *AdaptiveRateLimiter, percent429 float64) {
+	t.Helper()
+	if percent429 < 0 || percent429 > 100 {
+		t.Fatalf("invalid 429 percentage: %f", percent429)
+	}
+
+	const (
+		thousandthsPerPercent = 1000
+		windowRequests        = 100 * thousandthsPerPercent
+	)
+	recordWindow(t, arl, int(math.Round(percent429*thousandthsPerPercent)), windowRequests)
 }
 
 func newStateTransitionLimiter() *AdaptiveRateLimiter {
