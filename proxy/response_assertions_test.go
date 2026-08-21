@@ -427,6 +427,74 @@ func TestAssertContentType(t *testing.T) {
 	})
 }
 
+// TestAssertStreamingContentType verifies SSE Content-Type validation.
+func TestAssertStreamingContentType(t *testing.T) {
+	t.Run("text event stream", func(t *testing.T) {
+		resp := &http.Response{
+			Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+		}
+		AssertStreamingContentType(t, resp)
+	})
+
+	t.Run("text event stream with charset", func(t *testing.T) {
+		resp := &http.Response{
+			Header: http.Header{"Content-Type": []string{"text/event-stream; charset=utf-8"}},
+		}
+		AssertStreamingContentType(t, resp)
+	})
+}
+
+// TestAssertStreamingEvent verifies SSE event type validation.
+func TestAssertStreamingEvent(t *testing.T) {
+	t.Run("JSON payload type", func(t *testing.T) {
+		stream := "data: {\"type\":\"message_start\"}\n\ndata: {\"type\":\"message_stop\"}\n\n"
+		AssertStreamingEvent(t, stream, "message_start")
+		AssertStreamingEvent(t, stream, "message_stop")
+	})
+
+	t.Run("named SSE event", func(t *testing.T) {
+		stream := "event: heartbeat\ndata: {\"type\":\"keepalive\"}\n\n"
+		AssertStreamingEvent(t, stream, "heartbeat")
+	})
+}
+
+// TestAssertStreamingDataFormat verifies valid streaming data passes validation.
+func TestAssertStreamingDataFormat(t *testing.T) {
+	t.Run("multiple JSON events", func(t *testing.T) {
+		stream := "data: {\"type\":\"message_start\"}\r\n\r\ndata: {\"type\":\"message_stop\"}\r\n\r\n"
+		AssertStreamingDataFormat(t, stream)
+	})
+
+	t.Run("terminal done event", func(t *testing.T) {
+		AssertStreamingDataFormat(t, "data: [DONE]\n\n")
+	})
+}
+
+func TestParseStreamingEvents(t *testing.T) {
+	t.Run("joins multiline data fields", func(t *testing.T) {
+		events, err := parseStreamingEvents("data: {\"type\":\ndata: \"message_start\"}\n\n")
+		if err != nil {
+			t.Fatalf("parseStreamingEvents returned an error: %v", err)
+		}
+		if len(events) != 1 || events[0].data != "{\"type\":\n\"message_start\"}" {
+			t.Errorf("Expected one joined event, got %#v", events)
+		}
+	})
+
+	for _, stream := range []string{
+		"",
+		"event: connected\n\n",
+		"data: not-json\n\n",
+		"invalid field\n\n",
+	} {
+		t.Run(fmt.Sprintf("rejects %q", stream), func(t *testing.T) {
+			if _, err := parseStreamingEvents(stream); err == nil {
+				t.Error("Expected malformed stream to return an error")
+			}
+		})
+	}
+}
+
 // TestAssertEmptyBody_EdgeCases verifies AssertEmptyBody handles edge cases correctly
 func TestAssertEmptyBody_EdgeCases(t *testing.T) {
 	t.Run("truly empty body passes", func(t *testing.T) {

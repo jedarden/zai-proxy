@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -369,6 +370,134 @@ func AssertHeader(t *testing.T, resp *http.Response, header, expectedValue strin
 func AssertContentType(t *testing.T, resp *http.Response, contentType string) {
 	t.Helper()
 	AssertHeader(t, resp, "Content-Type", contentType)
+}
+
+// AssertStreamingContentType asserts that the response Content-Type is text/event-stream.
+// Content-Type parameters such as charset are accepted.
+func AssertStreamingContentType(t *testing.T, resp *http.Response) {
+	t.Helper()
+
+	contentType := resp.Header.Get("Content-Type")
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		t.Errorf("Invalid streaming Content-Type %q: %v", contentType, err)
+		return
+	}
+
+	if !strings.EqualFold(mediaType, "text/event-stream") {
+		t.Errorf("Expected streaming Content-Type %q, got %q", "text/event-stream", contentType)
+	}
+}
+
+// AssertStreamingEvent asserts that an SSE stream contains an event with the expected type.
+// Event types may be specified by an SSE event field or by a JSON payload's type field.
+func AssertStreamingEvent(t *testing.T, stream, expectedType string) {
+	t.Helper()
+
+	if expectedType == "" {
+		t.Error("Expected streaming event type must not be empty")
+		return
+	}
+
+	events, err := parseStreamingEvents(stream)
+	if err != nil {
+		t.Errorf("Invalid streaming data: %v", err)
+		return
+	}
+
+	for _, event := range events {
+		if event.name == expectedType {
+			return
+		}
+
+		var payload struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal([]byte(event.data), &payload); err == nil && payload.Type == expectedType {
+			return
+		}
+	}
+
+	t.Errorf("Streaming response missing event type %q", expectedType)
+}
+
+// AssertStreamingDataFormat asserts that stream data is valid SSE with JSON payloads.
+// The [DONE] terminal payload is also accepted.
+func AssertStreamingDataFormat(t *testing.T, stream string) {
+	t.Helper()
+
+	if _, err := parseStreamingEvents(stream); err != nil {
+		t.Errorf("Invalid streaming data format: %v", err)
+	}
+}
+
+type streamingEvent struct {
+	name string
+	data string
+}
+
+// parseStreamingEvents validates SSE framing and JSON data payloads.
+func parseStreamingEvents(stream string) ([]streamingEvent, error) {
+	if stream == "" {
+		return nil, fmt.Errorf("stream is empty")
+	}
+
+	var (
+		events    []streamingEvent
+		dataLines []string
+		eventName string
+	)
+
+	appendEvent := func() error {
+		if len(dataLines) == 0 {
+			eventName = ""
+			return nil
+		}
+
+		data := strings.Join(dataLines, "\n")
+		if data != "[DONE]" && !json.Valid([]byte(data)) {
+			return fmt.Errorf("event data is not valid JSON: %q", data)
+		}
+
+		events = append(events, streamingEvent{name: eventName, data: data})
+		dataLines = nil
+		eventName = ""
+		return nil
+	}
+
+	for _, line := range strings.Split(strings.ReplaceAll(stream, "\r\n", "\n"), "\n") {
+		if line == "" {
+			if err := appendEvent(); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, ":") {
+			continue
+		}
+
+		field, value, ok := strings.Cut(line, ":")
+		if !ok {
+			return nil, fmt.Errorf("invalid SSE field %q", line)
+		}
+		value = strings.TrimPrefix(value, " ")
+
+		switch field {
+		case "data":
+			dataLines = append(dataLines, value)
+		case "event":
+			eventName = value
+		}
+	}
+
+	if err := appendEvent(); err != nil {
+		return nil, err
+	}
+	if len(events) == 0 {
+		return nil, fmt.Errorf("stream contains no data events")
+	}
+
+	return events, nil
 }
 
 // ============================================================================
