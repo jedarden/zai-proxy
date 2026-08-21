@@ -115,10 +115,9 @@ The core component. Handles:
 - **Deployment variants:** `DEPLOYMENT_VARIANT` env distinguishes metric streams from
   production and canary pods. All Prometheus metrics carry a `variant` label.
 
-- **Canary support:** two Deployments share the `devpod` namespace. The canary
-  (`zai-proxy-v2`) currently carries all production traffic (original `zai-proxy`
-  Deployment is scaled to 0). A `zai-proxy-canary` Service enables weighted traffic
-  splits for testing new versions.
+- **Canary support:** the `zai-proxy` Deployment is the two-replica production
+  workload selected by the `zai-proxy` Service. The separate `zai-proxy-canary`
+  Deployment and Service isolate canary traffic for testing new versions.
 
 ### dashboard/ — Metrics Dashboard (Go + React)
 
@@ -356,6 +355,15 @@ zai-proxy/                          (git.ardenone.com/jedarden/zai-proxy)
     └── research/                   Tokenizer research, metrics references
 ```
 
+GitOps deployment manifests live in the separate `jedarden/declarative-config`
+repository:
+
+| Path | Purpose |
+|------|---------|
+| `k8s/ardenone-cluster/devpod/zai-proxy.yml` | Canonical two-replica production Deployment and its `zai-proxy` Service |
+| `k8s/ardenone-cluster/devpod/zai-proxy-canary-deployment.yml` | Isolated canary Deployment |
+| `k8s/ardenone-cluster/devpod/zai-proxy-canary-service.yml` | Canary Service for test traffic |
+
 ## CI/CD
 
 Build templates live in `jedarden/declarative-config → k8s/iad-ci/argo-workflows/`:
@@ -388,10 +396,9 @@ Both components deploy to the `devpod` namespace on `ardenone-cluster` via ArgoC
 `jedarden/declarative-config`.
 
 Key manifests:
-- `k8s/ardenone-cluster/devpod/zai-proxy.yml` — original Deployment (currently replicas=0)
-- `k8s/ardenone-cluster/devpod/zai-proxy-v2.yml` — active production Deployment
+- `k8s/ardenone-cluster/devpod/zai-proxy.yml` — canonical two-replica production Deployment and Service
 - `k8s/ardenone-cluster/devpod/zai-proxy-canary-deployment.yml` — canary config
-- `k8s/ardenone-cluster/devpod/zai-proxy-canary-service.yml` — weighted traffic split
+- `k8s/ardenone-cluster/devpod/zai-proxy-canary-service.yml` — canary traffic Service
 - `k8s/ardenone-cluster/devpod/zai-proxy-tailscale.yml` — Tailscale ingress
 - `k8s/ardenone-cluster/devpod/zai-proxy-servicemonitor.yml` — Prometheus scrape target
 - `k8s/ardenone-cluster/monitoring/grafana-dashboard-zai-proxy.yml` — Grafana dashboard
@@ -463,7 +470,7 @@ on (the dashboard itself is the thing that would have shown the alert).
 Meanwhile, the same metrics this dashboard exists to serve are already durably captured
 elsewhere: `k8s/ardenone-cluster/devpod/zai-proxy-servicemonitor.yml` has Prometheus
 (`kube-prometheus-stack`, confirmed live, `retention: 10d`) scraping `/metrics` from both
-`zai-proxy` (routes to v2 pods) and `zai-proxy-canary` every 15s, and
+`zai-proxy` (production pods) and `zai-proxy-canary` every 15s, and
 `k8s/ardenone-cluster/monitoring/grafana-dashboard-zai-proxy.yml` already renders
 essentially the same panel set (throughput, latency percentiles, error rate, token rate,
 rate-limiter state) straight from Prometheus. The custom dashboard's SQLite tables
