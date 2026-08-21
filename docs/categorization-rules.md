@@ -24,7 +24,7 @@ The result has these fields:
 | `type` / `category` | The primary category ID. Both fields have the same value; `type` is the concise API name. |
 | `subcategory` | Optional additional detail. It is a lowercase snake-case value and must not change the meaning of the primary category. |
 | `confidence` | A value from 0.0 through 1.0. An exact runtime marker is normally high confidence; broad assertion text is deliberately lower confidence. |
-| `uncertain` | `true` when confidence is at or below 0.70. `unknown` is always uncertain. |
+| `uncertain` | `true` when confidence is below 0.70. `unknown` is always uncertain. |
 | `reasoning` | The matched pattern and any competing matches or resolution applied. |
 
 `unknown` is serialized by the implementation and displayed to users as
@@ -152,7 +152,7 @@ function categorize(failure):
         subcategory = "test_setup"
 
     return category(primary.type, subcategory, confidence,
-                    uncertain=(confidence <= 0.70), reasoning=all matches)
+                    uncertain=(confidence < 0.70), reasoning=all matches)
 ```
 
 The pseudocode expresses the intended report contract. The current Go API

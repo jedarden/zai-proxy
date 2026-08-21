@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
@@ -22,7 +23,7 @@ import (
 //
 // UNCERTAINTY DETECTION:
 // The system includes an uncertainty threshold (0.7) that identifies categorizations
-// that may need manual review. Categorizations with confidence at or below this
+// that may need manual review. Categorizations with confidence below this
 // threshold are flagged as uncertain.
 //
 // Example usage - Basic categorization with uncertainty check:
@@ -335,7 +336,7 @@ const (
 	ConfidenceModerate Confidence = 0.7 // Moderate confidence threshold (uncertain below this)
 	// UncertainThreshold is the confidence level below which categorizations
 	// are considered uncertain and may need manual review. A value of 0.7
-	// means categorizations with 70% confidence or less are flagged.
+	// means categorizations with less than 70% confidence are flagged.
 	// This threshold balances false positives (low threshold) vs missed issues (high threshold).
 	UncertainThreshold Confidence = 0.7
 	ConfidenceHigh     Confidence = 0.8  // High confidence threshold
@@ -343,8 +344,11 @@ const (
 )
 
 // NewConfidence creates a new Confidence value with bounds validation.
-// Values are clamped to [0.0, 1.0] range.
+// Values outside [0.0, 1.0], including NaN, are clamped to the nearest bound.
 func NewConfidence(value float64) Confidence {
+	if math.IsNaN(value) {
+		return ConfidenceMin
+	}
 	if value < 0.0 {
 		return ConfidenceMin
 	}
@@ -380,7 +384,7 @@ func (c Confidence) IsCertain() bool {
 	return c >= UncertainThreshold
 }
 
-// IsUncertain returns true if confidence is at or below the uncertainty threshold (0.7).
+// IsUncertain returns true if confidence is below the uncertainty threshold (0.7).
 //
 // Use this method to identify categorizations that may need manual review or additional
 // analysis. The uncertainty threshold balances between catching potential issues and
@@ -395,10 +399,10 @@ func (c Confidence) IsCertain() bool {
 //	    log.Printf("Low confidence categorization: %.0f%%", confidence.Float64()*100)
 //	}
 //
-// The method uses <= (less than or equal) so a confidence of exactly 0.7 is considered
-// uncertain. This ensures borderline cases are flagged for review.
+// The method uses < (less than), so a confidence of exactly 0.7 is not uncertain.
+// This makes the uncertainty and certainty predicates complementary at the boundary.
 func (c Confidence) IsUncertain() bool {
-	return c <= UncertainThreshold
+	return c < UncertainThreshold
 }
 
 // NeedsManualReview returns true if confidence suggests manual review is needed (<= 0.5).
@@ -453,11 +457,11 @@ type CategorizedFailure struct {
 	// Use the IsUncertain() method to check if this score is below the
 	// uncertainty threshold (0.7), or access the Uncertain field directly.
 	Confidence Confidence `json:"confidence"`
-	// Uncertain is true if confidence is at or below the uncertainty threshold (0.7).
+	// Uncertain is true if confidence is below the uncertainty threshold (0.7).
 	// This field is automatically computed during categorization.
 	// Categorizations with Uncertain=true may need manual review.
 	// Use Confidence.IsUncertain() for the same check in a fluent style.
-	Uncertain bool   `json:"uncertain"`           // true if confidence <= 0.7
+	Uncertain bool   `json:"uncertain"`           // true if confidence < 0.7
 	Reasoning string `json:"reasoning,omitempty"` // Human-readable explanation of categorization
 }
 
@@ -1070,8 +1074,8 @@ func GetAmbiguousFailures(categorized []CategorizedFailure) []CategorizedFailure
 	return ambiguous
 }
 
-// GetUncertainFailures returns failures with confidence below or equal to threshold (default 0.7)
-// Values at or below the threshold are considered uncertain and may need manual review.
+// GetUncertainFailures returns failures with confidence below the threshold (default 0.7).
+// Values at the threshold are considered sufficiently certain and are excluded.
 func GetUncertainFailures(categorized []CategorizedFailure, threshold ...float64) []CategorizedFailure {
 	minConf := 0.7
 	if len(threshold) > 0 {
@@ -1080,7 +1084,7 @@ func GetUncertainFailures(categorized []CategorizedFailure, threshold ...float64
 
 	var uncertain []CategorizedFailure
 	for _, cat := range categorized {
-		if cat.Confidence.Float64() <= minConf {
+		if cat.Confidence.Float64() < minConf {
 			uncertain = append(uncertain, cat)
 		}
 	}

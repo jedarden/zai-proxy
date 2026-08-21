@@ -300,8 +300,8 @@ func TestGetUncertainFailures(t *testing.T) {
 
 	// Test default threshold (0.7)
 	uncertain := GetUncertainFailures(categorized)
-	if len(uncertain) != 3 {
-		t.Errorf("GetUncertainFailures() returned %d items, want 3", len(uncertain))
+	if len(uncertain) != 2 {
+		t.Errorf("GetUncertainFailures() returned %d items, want 2", len(uncertain))
 	}
 
 	// Test custom threshold (0.5)

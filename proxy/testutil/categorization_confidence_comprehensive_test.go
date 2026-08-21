@@ -243,18 +243,18 @@ func TestConfidence_ThresholdInvariants(t *testing.T) {
 				t.Errorf("Confidence(%.2f) should not be certain (< 0.7)", conf.Float64())
 			}
 			if !conf.IsUncertain() {
-				t.Errorf("Confidence(%.2f) should be uncertain (<= 0.7)", conf.Float64())
+				t.Errorf("Confidence(%.2f) should be uncertain (< 0.7)", conf.Float64())
 			}
 		}
 	})
 
-	t.Run("At threshold 0.7, both IsCertain and IsUncertain are true", func(t *testing.T) {
+	t.Run("At threshold 0.7, IsCertain is true and IsUncertain is false", func(t *testing.T) {
 		conf := ConfidenceModerate // Exactly 0.7
 		if !conf.IsCertain() {
 			t.Errorf("Confidence(%.2f) should be certain (>= 0.7)", conf.Float64())
 		}
-		if !conf.IsUncertain() {
-			t.Errorf("Confidence(%.2f) should be uncertain (<= 0.7)", conf.Float64())
+		if conf.IsUncertain() {
+			t.Errorf("Confidence(%.2f) should not be uncertain (< 0.7)", conf.Float64())
 		}
 	})
 }
@@ -282,11 +282,8 @@ func TestConfidence_SpecialFloatValues(t *testing.T) {
 	// Test NaN separately since NaN != NaN
 	t.Run("not a number", func(t *testing.T) {
 		result := NewConfidence(math.NaN())
-		// NaN comparisons always fail, so NaN < 0.0 is false, NaN > 1.0 is false
-		// NewConfidence returns Confidence(NaN) which clamps to... let's check
-		if !math.IsNaN(float64(result)) {
-			// If it doesn't return NaN, it should be clamped to min
-			t.Logf("NewConfidence(NaN) = %.2f (not NaN, clamped)", result)
+		if result != ConfidenceMin {
+			t.Errorf("NewConfidence(NaN) = %.2f, want %.2f", result, ConfidenceMin)
 		}
 	})
 }
@@ -686,10 +683,10 @@ func TestConfidence_SignalTypeCoverage(t *testing.T) {
 // TestIsUncertain_ThresholdBehavior tests the IsUncertain() method behavior
 // at and around the uncertainty threshold (0.7).
 //
-// Implementation: IsUncertain() returns true when confidence <= 0.7
+// Implementation: IsUncertain() returns true when confidence < 0.7.
 // This means:
 // - Values below 0.7: returns true (uncertain)
-// - Value at 0.7: returns true (uncertain)
+// - Value at 0.7: returns false (certain)
 // - Values above 0.7: returns false (certain)
 //
 // This test documents the exact threshold boundary behavior.
@@ -726,12 +723,12 @@ func TestIsUncertain_ThresholdBehavior(t *testing.T) {
 			description:       "0.6999 is below threshold, should be uncertain",
 		},
 
-		// Exact threshold value returns true (implementation uses <=)
+		// Exact threshold value is certain (implementation uses <).
 		{
 			name:              "exact_threshold_0.7",
 			confidence:        NewConfidence(0.7),
-			expectedUncertain: true,
-			description:       "0.7 is at threshold, IsUncertain uses <= so returns true",
+			expectedUncertain: false,
+			description:       "0.7 is at threshold, so it is not uncertain",
 		},
 
 		// Values above threshold should return false (certain)
@@ -775,8 +772,8 @@ func TestIsUncertain_ThresholdBehavior(t *testing.T) {
 				if !certainResult {
 					t.Errorf("At threshold 0.7, IsCertain() should return true (uses >=)")
 				}
-				// Document that both methods return true at 0.7
-				t.Logf("At exact threshold 0.7: IsUncertain()=%v (uses <=), IsCertain()=%v (uses >=)",
+				// The predicates are complementary at the exact threshold.
+				t.Logf("At exact threshold 0.7: IsUncertain()=%v (uses <), IsCertain()=%v (uses >=)",
 					result, certainResult)
 			}
 		})
@@ -786,12 +783,12 @@ func TestIsUncertain_ThresholdBehavior(t *testing.T) {
 // TestIsUncertain_ThresholdInvariants tests invariant properties around
 // the uncertainty threshold to ensure consistent behavior.
 func TestIsUncertain_ThresholdInvariants(t *testing.T) {
-	t.Run("all_values_below_or_equal_to_threshold_are_uncertain", func(t *testing.T) {
-		// Test values from 0.0 to 0.7 inclusive
-		for i := 0; i <= 70; i++ {
+	t.Run("all_values_below_threshold_are_uncertain", func(t *testing.T) {
+		// Test values from 0.0 through 0.69.
+		for i := 0; i < 70; i++ {
 			conf := NewConfidence(float64(i) / 100.0)
 			if !conf.IsUncertain() {
-				t.Errorf("Confidence(%.2f) should be uncertain (<= 0.7), got false", conf.Float64())
+				t.Errorf("Confidence(%.2f) should be uncertain (< 0.7), got false", conf.Float64())
 			}
 		}
 	})
@@ -806,11 +803,11 @@ func TestIsUncertain_ThresholdInvariants(t *testing.T) {
 		}
 	})
 
-	t.Run("threshold_boundary_is_inclusive", func(t *testing.T) {
-		// Test that exactly 0.7 is uncertain (<= means inclusive)
+	t.Run("threshold_boundary_is_certain", func(t *testing.T) {
+		// Test that exactly 0.7 is not uncertain (< excludes the boundary).
 		conf := NewConfidence(0.7)
-		if !conf.IsUncertain() {
-			t.Errorf("Confidence(0.7) should be uncertain (threshold is inclusive with <=)")
+		if conf.IsUncertain() {
+			t.Errorf("Confidence(0.7) should not be uncertain (threshold uses <)")
 		}
 	})
 }

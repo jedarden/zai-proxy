@@ -66,7 +66,7 @@ func TestNewConfidence_ThresholdBoundaryValues(t *testing.T) {
 			name:              "exactly at threshold 0.70",
 			input:             0.70,
 			expectedCertain:   true,  // IsCertain uses >=
-			expectedUncertain: true,  // IsUncertain uses <=
+			expectedUncertain: false, // IsUncertain uses <
 			expectedLevel:     "Moderate",
 		},
 	}
@@ -95,10 +95,10 @@ func TestNewConfidence_ThresholdBoundaryValues(t *testing.T) {
 				t.Errorf("NewConfidence(%.2f).Level() = %q, want %q", tt.input, conf.Level(), tt.expectedLevel)
 			}
 
-			// At threshold 0.70, both methods should return true
+			// At threshold 0.70, certainty begins and uncertainty ends.
 			if tt.input == 0.70 {
-				if !conf.IsCertain() || !conf.IsUncertain() {
-					t.Errorf("At exact threshold 0.70, both IsCertain() and IsUncertain() should be true; got certain=%v, uncertain=%v",
+				if !conf.IsCertain() || conf.IsUncertain() {
+					t.Errorf("At exact threshold 0.70, IsCertain() should be true and IsUncertain() false; got certain=%v, uncertain=%v",
 						conf.IsCertain(), conf.IsUncertain())
 				}
 			}
@@ -341,19 +341,18 @@ func TestConfidence_ThresholdTransitions(t *testing.T) {
 	t.Run("transition at exactly 0.7", func(t *testing.T) {
 		conf := NewConfidence(0.7)
 
-		// At exactly 0.7, both IsCertain and IsUncertain return true (by design)
+		// At exactly 0.7, IsCertain returns true and IsUncertain returns false.
 		// IsCertain: c >= 0.7 (true)
-		// IsUncertain: c <= 0.7 (true)
+		// IsUncertain: c < 0.7 (false)
 		if !conf.IsCertain() {
 			t.Errorf("At threshold 0.7, IsCertain() should be true (uses >=)")
 		}
 
-		if !conf.IsUncertain() {
-			t.Errorf("At threshold 0.7, IsUncertain() should be true (uses <=)")
+		if conf.IsUncertain() {
+			t.Errorf("At threshold 0.7, IsUncertain() should be false (uses <)")
 		}
 
-		// This is intentional per the design - the threshold value itself is
-		// considered "certain enough" for automation but also flagged for review
+		// The threshold value is certain enough for automation and not flagged for review.
 	})
 
 	t.Run("transition just below threshold", func(t *testing.T) {

@@ -54,9 +54,9 @@ func TestNewConfidence_BoundaryValues(t *testing.T) {
 // confidence values around the uncertainty threshold (0.7).
 func TestConfidence_IsCertain(t *testing.T) {
 	testCases := []struct {
-		name      string
+		name       string
 		confidence Confidence
-		expected  bool
+		expected   bool
 	}{
 		// Below threshold - should be uncertain
 		{"zero", ConfidenceMin, false},
@@ -91,9 +91,9 @@ func TestConfidence_IsCertain(t *testing.T) {
 // confidence values around the uncertainty threshold (0.7).
 func TestConfidence_IsUncertain(t *testing.T) {
 	testCases := []struct {
-		name      string
+		name       string
 		confidence Confidence
-		expected  bool
+		expected   bool
 	}{
 		// Below threshold - should be uncertain
 		{"zero", ConfidenceMin, true},
@@ -102,11 +102,9 @@ func TestConfidence_IsUncertain(t *testing.T) {
 		{"just below threshold", Confidence(0.69), true},
 		{"exactly below threshold", Confidence(0.699), true},
 
-		// At threshold - should NOT be uncertain (<= 0.7, but IsUncertain checks <=)
-		// Wait, let me check the implementation again
-		// From code: func (c Confidence) IsUncertain() bool { return c <= ConfidenceModerate }
-		{"exactly threshold", ConfidenceModerate, true},
-		{"just at threshold", Confidence(0.7), true},
+		// At threshold - should not be uncertain; only values below 0.7 are flagged.
+		{"exactly threshold", ConfidenceModerate, false},
+		{"just at threshold", Confidence(0.7), false},
 
 		// Above threshold - should NOT be uncertain
 		{"just above threshold", Confidence(0.71), false},
@@ -130,9 +128,9 @@ func TestConfidence_IsUncertain(t *testing.T) {
 // which checks if confidence is at or below the low threshold (0.5).
 func TestConfidence_NeedsManualReview(t *testing.T) {
 	testCases := []struct {
-		name      string
+		name       string
 		confidence Confidence
-		expected  bool
+		expected   bool
 	}{
 		// At or below low threshold - should need manual review
 		{"zero", ConfidenceMin, true},
@@ -162,9 +160,9 @@ func TestConfidence_NeedsManualReview(t *testing.T) {
 // human-readable confidence level descriptions.
 func TestConfidence_Level(t *testing.T) {
 	testCases := []struct {
-		name      string
+		name       string
 		confidence Confidence
-		expected  string
+		expected   string
 	}{
 		{"zero", ConfidenceMin, "Very Low"},
 		{"very low", Confidence(0.1), "Very Low"},
@@ -197,9 +195,9 @@ func TestConfidence_Level(t *testing.T) {
 // the confidence value as a float64 for backward compatibility.
 func TestConfidence_Float64(t *testing.T) {
 	testCases := []struct {
-		name      string
+		name       string
 		confidence Confidence
-		expected  float64
+		expected   float64
 	}{
 		{"zero", ConfidenceMin, 0.0},
 		{"maximum", ConfidenceMax, 1.0},
@@ -269,7 +267,7 @@ func TestConfidence_Constants(t *testing.T) {
 // TestConfidence_TypeProperties tests various properties of the Confidence
 // type to ensure consistent behavior across methods.
 func TestConfidence_TypeProperties(t *testing.T) {
-	// Test that IsCertain and IsUncertain are mutually exclusive (except at threshold)
+	// Test that IsCertain and IsUncertain are mutually exclusive.
 	conf := Confidence(0.8)
 	if !conf.IsCertain() {
 		t.Error("High confidence should be certain")
@@ -309,8 +307,8 @@ func TestConfidence_TypeProperties(t *testing.T) {
 	if !conf.IsCertain() {
 		t.Error("Confidence at threshold should be certain")
 	}
-	if !conf.IsUncertain() {
-		t.Error("Confidence at threshold should be uncertain (<= check)")
+	if conf.IsUncertain() {
+		t.Error("Confidence at threshold should not be uncertain (< check)")
 	}
 	if conf.NeedsManualReview() {
 		t.Error("Confidence at threshold should not need manual review")
@@ -368,22 +366,22 @@ func TestConfidence_Comparisons(t *testing.T) {
 // in CategorizedFailure is correctly set based on confidence threshold.
 func TestCategorizedFailure_UncertainFlag(t *testing.T) {
 	testCases := []struct {
-		name      string
-		confidence Confidence
+		name              string
+		confidence        Confidence
 		expectedUncertain bool
 	}{
 		{"zero confidence", ConfidenceMin, true},
 		{"low confidence", Confidence(0.5), true},
 		{"just below threshold", Confidence(0.69), true},
-		{"at threshold", ConfidenceModerate, true},
+		{"at threshold", ConfidenceModerate, false},
 		{"just above threshold", Confidence(0.71), false},
 		{"high confidence", ConfidenceHigh, false},
 		{"maximum confidence", ConfidenceMax, false},
 	}
 
 	for _, tt := range testCases {
-			// Note: The Uncertain field should be set during categorization
-			// This test verifies the expected relationship
+		// Note: The Uncertain field should be set during categorization
+		// This test verifies the expected relationship
 		t.Run(tt.name, func(t *testing.T) {
 
 			// Note: The Uncertain field should be set during categorization
@@ -397,22 +395,73 @@ func TestCategorizedFailure_UncertainFlag(t *testing.T) {
 	}
 }
 
+// TestCategorizeFailure_ConfidenceBoundaryAndUncertainty verifies that the
+// categorization result carries the bounded score and strict uncertainty flag.
+// In particular, a score of exactly 0.7 is certain; only scores below it are
+// marked uncertain.
+func TestCategorizeFailure_ConfidenceBoundaryAndUncertainty(t *testing.T) {
+	testCases := []struct {
+		name              string
+		failure           Failure
+		expectedCategory  FailureCategory
+		expectedScore     Confidence
+		expectedUncertain bool
+	}{
+		{
+			name:              "no match has zero confidence",
+			failure:           Failure{ErrorMessage: "unrecognized failure condition"},
+			expectedCategory:  CategoryUnknown,
+			expectedScore:     ConfidenceMin,
+			expectedUncertain: true,
+		},
+		{
+			name:              "assertion at threshold is certain",
+			failure:           Failure{ErrorMessage: "assertion failed: expected 1, got 2"},
+			expectedCategory:  CategoryAssertionError,
+			expectedScore:     UncertainThreshold,
+			expectedUncertain: false,
+		},
+		{
+			name:              "exact data-race marker has maximum confidence",
+			failure:           Failure{ErrorMessage: "WARNING: DATA RACE"},
+			expectedCategory:  CategoryDataRace,
+			expectedScore:     ConfidenceMax,
+			expectedUncertain: false,
+		},
+	}
+
+	for _, tt := range testCases {
+		t.Run(tt.name, func(t *testing.T) {
+			result := CategorizeFailure(tt.failure)
+			if result.Category != tt.expectedCategory {
+				t.Errorf("Category = %q, want %q", result.Category, tt.expectedCategory)
+			}
+			if result.Confidence != tt.expectedScore {
+				t.Errorf("Confidence = %.2f, want %.2f", result.Confidence, tt.expectedScore)
+			}
+			if result.Uncertain != tt.expectedUncertain {
+				t.Errorf("Uncertain = %v, want %v", result.Uncertain, tt.expectedUncertain)
+			}
+		})
+	}
+}
+
 // TestConfidence_ThresholdRelationships tests the relationships between
 // different confidence thresholds and methods.
 func TestConfidence_ThresholdRelationships(t *testing.T) {
 	// Test that all confidence levels have consistent Level() output
 	levels := map[Confidence]string{
-		0.0:    "Very Low",
-		0.1:    "Very Low",
-		0.4:    "Very Low",
-		0.5:    "Low",
-		0.6:    "Low",
-		0.7:    "Moderate",
-		0.75:   "Moderate",
-		0.8:    "High",
-		0.9:    "High",
-		0.95:   "Very High",
-		1.0:    "Very High",
+		0.0:  "Very Low",
+		0.1:  "Very Low",
+		0.4:  "Very Low",
+		0.5:  "Low",
+		0.6:  "Low",
+		0.7:  "Moderate",
+		0.75: "Moderate",
+		0.8:  "High",
+		0.9:  "High",
+		0.95: "Very High",
+		1.0:  "Very High",
 	}
 
 	for conf, expectedLevel := range levels {

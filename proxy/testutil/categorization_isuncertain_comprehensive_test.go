@@ -10,8 +10,8 @@ import (
 // for the IsUncertain() method, covering all edge cases, boundary behaviors,
 // floating-point precision issues, and mathematical invariants.
 //
-// Implementation: IsUncertain() returns true when confidence <= 0.7
-// This means the threshold is inclusive (<=), so exactly 0.7 returns true.
+// Implementation: IsUncertain() returns true when confidence < 0.7.
+// The threshold is exclusive, so exactly 0.7 returns false.
 //
 // These tests serve as the complete reference for IsUncertain behavior and
 // document all edge cases that should be considered when using this method.
@@ -68,15 +68,15 @@ func TestIsUncertain_ComprehensiveEdgeCases(t *testing.T) {
 		{
 			name:              "exact_threshold_constant",
 			confidence:        UncertainThreshold,
-			expectedUncertain: true,
-			description:       "Exactly UncertainThreshold (0.7) - returns true because operator is <=",
+			expectedUncertain: false,
+			description:       "Exactly UncertainThreshold (0.7) is certain because the operator is <",
 			category:          "at",
 		},
 		{
 			name:              "exact_threshold_0.7",
 			confidence:        ConfidenceModerate,
-			expectedUncertain: true,
-			description:       "Exactly 0.7 (ConfidenceModerate) - returns true because operator is <=",
+			expectedUncertain: false,
+			description:       "Exactly 0.7 (ConfidenceModerate) is certain because the operator is <",
 			category:          "at",
 		},
 		{
@@ -286,11 +286,11 @@ func TestIsUncertain_ComprehensiveEdgeCases(t *testing.T) {
 				if !certainResult {
 					t.Errorf("At exact threshold 0.7, IsCertain() should return true (uses >=)")
 				}
-				// Both methods return true at 0.7 by design
-				if !result || !certainResult {
-					t.Errorf("At exact threshold 0.7, both IsUncertain() (uses <=) and IsCertain() (uses >=) should return true")
+				// The predicates are complementary at the exact threshold.
+				if result || !certainResult {
+					t.Errorf("At exact threshold 0.7, IsUncertain() (uses <) should be false and IsCertain() (uses >=) true")
 				}
-				t.Logf("At exact threshold 0.7: IsUncertain()=%v, IsCertain()=%v (both true by design)",
+				t.Logf("At exact threshold 0.7: IsUncertain()=%v, IsCertain()=%v (complementary by design)",
 					result, certainResult)
 			}
 
@@ -333,17 +333,17 @@ func TestIsUncertain_MathematicalInvariants(t *testing.T) {
 		}
 	})
 
-	t.Run("threshold_inclusivity", func(t *testing.T) {
-		// Test that exactly 0.7 is uncertain (<= is inclusive)
+	t.Run("threshold_exclusivity", func(t *testing.T) {
+		// Test that exactly 0.7 is certain (< excludes the boundary).
 		threshold := UncertainThreshold
-		if !threshold.IsUncertain() {
-			t.Errorf("UncertainThreshold (%.2f) should be uncertain (operator is <=)", threshold.Float64())
+		if threshold.IsUncertain() {
+			t.Errorf("UncertainThreshold (%.2f) should not be uncertain (operator is <)", threshold.Float64())
 		}
 
 		// Also test with ConfidenceModerate (same value, different constant)
 		moderate := ConfidenceModerate
-		if !moderate.IsUncertain() {
-			t.Errorf("ConfidenceModerate (%.2f) should be uncertain (operator is <=)", moderate.Float64())
+		if moderate.IsUncertain() {
+			t.Errorf("ConfidenceModerate (%.2f) should not be uncertain (operator is <)", moderate.Float64())
 		}
 	})
 
@@ -357,8 +357,8 @@ func TestIsUncertain_MathematicalInvariants(t *testing.T) {
 			result := conf.IsUncertain()
 
 			// Verify it's either true or false (not panic or error)
-			if v <= 0.7 && !result {
-				t.Errorf("Confidence(%.2f) should be uncertain (<= 0.7), got certain", v)
+			if v < 0.7 && !result {
+				t.Errorf("Confidence(%.2f) should be uncertain (< 0.7), got certain", v)
 			}
 			if v > 0.7 && result {
 				t.Errorf("Confidence(%.2f) should be certain (> 0.7), got uncertain", v)
@@ -368,20 +368,20 @@ func TestIsUncertain_MathematicalInvariants(t *testing.T) {
 
 	t.Run("inverse_relationship_with_IsCertain", func(t *testing.T) {
 		// Test the relationship between IsUncertain and IsCertain
-		// At exactly 0.7, both return true (by design)
+		// At exactly 0.7, IsUncertain is false and IsCertain is true.
 		// Below 0.7: IsUncertain=true, IsCertain=false
 		// Above 0.7: IsUncertain=false, IsCertain=true
 
 		testValues := []struct {
-			value              float64
-			uncertainExpected  bool
-			certainExpected    bool
-			note               string
+			value             float64
+			uncertainExpected bool
+			certainExpected   bool
+			note              string
 		}{
 			{0.0, true, false, "below threshold"},
 			{0.5, true, false, "below threshold"},
 			{0.69, true, false, "below threshold"},
-			{0.7, true, true, "at threshold (both true by design)"},
+			{0.7, false, true, "at threshold (certain by design)"},
 			{0.71, false, true, "above threshold"},
 			{0.8, false, true, "above threshold"},
 			{1.0, false, true, "at maximum"},
@@ -466,16 +466,14 @@ func TestIsUncertain_PrecisionBoundaryTests(t *testing.T) {
 // behave consistently with the threshold.
 func TestIsUncertain_ConstantConsistency(t *testing.T) {
 	t.Run("all_uncertain_constants", func(t *testing.T) {
-		// Test that constants <= 0.7 are uncertain
+		// Test that constants below 0.7 are uncertain.
 		uncertainConstants := []struct {
-			name      string
+			name       string
 			confidence Confidence
-			shouldBe  bool
+			shouldBe   bool
 		}{
 			{"ConfidenceMin", ConfidenceMin, true},
 			{"ConfidenceLow", ConfidenceLow, true},
-			{"ConfidenceModerate", ConfidenceModerate, true}, // exactly at threshold
-			{"UncertainThreshold", UncertainThreshold, true}, // exactly at threshold
 		}
 
 		for _, c := range uncertainConstants {
@@ -488,12 +486,14 @@ func TestIsUncertain_ConstantConsistency(t *testing.T) {
 	})
 
 	t.Run("all_certain_constants", func(t *testing.T) {
-		// Test that constants > 0.7 are certain (not uncertain)
+		// Test that constants at or above 0.7 are certain (not uncertain).
 		certainConstants := []struct {
-			name      string
+			name       string
 			confidence Confidence
-			shouldBe  bool
+			shouldBe   bool
 		}{
+			{"ConfidenceModerate", ConfidenceModerate, false},
+			{"UncertainThreshold", UncertainThreshold, false},
 			{"ConfidenceHigh", ConfidenceHigh, false},
 			{"ConfidenceVeryHigh", ConfidenceVeryHigh, false},
 			{"ConfidenceMax", ConfidenceMax, false},
@@ -541,8 +541,8 @@ func TestIsUncertain_PropertiesAsPredicate(t *testing.T) {
 			uncertain := conf.IsUncertain()
 
 			// Verify the result makes sense
-			if value <= 0.7 && !uncertain {
-				t.Errorf("Predicate error: IsUncertain(%.2f)=false for value <= threshold", value)
+			if value < 0.7 && !uncertain {
+				t.Errorf("Predicate error: IsUncertain(%.2f)=false for value < threshold", value)
 			}
 			if value > 0.7 && uncertain {
 				t.Errorf("Predicate error: IsUncertain(%.2f)=true for value > threshold", value)
@@ -552,8 +552,8 @@ func TestIsUncertain_PropertiesAsPredicate(t *testing.T) {
 
 	t.Run("predicate_partition", func(t *testing.T) {
 		// Test that IsUncertain partitions the [0,1] range into two sets:
-		// - [0, 0.7]: returns true
-		// - (0.7, 1]: returns false
+		// - [0, 0.7): returns true
+		// - [0.7, 1]: returns false
 
 		// Count elements in each partition
 		trueCount := 0
@@ -570,10 +570,10 @@ func TestIsUncertain_PropertiesAsPredicate(t *testing.T) {
 			}
 		}
 
-		// Values 0.0 through 0.7 should be true (71 values: 0.0, 0.01, ..., 0.70)
-		// Values 0.71 through 1.0 should be false (30 values: 0.71, 0.72, ..., 1.00)
-		expectedTrueCount := 71  // 0.0 through 0.7 inclusive
-		expectedFalseCount := 30 // 0.71 through 1.0
+		// Values 0.0 through 0.69 are true (70 values).
+		// Values 0.70 through 1.0 are false (31 values).
+		expectedTrueCount := 70
+		expectedFalseCount := 31
 
 		if trueCount != expectedTrueCount {
 			t.Errorf("Partition error: true count = %d, want %d", trueCount, expectedTrueCount)
@@ -617,8 +617,8 @@ func TestIsUncertain_RealWorldScenarios(t *testing.T) {
 		{
 			name:              "weak_match_at_threshold",
 			confidence:        NewConfidence(0.70),
-			expectedUncertain: true,
-			scenario:          "Weak match at threshold - uncertain by design (<= operator)",
+			expectedUncertain: false,
+			scenario:          "Weak match at threshold - certain by design (< operator)",
 		},
 		{
 			name:              "weak_match_below_threshold",
@@ -681,7 +681,7 @@ func TestIsUncertain_ComparisonAndConsistency(t *testing.T) {
 			uncertain := conf.IsUncertain()
 			needsReview := conf.NeedsManualReview()
 
-			// If needs manual review (<= 0.5), should definitely be uncertain (<= 0.7)
+			// If needs manual review (<= 0.5), it is definitely uncertain (< 0.7).
 			if needsReview && !uncertain {
 				t.Errorf("Inconsistency at %.2f: NeedsManualReview=true but IsUncertain=false", v)
 			}
@@ -696,15 +696,15 @@ func TestIsUncertain_ComparisonAndConsistency(t *testing.T) {
 		// "Moderate" and above should be certain
 
 		testCases := []struct {
-			confidence        Confidence
-			isUncertain       bool
-			expectedLevel     string
+			confidence    Confidence
+			isUncertain   bool
+			expectedLevel string
 		}{
 			{ConfidenceMin, true, "Very Low"},
 			{NewConfidence(0.3), true, "Very Low"}, // Fixed: values <0.5 return "Very Low"
 			{ConfidenceLow, true, "Low"},
 			{NewConfidence(0.6), true, "Low"},
-			{ConfidenceModerate, true, "Moderate"}, // at threshold, uncertain=true
+			{ConfidenceModerate, false, "Moderate"}, // at threshold, certain
 			{NewConfidence(0.75), false, "Moderate"},
 			{ConfidenceHigh, false, "High"},
 			{ConfidenceVeryHigh, false, "Very High"},
@@ -737,9 +737,9 @@ func TestIsUncertain_ThresholdSemantics(t *testing.T) {
 		semantics := fmt.Sprintf(
 			"IsUncertain Threshold Semantics:\n"+
 				"  Threshold Value: %.2f (%.0f%%)\n"+
-				"  Operator: <= (inclusive)\n"+
-				"  Meaning: Confidence at or below %.2f is considered uncertain\n"+
-				"  Implication: Categorizations with <= %.0f%% confidence may need manual review\n"+
+				"  Operator: < (exclusive)\n"+
+				"  Meaning: Confidence below %.2f is considered uncertain\n"+
+				"  Implication: Categorizations with < %.0f%% confidence may need manual review\n"+
 				"  Design Rationale: 70%% threshold balances false positives vs missed issues",
 			threshold, threshold*100, threshold, threshold*100,
 		)
@@ -751,8 +751,8 @@ func TestIsUncertain_ThresholdSemantics(t *testing.T) {
 		confBelow := NewConfidence(threshold - 0.01)
 		confAbove := NewConfidence(threshold + 0.01)
 
-		if !confExactly.IsUncertain() {
-			t.Errorf("Semantic violation: exact threshold should be uncertain (inclusive)")
+		if confExactly.IsUncertain() {
+			t.Errorf("Semantic violation: exact threshold should not be uncertain (exclusive)")
 		}
 		if !confBelow.IsUncertain() {
 			t.Errorf("Semantic violation: below threshold should be uncertain")
