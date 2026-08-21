@@ -147,6 +147,15 @@ func TestCategorizeTestOutput_ReportsReadErrors(t *testing.T) {
 	}
 }
 
+func TestExportCategorizationReportJSON_ReportsWriteErrors(t *testing.T) {
+	outputPath := t.TempDir()
+
+	err := ExportCategorizationReportJSON(CategorizeParsedFailures(nil), outputPath)
+	if err == nil {
+		t.Fatal("ExportCategorizationReportJSON error: got nil, want write error")
+	}
+}
+
 func TestCategorizeParsedFailures_Empty(t *testing.T) {
 	report := CategorizeParsedFailures(nil)
 	if report.Failures == nil {
