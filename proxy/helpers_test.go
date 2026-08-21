@@ -1,18 +1,25 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // Test mode configuration
@@ -348,6 +355,239 @@ func AssertResponseField(t *testing.T, resp *http.Response, field string, expect
 	}
 }
 
+// AssertResponseStructure verifies that a JSON-object response contains the
+// fields described by expected. Extra response fields are allowed. Primitive
+// schema values specify JSON types rather than exact values, and a nil schema
+// value checks only that the field exists. For example:
+//
+//	AssertResponseStructure(t, resp, map[string]interface{}{
+//		"id":    "",
+//		"usage": map[string]interface{}{"input_tokens": 0},
+//		"content": []interface{}{map[string]interface{}{"text": ""}},
+//	})
+//
+// An array schema may contain at most one element; when present, it describes
+// every element of the response array. The response body is restored before
+// this function returns so that another assertion may read it.
+func AssertResponseStructure(t *testing.T, resp *http.Response, expected map[string]interface{}) {
+	t.Helper()
+
+	actual, err := readResponseJSONObject(resp)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	if err := validateResponseStructure(actual, expected); err != nil {
+		t.Error(err)
+	}
+}
+
+func readResponseJSONObject(resp *http.Response) (map[string]interface{}, error) {
+	body, err := readResponseBodyPreserving(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	var actual map[string]interface{}
+	if err := json.Unmarshal(body, &actual); err != nil {
+		return nil, fmt.Errorf("failed to parse response JSON object: %w", err)
+	}
+	if actual == nil {
+		return nil, fmt.Errorf("response JSON must be an object")
+	}
+	return actual, nil
+}
+
+func readResponseBodyPreserving(resp *http.Response) ([]byte, error) {
+	if resp == nil {
+		return nil, fmt.Errorf("response must not be nil")
+	}
+	if resp.Body == nil {
+		return nil, fmt.Errorf("response body must not be nil")
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	return body, nil
+}
+
+func validateResponseStructure(actual, expected map[string]interface{}) error {
+	return validateJSONStructure(actual, expected, "$")
+}
+
+func validateJSONStructure(actual, expected interface{}, path string) error {
+	if expected == nil {
+		return nil
+	}
+
+	switch expectedValue := expected.(type) {
+	case map[string]interface{}:
+		actualObject, ok := actual.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("response field %s: expected object, got %s", path, jsonValueType(actual))
+		}
+
+		fields := make([]string, 0, len(expectedValue))
+		for field := range expectedValue {
+			fields = append(fields, field)
+		}
+		sort.Strings(fields)
+
+		for _, field := range fields {
+			actualField, exists := actualObject[field]
+			fieldPath := path + "." + field
+			if !exists {
+				return fmt.Errorf("response missing required field %s", fieldPath)
+			}
+			if err := validateJSONStructure(actualField, expectedValue[field], fieldPath); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	case []interface{}:
+		actualArray, ok := actual.([]interface{})
+		if !ok {
+			return fmt.Errorf("response field %s: expected array, got %s", path, jsonValueType(actual))
+		}
+		if len(expectedValue) > 1 {
+			return fmt.Errorf("response schema at %s has %d array element definitions; use zero or one", path, len(expectedValue))
+		}
+		if len(expectedValue) == 0 {
+			return nil
+		}
+		for index, actualElement := range actualArray {
+			if err := validateJSONStructure(actualElement, expectedValue[0], fmt.Sprintf("%s[%d]", path, index)); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	case reflect.Type:
+		if actual == nil || reflect.TypeOf(actual) != expectedValue {
+			return fmt.Errorf("response field %s: expected type %s, got %s", path, expectedValue, jsonValueType(actual))
+		}
+		return nil
+	}
+
+	if isJSONNumber(expected) {
+		if !isJSONNumber(actual) {
+			return fmt.Errorf("response field %s: expected number, got %s", path, jsonValueType(actual))
+		}
+		return nil
+	}
+
+	if actual == nil || reflect.TypeOf(actual) != reflect.TypeOf(expected) {
+		return fmt.Errorf("response field %s: expected %s, got %s", path, jsonValueType(expected), jsonValueType(actual))
+	}
+	return nil
+}
+
+func isJSONNumber(value interface{}) bool {
+	if value == nil {
+		return false
+	}
+	switch reflect.TypeOf(value).Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return true
+	default:
+		return false
+	}
+}
+
+func jsonValueType(value interface{}) string {
+	if value == nil {
+		return "null"
+	}
+	return reflect.TypeOf(value).String()
+}
+
+// AssertErrorResponse verifies an error status and an expected error-message
+// fragment. It supports the proxy's plain-text http.Error responses as well as
+// JSON error bodies with error, message, detail, or error_description fields.
+// The response body is restored before this function returns.
+func AssertErrorResponse(t *testing.T, resp *http.Response, expectedStatus int, expectedMessage string) {
+	t.Helper()
+	if resp == nil {
+		t.Error("response must not be nil")
+		return
+	}
+
+	body, err := readResponseBodyPreserving(resp)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	actualMessage, err := extractErrorMessage(body)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	if err := validateErrorResponse(resp.StatusCode, expectedStatus, actualMessage, expectedMessage); err != nil {
+		t.Error(err)
+	}
+}
+
+func extractErrorMessage(body []byte) (string, error) {
+	trimmedBody := strings.TrimSpace(string(body))
+	if trimmedBody == "" {
+		return "", fmt.Errorf("error response body is empty")
+	}
+	if !json.Valid(body) {
+		return trimmedBody, nil
+	}
+
+	var payload interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return "", fmt.Errorf("failed to parse error response JSON: %w", err)
+	}
+	if message, ok := findErrorMessage(payload); ok {
+		return message, nil
+	}
+	return "", fmt.Errorf("JSON error response does not contain an error message")
+}
+
+func findErrorMessage(value interface{}) (string, bool) {
+	switch typedValue := value.(type) {
+	case string:
+		message := strings.TrimSpace(typedValue)
+		return message, message != ""
+	case map[string]interface{}:
+		for _, field := range []string{"error", "message", "detail", "error_description"} {
+			if candidate, exists := typedValue[field]; exists {
+				if message, ok := findErrorMessage(candidate); ok {
+					return message, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+func validateErrorResponse(actualStatus, expectedStatus int, actualMessage, expectedMessage string) error {
+	if expectedStatus < http.StatusBadRequest || expectedStatus > 599 {
+		return fmt.Errorf("expected error status must be 4xx or 5xx, got %d", expectedStatus)
+	}
+	if actualStatus != expectedStatus {
+		return fmt.Errorf("error response status: expected %d, got %d", expectedStatus, actualStatus)
+	}
+	if strings.TrimSpace(actualMessage) == "" {
+		return fmt.Errorf("error response message is empty")
+	}
+	if expectedMessage != "" && !strings.Contains(actualMessage, expectedMessage) {
+		return fmt.Errorf("error response message: expected to contain %q, got %q", expectedMessage, actualMessage)
+	}
+	return nil
+}
+
 // AssertEmptyBody asserts that the response body is empty
 func AssertEmptyBody(t *testing.T, resp *http.Response) {
 	t.Helper()
@@ -663,6 +903,49 @@ func ResetMetrics(t *testing.T) {
 	// For now, tests can use testutil.CollectAndCount() to verify metrics
 }
 
+// AssertMetricsIncremented verifies that a single Prometheus counter or gauge
+// increased by expectedIncrement after its value was recorded in before. Pass
+// a concrete metric or a labeled child, for example:
+//
+//	metric := retryAttempts.WithLabelValues("429", "test")
+//	before := testutil.ToFloat64(metric)
+//	// exercise the code under test
+//	AssertMetricsIncremented(t, metric, before, 1)
+func AssertMetricsIncremented(t *testing.T, metric prometheus.Collector, before, expectedIncrement float64) {
+	t.Helper()
+	if metric == nil {
+		t.Error("metric must not be nil")
+		return
+	}
+
+	actual := testutil.ToFloat64(metric)
+	if err := validateMetricsIncremented(before, actual, expectedIncrement); err != nil {
+		t.Error(err)
+	}
+}
+
+func validateMetricsIncremented(before, actual, expectedIncrement float64) error {
+	for name, value := range map[string]float64{
+		"before":             before,
+		"actual":             actual,
+		"expected increment": expectedIncrement,
+	} {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return fmt.Errorf("metric %s must be finite, got %v", name, value)
+		}
+	}
+	if expectedIncrement < 0 {
+		return fmt.Errorf("expected metric increment cannot be negative: %v", expectedIncrement)
+	}
+
+	actualIncrement := actual - before
+	tolerance := 1e-9 * math.Max(1, math.Max(math.Abs(actualIncrement), math.Abs(expectedIncrement)))
+	if math.Abs(actualIncrement-expectedIncrement) > tolerance {
+		return fmt.Errorf("metric increment: expected %v, got %v (before %v, actual %v)", expectedIncrement, actualIncrement, before, actual)
+	}
+	return nil
+}
+
 // ============================================================================
 // Backoff Delay Helpers for Tests
 // ============================================================================
@@ -782,6 +1065,49 @@ func AssertUpstreamCallCount(t *testing.T, mock *MockUpstream, expectedCount int
 	if actualCount != expectedCount {
 		t.Errorf("Expected %d upstream requests, got %d", expectedCount, actualCount)
 	}
+}
+
+// AssertRateLimitBehavior verifies a rate-limited request burst: the first
+// expectedAllowed responses must be successful (any 2xx code), followed by
+// expectedRateLimited HTTP 429 responses. This makes the limit boundary and
+// the expected request order explicit in tests.
+func AssertRateLimitBehavior(t *testing.T, responses []*http.Response, expectedAllowed, expectedRateLimited int) {
+	t.Helper()
+
+	statusCodes := make([]int, len(responses))
+	for index, response := range responses {
+		if response == nil {
+			t.Errorf("rate-limit response %d is nil", index)
+			return
+		}
+		statusCodes[index] = response.StatusCode
+	}
+
+	if err := validateRateLimitBehavior(statusCodes, expectedAllowed, expectedRateLimited); err != nil {
+		t.Error(err)
+	}
+}
+
+func validateRateLimitBehavior(statusCodes []int, expectedAllowed, expectedRateLimited int) error {
+	if expectedAllowed < 0 || expectedRateLimited < 0 {
+		return fmt.Errorf("expected allowed and rate-limited counts cannot be negative: got %d and %d", expectedAllowed, expectedRateLimited)
+	}
+	if len(statusCodes) != expectedAllowed+expectedRateLimited {
+		return fmt.Errorf("rate-limit response count: expected %d, got %d", expectedAllowed+expectedRateLimited, len(statusCodes))
+	}
+
+	for index, statusCode := range statusCodes {
+		if index < expectedAllowed {
+			if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
+				return fmt.Errorf("request %d: expected successful status before rate limit, got %d", index+1, statusCode)
+			}
+			continue
+		}
+		if statusCode != http.StatusTooManyRequests {
+			return fmt.Errorf("request %d: expected rate-limited status %d, got %d", index+1, http.StatusTooManyRequests, statusCode)
+		}
+	}
+	return nil
 }
 
 // ============================================================================
