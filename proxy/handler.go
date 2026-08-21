@@ -452,14 +452,23 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else {
-		// Token counting disabled, direct streaming
+		// Token counting disabled, copy the response directly. Validation may
+		// already have consumed a non-streaming body or read the first streaming
+		// chunk, so replay those bytes before continuing with the upstream body.
 		defer resp.Body.Close()
+
+		var bodyReader io.Reader = resp.Body
+		if len(validatedBody) > 0 {
+			bodyReader = bytes.NewReader(validatedBody)
+		} else if len(streamingPeek) > 0 {
+			bodyReader = io.MultiReader(bytes.NewReader(streamingPeek), resp.Body)
+		}
 
 		buf := make([]byte, 1024)
 		flusher, canFlush := w.(http.Flusher)
 
 		for {
-			n, err := resp.Body.Read(buf)
+			n, err := bodyReader.Read(buf)
 			if n > 0 {
 				written, writeErr := w.Write(buf[:n])
 				bytesWritten += int64(written)

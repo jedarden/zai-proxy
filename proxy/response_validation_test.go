@@ -448,14 +448,21 @@ func TestResponseValidation_ValidResponsePassesThrough(t *testing.T) {
 			t.Errorf("Expected status 200 OK, got %d", w.Code)
 		}
 
-		// Note: Response body is consumed by the handler during validation and token counting.
-		// The handler already validated it before consuming, so we only verify status and calls.
+		// Validation buffers the upstream body, but it must still be forwarded to
+		// the client after validation.
+		var response struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+			t.Errorf("Expected valid JSON response body, got %q: %v", w.Body.String(), err)
+		} else if response.ID != "msg_test123" {
+			t.Errorf("Expected response ID msg_test123, got %q", response.ID)
+		}
 
 		// Verify exactly 1 upstream call (no retries)
 		if upstreamCallCount.Load() != 1 {
 			t.Errorf("Expected 1 upstream call (no retry), got %d", upstreamCallCount.Load())
 		}
-
 		t.Logf("PASS: Valid non-streaming response passed through without retry")
 	})
 
@@ -489,6 +496,9 @@ func TestResponseValidation_ValidResponsePassesThrough(t *testing.T) {
 		// Verify exactly 1 upstream call (no retries)
 		if upstreamCallCount.Load() != 1 {
 			t.Errorf("Expected 1 upstream call (no retry), got %d", upstreamCallCount.Load())
+		}
+		if body := w.Body.String(); !strings.Contains(body, "message_start") || !strings.Contains(body, "content_block_delta") {
+			t.Errorf("Expected complete streaming response body, got %q", body)
 		}
 
 		t.Logf("PASS: Valid streaming response passed through without retry")
@@ -575,6 +585,9 @@ func TestResponseValidation_VariousInvalidBodies(t *testing.T) {
 				if upstreamCallCount.Load() != 1 {
 					t.Errorf("Expected 1 upstream call for valid JSON (no retry), got %d", upstreamCallCount.Load())
 				}
+				if body := w.Body.String(); body != tc.body {
+					t.Errorf("Expected validated response body %q, got %q", tc.body, body)
+				}
 			} else {
 				// Invalid JSON should trigger retry and return 502
 				if w.Code != http.StatusBadGateway {
@@ -653,6 +666,9 @@ func TestResponseValidation_StreamingZeroBytesPeek(t *testing.T) {
 		}
 		if upstreamCallCount.Load() != 1 {
 			t.Errorf("Expected 1 upstream call (no retry), got %d", upstreamCallCount.Load())
+		}
+		if body := w.Body.String(); body != "d" {
+			t.Errorf("Expected peeked streaming byte to be forwarded, got %q", body)
 		}
 
 		t.Logf("PASS: Non-zero bytes on first peek, no retry, status 200")
