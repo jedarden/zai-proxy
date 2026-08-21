@@ -543,6 +543,12 @@ func TestCategorizeFailure_Unknown(t *testing.T) {
 	if cat.Confidence != 0.0 {
 		t.Errorf("Confidence: got %.2f, want 0.0", cat.Confidence)
 	}
+	if cat.Subcategory != fallbackSubcategoryUnclassified {
+		t.Errorf("Subcategory: got %q, want %q", cat.Subcategory, fallbackSubcategoryUnclassified)
+	}
+	if label := GetCategoryLabel(cat); label != "Other: unclassified failure" {
+		t.Errorf("GetCategoryLabel() = %q, want %q", label, "Other: unclassified failure")
+	}
 	if cat.Reasoning == "" {
 		t.Error("Reasoning should not be empty")
 	}
@@ -707,6 +713,27 @@ func TestPrintCategorizationReport(t *testing.T) {
 		if !strings.Contains(report, expected) {
 			t.Errorf("Report should contain %q", expected)
 		}
+	}
+}
+
+func TestPrintCategorizationReport_FormatsFallbackAsOther(t *testing.T) {
+	categorized := []CategorizedFailure{{
+		TestFailure: TestFailure{TestName: "TestUnknownPanic", ErrorMessage: "panic report unavailable"},
+		Category:    CategoryUnknown,
+		Subcategory: fallbackSubcategoryUnknownPanicMessage,
+		Confidence:  ConfidenceMin,
+	}}
+	stats := CategorizationStats{
+		Total:      1,
+		ByCategory: map[FailureCategory]int{CategoryUnknown: 1},
+	}
+
+	report := PrintCategorizationReport(categorized, stats)
+	if !strings.Contains(report, "Other: 1") {
+		t.Errorf("report = %q, want Other category group", report)
+	}
+	if !strings.Contains(report, "[Other: unknown panic message]") {
+		t.Errorf("report = %q, want descriptive Other label", report)
 	}
 }
 
@@ -948,9 +975,10 @@ func TestCategorizeFailure_Contract(t *testing.T) {
 			wantSubcategory: "runtime_panic",
 		},
 		{
-			name:     "unrecognized failure is other",
-			failure:  Failure{ErrorMessage: "florp zibble 42"},
-			wantType: CategoryUnknown,
+			name:            "unrecognized failure is other",
+			failure:         Failure{ErrorMessage: "florp zibble 42"},
+			wantType:        CategoryUnknown,
+			wantSubcategory: fallbackSubcategoryUnclassified,
 		},
 	}
 

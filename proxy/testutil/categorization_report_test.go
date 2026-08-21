@@ -135,8 +135,38 @@ FAIL
 	if report.Failures[0].Category != CategoryUnknown {
 		t.Errorf("category: got %q, want %q", report.Failures[0].Category, CategoryUnknown)
 	}
+	if report.Failures[0].Subcategory != fallbackSubcategoryUnclassified {
+		t.Errorf("subcategory: got %q, want %q", report.Failures[0].Subcategory, fallbackSubcategoryUnclassified)
+	}
 	if _, err := os.Stat(outputPath); err != nil {
 		t.Errorf("unknown result should still be persisted for inspection: %v", err)
+	}
+}
+
+func TestCategorizeTestOutput_FallbacksForMalformedFailureOutput(t *testing.T) {
+	inputPath := writeTestOutput(t, `=== RUN   TestMalformedOutput
+    parser_test.go:abc: malformed external test-runner response
+--- FAIL: TestMalformedOutput (0.00s)
+FAIL
+`)
+
+	report, err := CategorizeTestOutput(inputPath)
+	if err != nil {
+		t.Fatalf("CategorizeTestOutput returned error: %v", err)
+	}
+	if len(report.Failures) != 1 {
+		t.Fatalf("failures: got %d, want 1", len(report.Failures))
+	}
+
+	fallback := report.Failures[0]
+	if fallback.Category != CategoryUnknown {
+		t.Errorf("category: got %q, want %q", fallback.Category, CategoryUnknown)
+	}
+	if fallback.Subcategory != fallbackSubcategoryMalformedOutput {
+		t.Errorf("subcategory: got %q, want %q", fallback.Subcategory, fallbackSubcategoryMalformedOutput)
+	}
+	if label := GetCategoryLabel(fallback); label != "Other: malformed output" {
+		t.Errorf("GetCategoryLabel() = %q, want %q", label, "Other: malformed output")
 	}
 }
 

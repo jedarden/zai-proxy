@@ -27,14 +27,14 @@ The result has these fields:
 | `uncertain` | `true` when confidence is below 0.70. `unknown` is always uncertain. |
 | `reasoning` | The matched pattern and any competing matches or resolution applied. |
 
-`unknown` is serialized by the implementation and displayed to users as
-**Other**. Every Other result must have a subcategory before it is stored in a
-triage report. Use one of `unclassified`, `parser`, `test_framework`,
-`environment`, or a short, stable, snake-case label supplied by the reviewer.
-For example, an unrecognized failure initially becomes
-`{ "type": "unknown", "subcategory": "unclassified" }`. The raw
-classifier may omit an empty subcategory; the report writer or reviewer is
-responsible for this required Other enrichment.
+`unknown` is the stable serialized/API value and is displayed to users as
+**Other: &lt;description&gt;**. Every Other result has a subcategory selected by the
+fallback classifier before it is stored in a report. Built-in values are
+`unclassified`, `empty_failure`, `malformed_output`,
+`unknown_panic_message`, and `unknown_fatal_message`; a reviewer may replace
+one with a short, stable snake-case label. For example, a valid but
+unrecognized failure becomes `{ "type": "unknown", "subcategory":
+"unclassified" }` and is displayed as **Other: unclassified failure**.
 
 ## Categories and detection rules
 
@@ -58,7 +58,7 @@ categories make common runtime failures actionable without overloading
 | 40 | `http_error` (HTTP or network) | `http.*status`, `status code`, `connection refused`, `connection reset`, `http.*error`, `dial.*tcp`, or `connection timeout`. The `dial tcp` frame/error chain is the decisive network evidence. | `network` |
 | 35 | `io_error` (I/O) | `no such file`, `directory.*not found`, `file not found`, `permission denied`, `i/o error`, `read.*failed`, `write.*failed`, or `broken pipe`. File-operation frames and `os`/filesystem paths are supporting evidence. | — |
 | 10 | `assertion_error` (Assertion or expectation) | `assertion.*failed`, `expected ... (but ... got\|got\|non-nil\|to exist\|value at\|element at\|type)`, `not equal`, `should.*be`, `want.*got`, or `assert`. A test source frame such as `*_test.go:<line>` supports the match but does not override a more specific runtime failure. | — |
-| 0 | `unknown` (Other) | No category rule matched. Preserve the most useful non-sensitive token, error code, or test-framework name as its reviewer-selected subcategory. | `unclassified` (required on report output) |
+| 0 | `unknown` (Other) | No category rule matched. The fallback classifier chooses a safe, signal-derived subcategory and logs the event for tracking. | Signal-derived fallback label |
 
 The literal patterns are intentionally conservative. A category is selected
 because its rule matched the combined failure text; a source file name, a test
@@ -149,7 +149,9 @@ function categorize(failure):
         remove assertion_error from matches
 
     if matches is empty:
-        return category(type="unknown", subcategory="unclassified",
+        subcategory = fallback_subcategory(text)
+        log(category="Other", subcategory, test/file/line metadata)
+        return category(type="unknown", subcategory,
                         confidence=0.0, uncertain=true,
                         reasoning="no categorization pattern matched")
 
@@ -182,10 +184,24 @@ Call `ResolveAmbiguity` on this base result when consuming a triage decision.
 It applies the table above, updates `type`, `category`, and `uncertain`, and
 adds the decision criterion to `reasoning`.
 
-The pseudocode expresses the intended report contract. The current Go API
-uses an empty `subcategory` for a raw `unknown` result because its JSON field
-is `omitempty`; callers that persist or display Other must normalize it to
-`unclassified` as described above.
+### Other fallback
+
+Fallback is the terminal path: it runs only after every category rule has been
+checked and no rule matched. Ambiguity resolvers operate only on an existing
+category match, so a low-confidence or unresolved ambiguous result remains in
+its matched category and is never silently converted to Other.
+
+The fallback subcategory makes the unknown result useful without treating a
+weak signal as a known failure class: blank input is `empty_failure`, parser or
+truncation wording is `malformed_output`, an otherwise unrecognized panic
+reference is `unknown_panic_message`, and an otherwise unrecognized fatal
+reference is `unknown_fatal_message`. All remaining input uses `unclassified`.
+Reports display those values as, for example, **Other: unknown panic message**.
+
+Each fallback emits a standard-library log entry with the category,
+subcategory, test name, file, and line number so recurring cases can be turned
+into a precise category later. The raw error message and stack trace are not
+logged because they can contain sensitive test data.
 
 ## Review guidance
 

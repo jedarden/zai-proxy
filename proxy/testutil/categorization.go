@@ -2,6 +2,7 @@ package testutil
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"regexp"
 	"sort"
@@ -146,6 +147,14 @@ const (
 	// Priority: 0 (default when no patterns match)
 	// Confidence: 0.0 (requires manual review)
 	CategoryUnknown FailureCategory = "unknown"
+)
+
+const (
+	fallbackSubcategoryUnclassified        = "unclassified"
+	fallbackSubcategoryEmptyFailure        = "empty_failure"
+	fallbackSubcategoryMalformedOutput     = "malformed_output"
+	fallbackSubcategoryUnknownPanicMessage = "unknown_panic_message"
+	fallbackSubcategoryUnknownFatalMessage = "unknown_fatal_message"
 )
 
 // MatchSignalType represents the type of pattern match signal.
@@ -733,20 +742,10 @@ func CategorizeFailure(failure Failure) Category {
 
 	matchingRules := matchingCategorizationRules(fullText, sortedRules)
 
-	// If no patterns matched, categorize as unknown
+	// If every category rule (and therefore every ambiguity resolver) has no
+	// applicable signal, preserve the failure as an explicit Other result.
 	if len(matchingRules) == 0 {
-		confidence := 0.0
-		if len(fullText) < 20 {
-			confidence = 0.05
-		}
-		return CategorizedFailure{
-			TestFailure: failure,
-			Type:        CategoryUnknown,
-			Category:    CategoryUnknown,
-			Confidence:  NewConfidence(confidence),
-			Uncertain:   true,
-			Reasoning:   "No categorization pattern matched; needs manual review",
-		}
+		return categorizeFallback(failure, fullText)
 	}
 
 	// Primary category is the highest priority match. An explicit panic is the
@@ -814,6 +813,49 @@ func CategorizeFailure(failure Failure) Category {
 		Confidence:  finalConfidence,
 		Uncertain:   finalConfidence.IsUncertain(),
 		Reasoning:   reasoning,
+	}
+}
+
+// categorizeFallback creates the terminal Other result for a failure whose
+// combined error message and stack trace match no known category. The log
+// deliberately records only stable metadata, never the raw failure text.
+func categorizeFallback(failure Failure, fullText string) CategorizedFailure {
+	subcategory := fallbackSubcategory(fullText)
+	confidence := 0.0
+	if len(fullText) < 20 {
+		confidence = 0.05
+	}
+
+	log.Printf("test failure categorization fallback: category=Other subcategory=%q test=%q file=%q line=%d",
+		subcategory, failure.TestName, failure.FilePath, failure.LineNumber)
+
+	return CategorizedFailure{
+		TestFailure: failure,
+		Type:        CategoryUnknown,
+		Category:    CategoryUnknown,
+		Subcategory: subcategory,
+		Confidence:  NewConfidence(confidence),
+		Uncertain:   true,
+		Reasoning:   fmt.Sprintf("No categorization pattern matched; fallback category %q requires manual review", subcategory),
+	}
+}
+
+func fallbackSubcategory(fullText string) string {
+	lowerText := strings.ToLower(strings.TrimSpace(fullText))
+
+	switch {
+	case lowerText == "":
+		return fallbackSubcategoryEmptyFailure
+	case strings.Contains(lowerText, "malformed") ||
+		strings.Contains(lowerText, "truncated") ||
+		strings.Contains(lowerText, "parse error"):
+		return fallbackSubcategoryMalformedOutput
+	case strings.Contains(lowerText, "panic"):
+		return fallbackSubcategoryUnknownPanicMessage
+	case strings.Contains(lowerText, "fatal"):
+		return fallbackSubcategoryUnknownFatalMessage
+	default:
+		return fallbackSubcategoryUnclassified
 	}
 }
 
@@ -1422,13 +1464,48 @@ func GetCategoryDescription(cat FailureCategory) string {
 		CategoryDeadlock:        "Potential deadlock detected",
 		CategoryIOError:         "I/O operation failed (file, network, etc.)",
 		CategoryHTTPError:       "HTTP/network communication error",
-		CategoryUnknown:         "Unknown failure type - requires manual analysis",
+		CategoryUnknown:         "Other failure - requires manual analysis",
 	}
 
 	if desc, ok := descriptions[cat]; ok {
 		return desc
 	}
 	return "No description available"
+}
+
+// GetCategoryLabel returns the human-readable category label used in reports.
+// The stable JSON/API value for a fallback remains "unknown", while people
+// see the more actionable "Other: <description>" form.
+func GetCategoryLabel(cat CategorizedFailure) string {
+	if cat.Category != CategoryUnknown {
+		return string(cat.Category)
+	}
+
+	return "Other: " + fallbackDescription(cat.Subcategory)
+}
+
+func fallbackDescription(subcategory string) string {
+	switch subcategory {
+	case fallbackSubcategoryEmptyFailure:
+		return "empty failure"
+	case fallbackSubcategoryMalformedOutput:
+		return "malformed output"
+	case fallbackSubcategoryUnknownPanicMessage:
+		return "unknown panic message"
+	case fallbackSubcategoryUnknownFatalMessage:
+		return "unknown fatal message"
+	case "", fallbackSubcategoryUnclassified:
+		return "unclassified failure"
+	default:
+		return strings.ReplaceAll(subcategory, "_", " ")
+	}
+}
+
+func categoryGroupLabel(category FailureCategory) string {
+	if category == CategoryUnknown {
+		return "Other"
+	}
+	return string(category)
 }
 
 // PrintCategorizationReport prints a human-readable categorization report
@@ -1458,7 +1535,7 @@ func PrintCategorizationReport(categorized []CategorizedFailure, stats Categoriz
 	} {
 		count := stats.ByCategory[cat]
 		if count > 0 {
-			sb.WriteString(fmt.Sprintf("  %s: %d (%s)\n", cat, count, GetCategoryDescription(cat)))
+			sb.WriteString(fmt.Sprintf("  %s: %d (%s)\n", categoryGroupLabel(cat), count, GetCategoryDescription(cat)))
 		}
 	}
 
@@ -1468,7 +1545,7 @@ func PrintCategorizationReport(categorized []CategorizedFailure, stats Categoriz
 	sb.WriteString("Individual failures:\n")
 	for i, cat := range categorized {
 		sb.WriteString(fmt.Sprintf("%d. [%s] %s (%.0f%% confidence)\n",
-			i+1, cat.Category, cat.TestName, cat.Confidence*100))
+			i+1, GetCategoryLabel(cat), cat.TestName, cat.Confidence*100))
 		sb.WriteString(fmt.Sprintf("   File: %s:%d\n", cat.FilePath, cat.LineNumber))
 		sb.WriteString(fmt.Sprintf("   Error: %s\n", cat.ErrorMessage))
 		if cat.Reasoning != "" {
