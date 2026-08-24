@@ -109,3 +109,9 @@ The proxy exposes standard Prometheus metrics at `/metrics`:
 ## License
 
 See [LICENSE](LICENSE) if present, or contact the maintainer.
+
+---
+
+Part of [jedarden.com](https://jedarden.com)
+
+*This GitHub repo is a read-only mirror of git.ardenone.com/jedarden/zai-proxy — issues and PRs are welcome here either way.*
