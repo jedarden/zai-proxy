@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"testing"
 )
 
@@ -33,35 +32,38 @@ func TestTranslateRequest_EmptyBody(t *testing.T) {
 }
 
 func TestTranslateRequest_InvalidJSON(t *testing.T) {
-	_, _, err := TranslateRequest([]byte(`{invalid`))
-	if err == nil {
-		t.Error("expected error for invalid JSON")
+	// TranslateRequest is a no-op and does not validate JSON
+	// It passes through the body unchanged even for invalid JSON
+	out, changed, err := TranslateRequest([]byte(`{invalid`))
+	if err != nil {
+		t.Errorf("unexpected error for invalid JSON: %v", err)
+	}
+	if changed {
+		t.Error("expected changed=false for no-op translation")
+	}
+	if string(out) != `{invalid` {
+		t.Errorf("body should be passed through unchanged: got %s", string(out))
 	}
 }
 
 func TestTranslateRequest_StripsThinking(t *testing.T) {
+	// TranslateRequest is a no-op - it does not strip thinking field
 	body := `{"model":"claude-3-5-sonnet","max_tokens":16000,"thinking":{"type":"enabled","budget_tokens":10000},"messages":[{"role":"user","content":"hello"}]}`
 	out, changed, err := TranslateRequest([]byte(body))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !changed {
-		t.Error("expected changed=true when thinking is stripped")
+	if changed {
+		t.Error("expected changed=false for no-op translation")
 	}
 
-	var result map[string]interface{}
-	if err := json.Unmarshal(out, &result); err != nil {
-		t.Fatalf("output is not valid JSON: %v", err)
-	}
-	if _, ok := result["thinking"]; ok {
-		t.Error("'thinking' should have been removed")
-	}
-	if _, ok := result["messages"]; !ok {
-		t.Error("'messages' should still be present")
+	if string(out) != body {
+		t.Errorf("body should be passed through unchanged: got %s", string(out))
 	}
 }
 
 func TestTranslateRequest_SystemArrayToString(t *testing.T) {
+	// TranslateRequest is a no-op - it does not convert system arrays to strings
 	body := `{
 		"model":"glm-4",
 		"max_tokens":1024,
@@ -75,21 +77,12 @@ func TestTranslateRequest_SystemArrayToString(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !changed {
-		t.Error("expected changed=true when system is converted")
+	if changed {
+		t.Error("expected changed=false for no-op translation")
 	}
 
-	var result map[string]interface{}
-	if err := json.Unmarshal(out, &result); err != nil {
-		t.Fatalf("output is not valid JSON: %v", err)
-	}
-
-	system, ok := result["system"].(string)
-	if !ok {
-		t.Fatalf("'system' should be a string, got %T: %v", result["system"], result["system"])
-	}
-	if system != "You are a helpful assistant.\nBe concise." {
-		t.Errorf("unexpected system string: %q", system)
+	if string(out) != body {
+		t.Errorf("body should be passed through unchanged: got %s", string(out))
 	}
 }
 
@@ -108,6 +101,7 @@ func TestTranslateRequest_SystemStringUnchanged(t *testing.T) {
 }
 
 func TestTranslateRequest_StripsCacheControlFromMessages(t *testing.T) {
+	// TranslateRequest is a no-op - it does not strip cache_control from messages
 	body := `{
 		"model":"glm-4",
 		"max_tokens":1024,
@@ -123,35 +117,17 @@ func TestTranslateRequest_StripsCacheControlFromMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !changed {
-		t.Error("expected changed=true when cache_control is stripped")
+	if changed {
+		t.Error("expected changed=false for no-op translation")
 	}
 
-	var result map[string]interface{}
-	if err := json.Unmarshal(out, &result); err != nil {
-		t.Fatalf("output is not valid JSON: %v", err)
-	}
-
-	messages := result["messages"].([]interface{})
-	msg := messages[0].(map[string]interface{})
-	content := msg["content"].([]interface{})
-
-	for i, block := range content {
-		blockMap := block.(map[string]interface{})
-		if _, hasCacheControl := blockMap["cache_control"]; hasCacheControl {
-			t.Errorf("content block %d still has cache_control after stripping", i)
-		}
-	}
-
-	// Text should be preserved
-	firstBlock := content[0].(map[string]interface{})
-	if firstBlock["text"] != "Hello" {
-		t.Errorf("text should be preserved, got: %v", firstBlock["text"])
+	if string(out) != body {
+		t.Errorf("body should be passed through unchanged: got %s", string(out))
 	}
 }
 
 func TestTranslateRequest_CombinedTransformations(t *testing.T) {
-	// Request with thinking + system array + cache_control in messages
+	// TranslateRequest is a no-op - it does not perform any transformations
 	body := `{
 		"model":"claude-3-5-sonnet",
 		"max_tokens":16000,
@@ -168,36 +144,12 @@ func TestTranslateRequest_CombinedTransformations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !changed {
-		t.Error("expected changed=true for combined transformations")
+	if changed {
+		t.Error("expected changed=false for no-op translation")
 	}
 
-	var result map[string]interface{}
-	if err := json.Unmarshal(out, &result); err != nil {
-		t.Fatalf("output is not valid JSON: %v", err)
-	}
-
-	if _, ok := result["thinking"]; ok {
-		t.Error("'thinking' should have been removed")
-	}
-
-	system, ok := result["system"].(string)
-	if !ok {
-		t.Fatalf("'system' should be a string after translation")
-	}
-	if system != "You are a helpful assistant." {
-		t.Errorf("unexpected system string: %q", system)
-	}
-
-	messages := result["messages"].([]interface{})
-	msg := messages[0].(map[string]interface{})
-	content := msg["content"].([]interface{})
-	block := content[0].(map[string]interface{})
-	if _, hasCacheControl := block["cache_control"]; hasCacheControl {
-		t.Error("cache_control should have been stripped from content block")
-	}
-	if block["text"] != "Explain recursion." {
-		t.Errorf("text should be preserved, got: %v", block["text"])
+	if string(out) != body {
+		t.Errorf("body should be passed through unchanged: got %s", string(out))
 	}
 }
 
