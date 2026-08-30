@@ -7,7 +7,7 @@ import (
 	"os"
 	"sync"
 
-	"git.ardenone.com/jedarden/zai-proxy/dashboard/config"
+	"git.ardenone.com/jedarden/zai-proxy/internal/configenv"
 )
 
 var (
@@ -28,9 +28,9 @@ type Config struct {
 // DefaultConfig returns the default logger configuration.
 func DefaultConfig() Config {
 	return Config{
-		Format:    config.GetEnvOrDefault("LOG_FORMAT", "json"),
-		Level:     config.GetEnvOrDefault("LOG_LEVEL", "info"),
-		AddSource: config.GetEnvOrDefault("LOG_ADD_SOURCE", "false") == "true",
+		Format:    configenv.GetString("LOG_FORMAT", "json"),
+		Level:     configenv.GetString("LOG_LEVEL", "info"),
+		AddSource: configenv.GetString("LOG_ADD_SOURCE", "false") == "true",
 	}
 }
 

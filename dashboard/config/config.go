@@ -74,12 +74,6 @@ func GetListenAddr() string {
 	return configenv.GetString("LISTEN_ADDR", DefaultListenAddr)
 }
 
-// GetEnvOrDefault returns an environment value or a supplied fallback.
-// It remains here for dashboard packages that share this configuration API.
-func GetEnvOrDefault(key, fallback string) string {
-	return configenv.GetString(key, fallback)
-}
-
 // GetRetention5s returns the retention for 5s data from RETENTION_5S env var,
 // or the default retention if not set/invalid.
 func GetRetention5s() time.Duration {
