@@ -534,3 +534,15 @@ Tracked via beads: restoring the current outage is a near-term tactical fix; the
 stateless storage rewrite this ADR commits to is tracked as follow-up implementation
 work against `dashboard/storage/`, `dashboard/main.go`, and
 `k8s/ardenone-cluster/devpod/zai-proxy-dashboard.yml` (in `jedarden/declarative-config`).
+
+## Ceiling persistence across restarts (2026-09-02)
+
+The rate ceiling is deliberately unknown and inferred from the observed 429 rate; the
+operator's goal is to saturate a prepaid plan, so the estimate is the proxy's most valuable
+state. It is also the only state that is lost on every restart: the container logs for
+2026-09-02 03:00-04:15 UTC show 13 starts in 62 minutes, each logging
+`Ceiling updated 40.00 -> 30.40` and then a 40-60% 429 burst while re-learning from
+RATE_LIMIT_MAX. Persist `{ceiling, hold, ts}` on every update to a state file on an
+emptyDir volume (survives container restarts, which is the case that matters) and resume
+from it on start when it is younger than a configurable age; keep the probe-for-shift
+logic so the estimate still drifts up when upstream loosens. Bead: zaiproxy-cb072626.
