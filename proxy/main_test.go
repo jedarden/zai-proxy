@@ -263,26 +263,22 @@ func BenchmarkTokenCountingLongText(b *testing.B) {
 	b.Logf("Long text token counting: %v per operation", avgTime)
 }
 
-// TestProxyHealthEndpoint tests the health endpoint returns 200 OK
+// TestProxyHealthEndpoint tests the real /health handler against the
+// Kubernetes probe contract: 200 OK. The payload (the rate-limit state) is
+// covered by TestHealthHandler in ratelimiter_state_test.go.
 func TestProxyHealthEndpoint(t *testing.T) {
+	arl := NewAdaptiveRateLimiter(8.0, 0.5, 40.0)
+
 	req := httptest.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
 
-	http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	}).ServeHTTP(w, req)
+	newHealthHandler(arl).ServeHTTP(w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
-	}
-
-	body, _ := io.ReadAll(resp.Body)
-	if string(body) != "ok" {
-		t.Errorf("Expected body 'ok', got '%s'", string(body))
 	}
 }
 

@@ -50,8 +50,15 @@ type AdaptiveRateLimiter struct {
 	cleanWindows       int     // Consecutive clean windows since last 429
 	lastAdjustment     time.Time
 	adjustmentWindow   time.Duration
+	lastCeilingUpdate  time.Time // When estimatedCeiling was last learned (zero until then)
 	recent429Count     int64
 	recentSuccessCount int64
+
+	// Ceiling persistence: statePath is the file the learned ceiling is
+	// written to on every ceiling update and resumed from on startup. Empty
+	// disables persistence (tests mostly).
+	statePath         string
+	restoredFromState bool
 
 	// Fair scheduling happens before the global token bucket. The queues are
 	// keyed by a fixed set of source buckets, so neither queue state nor metric
@@ -248,9 +255,9 @@ func (arl *AdaptiveRateLimiter) RecordSuccess() {
 
 func (arl *AdaptiveRateLimiter) tryAdjustRate() {
 	arl.mu.Lock()
-	defer arl.mu.Unlock()
 
 	if time.Since(arl.lastAdjustment) < arl.adjustmentWindow {
+		arl.mu.Unlock()
 		return
 	}
 
@@ -259,17 +266,21 @@ func (arl *AdaptiveRateLimiter) tryAdjustRate() {
 	total := count429 + countSuccess
 
 	if total == 0 {
+		arl.mu.Unlock()
 		return
 	}
 
 	error429Rate := float64(count429) / float64(total)
 	newRate := arl.currentRate
+	ceilingUpdated := false
 
 	if error429Rate > 0.05 {
 		// 429s detected — update ceiling estimate via EWMA
 		oldCeiling := arl.estimatedCeiling
 		arl.estimatedCeiling = arl.ceilingSmoothAlpha*arl.currentRate + (1-arl.ceilingSmoothAlpha)*arl.estimatedCeiling
 		arl.cleanWindows = 0
+		arl.lastCeilingUpdate = time.Now()
+		ceilingUpdated = true
 
 		// Drop to hold position: just below the updated ceiling
 		newRate = arl.estimatedCeiling * (1 - arl.holdMargin)
@@ -324,6 +335,19 @@ func (arl *AdaptiveRateLimiter) tryAdjustRate() {
 	}
 
 	arl.lastAdjustment = time.Now()
+
+	// Snapshot the learned ceiling while the state is locked, then write it
+	// after the lock is released — the write is disk I/O and must not widen
+	// the critical section every waiter rounds through.
+	var snapshot *RateLimitState
+	if ceilingUpdated && arl.statePath != "" {
+		snapshot = arl.stateSnapshotLocked()
+	}
+	arl.mu.Unlock()
+
+	if snapshot != nil {
+		arl.persistState(snapshot)
+	}
 }
 
 func (arl *AdaptiveRateLimiter) GetCurrentRate() float64 {
@@ -341,9 +365,20 @@ func (arl *AdaptiveRateLimiter) Reset(initialRate float64) {
 	arl.limiter = rate.NewLimiter(rate.Limit(initialRate), limiterBurst(initialRate))
 	arl.notifyRateChangeLocked()
 	arl.lastAdjustment = time.Now()
+	arl.lastCeilingUpdate = time.Time{}
+	arl.restoredFromState = false
 	atomic.StoreInt64(&arl.recent429Count, 0)
 	atomic.StoreInt64(&arl.recentSuccessCount, 0)
 	log.Printf("Rate limiter reset: rate=%.1f, ceiling=%.1f", arl.currentRate, arl.estimatedCeiling)
+
+	// The snapshot no longer describes this limiter: drop it so a restart
+	// starts over exactly as the reset asked, instead of resurrecting the
+	// estimate that was just discarded.
+	if arl.statePath != "" {
+		if err := os.Remove(arl.statePath); err != nil && !os.IsNotExist(err) {
+			log.Printf("Rate limit: failed to clear persisted ceiling state at %s: %v", arl.statePath, err)
+		}
+	}
 }
 
 func updateUtilization() {
@@ -437,9 +472,19 @@ func main() {
 	rateLimiter.ceilingSmoothAlpha = config.GetRateLimitCeilingAlpha()
 	rateLimiter.holdMargin = config.GetRateLimitHoldMargin()
 	rateLimiter.probeInterval = config.GetRateLimitProbeInterval()
-	rateLimitCurrentRate.WithLabelValues(deploymentVariant).Set(initialRate)
-	log.Printf("Adaptive rate limiting: initial=%.1f, min=%.1f, max=%.1f req/s (ceiling alpha=%.2f, margin=%.1f%%, probe every %d windows)",
-		initialRate, minRate, maxRate, rateLimiter.ceilingSmoothAlpha, rateLimiter.holdMargin*100, rateLimiter.probeInterval)
+
+	// Resume the inferred ceiling across restarts instead of re-learning it
+	// from RATE_LIMIT_MAX (each restart otherwise re-runs a 40-60% 429 burst;
+	// see docs/plan/plan.md, "Ceiling persistence across restarts"). The probe
+	// loop is unchanged, so a genuinely higher upstream limit is still learned.
+	statePath := config.GetRateLimitStateFile()
+	stateMaxAge := config.GetRateLimitStateMaxAge()
+	rateLimiter.statePath = statePath
+	restored := rateLimiter.RestoreFromStateFile(statePath, stateMaxAge)
+
+	rateLimitCurrentRate.WithLabelValues(deploymentVariant).Set(rateLimiter.GetCurrentRate())
+	log.Printf("Adaptive rate limiting: initial=%.1f, min=%.1f, max=%.1f req/s (ceiling alpha=%.2f, margin=%.1f%%, probe every %d windows, state file=%s, max age=%s, restored=%t)",
+		initialRate, minRate, maxRate, rateLimiter.ceilingSmoothAlpha, rateLimiter.holdMargin*100, rateLimiter.probeInterval, statePath, stateMaxAge, restored)
 
 	// Retry configuration
 	maxRetries := config.GetMaxRetries()
@@ -466,11 +511,9 @@ func main() {
 	// Metrics endpoint
 	http.Handle("/metrics", promhttp.Handler())
 
-	// Health endpoint
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
+	// Health endpoint: status code is what the probes read; the body carries
+	// the live rate-limit state, mirroring the persisted ceiling snapshot.
+	http.Handle("/health", newHealthHandler(rateLimiter))
 
 	// Admin: reset rate limiter
 	http.HandleFunc("/admin/reset-rate-limit", func(w http.ResponseWriter, r *http.Request) {

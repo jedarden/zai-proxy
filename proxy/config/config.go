@@ -3,6 +3,8 @@
 package config
 
 import (
+	"time"
+
 	"git.ardenone.com/jedarden/zai-proxy/internal/configenv"
 )
 
@@ -30,6 +32,19 @@ const (
 	DefaultRateLimitHoldMargin = 0.02
 	// DefaultRateLimitProbeInterval is the default interval between ceiling probes (in clean windows).
 	DefaultRateLimitProbeInterval = 10
+)
+
+// Rate limiter state persistence defaults
+const (
+	// DefaultRateLimitStateFile is the default path of the persisted ceiling
+	// snapshot. In the cluster deployment this is an emptyDir volume, so the
+	// snapshot survives container restarts (the case that matters) but not pod
+	// rescheduling.
+	DefaultRateLimitStateFile = "/var/lib/zai-proxy/ceiling.json"
+	// DefaultRateLimitStateMaxAge is the default maximum age of a persisted
+	// ceiling snapshot before a restart falls back to re-learning from
+	// RATE_LIMIT_MAX.
+	DefaultRateLimitStateMaxAge = 6 * time.Hour
 )
 
 // Worker defaults
@@ -124,4 +139,17 @@ func GetRateLimitHoldMargin() float64 {
 // or the default value if not set/invalid.
 func GetRateLimitProbeInterval() int {
 	return configenv.GetPositiveInt("RATE_LIMIT_PROBE_INTERVAL", DefaultRateLimitProbeInterval)
+}
+
+// GetRateLimitStateFile returns the path of the persisted ceiling snapshot from
+// RATE_LIMIT_STATE_FILE env var, or the default value if not set.
+func GetRateLimitStateFile() string {
+	return configenv.GetString("RATE_LIMIT_STATE_FILE", DefaultRateLimitStateFile)
+}
+
+// GetRateLimitStateMaxAge returns the maximum age of a persisted ceiling
+// snapshot from RATE_LIMIT_STATE_MAX_AGE env var, or the default value if not
+// set/invalid. Snapshots older than this are ignored on startup.
+func GetRateLimitStateMaxAge() time.Duration {
+	return configenv.ParseDurationOrDefault("RATE_LIMIT_STATE_MAX_AGE", DefaultRateLimitStateMaxAge)
 }

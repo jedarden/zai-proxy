@@ -121,6 +121,30 @@ This produces stable convergence instead of oscillation. For example, with a cei
 RATE_LIMIT_ADDITIVE_INCREASE=0.5
 ```
 
+### `RATE_LIMIT_STATE_FILE`
+**Type:** String (path)
+**Default:** `/var/lib/zai-proxy/ceiling.json`
+**Description:** Where the adaptive rate limiter persists the inferred ceiling so a container
+restart resumes at the learned value instead of re-learning from `RATE_LIMIT_MAX`. Written
+atomically on every ceiling update as `{"ceiling": .., "hold": .., "ts": ..}`.
+
+**Example:**
+```bash
+RATE_LIMIT_STATE_FILE=/var/lib/zai-proxy/ceiling.json
+```
+
+### `RATE_LIMIT_STATE_MAX_AGE`
+**Type:** Duration (Go syntax)
+**Default:** `6h`
+**Description:** Maximum age of a persisted ceiling snapshot for a restart to resume from it.
+Older snapshots (or a corrupt/missing file) make the proxy fall back to starting from
+`RATE_LIMIT_MAX` and re-learning.
+
+**Example:**
+```bash
+RATE_LIMIT_STATE_MAX_AGE=30m
+```
+
 ## Retry Configuration
 
 ### `MAX_RETRIES`

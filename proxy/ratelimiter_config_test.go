@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"testing"
+	"time"
 
 	"git.ardenone.com/jedarden/zai-proxy/proxy/config"
 )
@@ -77,14 +78,14 @@ func TestEnvProbeIntervalDefault(t *testing.T) {
 // from environment variables and override the config defaults.
 func TestEnvVarParsing(t *testing.T) {
 	tests := []struct {
-		name              string
-		envVar            string
-		envValue          string
-		getter            func() float64
-		getterInt         func() int
-		wantFloat         float64
-		wantInt           int
-		parseAsFloat      bool
+		name         string
+		envVar       string
+		envValue     string
+		getter       func() float64
+		getterInt    func() int
+		wantFloat    float64
+		wantInt      int
+		parseAsFloat bool
 	}{
 		{
 			name:         "ceiling alpha valid 0.5",
@@ -200,14 +201,14 @@ func TestEnvVarParsing(t *testing.T) {
 // rejected or handled gracefully by falling back to default values.
 func TestEnvVarInvalid(t *testing.T) {
 	tests := []struct {
-		name              string
-		envVar            string
-		envValue          string
-		getter            func() float64
-		getterInt         func() int
-		wantDefaultFloat  float64
-		wantDefaultInt    int
-		parseAsFloat      bool
+		name             string
+		envVar           string
+		envValue         string
+		getter           func() float64
+		getterInt        func() int
+		wantDefaultFloat float64
+		wantDefaultInt   int
+		parseAsFloat     bool
 	}{
 		// Ceiling alpha invalid cases
 		{
@@ -293,36 +294,36 @@ func TestEnvVarInvalid(t *testing.T) {
 		},
 		// Probe interval invalid cases
 		{
-			name:            "probe interval zero",
-			envVar:          "RATE_LIMIT_PROBE_INTERVAL",
-			envValue:        "0",
-			getterInt:       config.GetRateLimitProbeInterval,
-			wantDefaultInt:  config.DefaultRateLimitProbeInterval,
-			parseAsFloat:    false,
+			name:           "probe interval zero",
+			envVar:         "RATE_LIMIT_PROBE_INTERVAL",
+			envValue:       "0",
+			getterInt:      config.GetRateLimitProbeInterval,
+			wantDefaultInt: config.DefaultRateLimitProbeInterval,
+			parseAsFloat:   false,
 		},
 		{
-			name:            "probe interval negative",
-			envVar:          "RATE_LIMIT_PROBE_INTERVAL",
-			envValue:        "-5",
-			getterInt:       config.GetRateLimitProbeInterval,
-			wantDefaultInt:  config.DefaultRateLimitProbeInterval,
-			parseAsFloat:    false,
+			name:           "probe interval negative",
+			envVar:         "RATE_LIMIT_PROBE_INTERVAL",
+			envValue:       "-5",
+			getterInt:      config.GetRateLimitProbeInterval,
+			wantDefaultInt: config.DefaultRateLimitProbeInterval,
+			parseAsFloat:   false,
 		},
 		{
-			name:            "probe interval non-numeric",
-			envVar:          "RATE_LIMIT_PROBE_INTERVAL",
-			envValue:        "invalid",
-			getterInt:       config.GetRateLimitProbeInterval,
-			wantDefaultInt:  config.DefaultRateLimitProbeInterval,
-			parseAsFloat:    false,
+			name:           "probe interval non-numeric",
+			envVar:         "RATE_LIMIT_PROBE_INTERVAL",
+			envValue:       "invalid",
+			getterInt:      config.GetRateLimitProbeInterval,
+			wantDefaultInt: config.DefaultRateLimitProbeInterval,
+			parseAsFloat:   false,
 		},
 		{
-			name:            "probe interval float",
-			envVar:          "RATE_LIMIT_PROBE_INTERVAL",
-			envValue:        "5.5",
-			getterInt:       config.GetRateLimitProbeInterval,
-			wantDefaultInt:  config.DefaultRateLimitProbeInterval,
-			parseAsFloat:    false,
+			name:           "probe interval float",
+			envVar:         "RATE_LIMIT_PROBE_INTERVAL",
+			envValue:       "5.5",
+			getterInt:      config.GetRateLimitProbeInterval,
+			wantDefaultInt: config.DefaultRateLimitProbeInterval,
+			parseAsFloat:   false,
 		},
 	}
 
@@ -358,14 +359,14 @@ func TestEnvVarInvalid(t *testing.T) {
 // the built-in config defaults.
 func TestEnvVarOverride(t *testing.T) {
 	tests := []struct {
-		name              string
-		envVar            string
-		envValue          string
-		getter            func() float64
-		getterInt         func() int
-		defaultFloat      float64
-		defaultInt        int
-		parseAsFloat      bool
+		name         string
+		envVar       string
+		envValue     string
+		getter       func() float64
+		getterInt    func() int
+		defaultFloat float64
+		defaultInt   int
+		parseAsFloat bool
 	}{
 		{
 			name:         "ceiling alpha overrides default",
@@ -384,11 +385,11 @@ func TestEnvVarOverride(t *testing.T) {
 			parseAsFloat: true,
 		},
 		{
-			name:        "probe interval overrides default",
-			envVar:      "RATE_LIMIT_PROBE_INTERVAL",
-			envValue:    "7",
-			getterInt:   config.GetRateLimitProbeInterval,
-			defaultInt:  config.DefaultRateLimitProbeInterval,
+			name:         "probe interval overrides default",
+			envVar:       "RATE_LIMIT_PROBE_INTERVAL",
+			envValue:     "7",
+			getterInt:    config.GetRateLimitProbeInterval,
+			defaultInt:   config.DefaultRateLimitProbeInterval,
 			parseAsFloat: false,
 		},
 	}
@@ -436,5 +437,58 @@ func TestEnvVarOverride(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestEnvRateLimitStateFile verifies that GetRateLimitStateFile returns the
+// default path when RATE_LIMIT_STATE_FILE is unset and the configured path
+// when it is set.
+func TestEnvRateLimitStateFile(t *testing.T) {
+	orig := os.Getenv("RATE_LIMIT_STATE_FILE")
+	defer func() {
+		if orig != "" {
+			os.Setenv("RATE_LIMIT_STATE_FILE", orig)
+		} else {
+			os.Unsetenv("RATE_LIMIT_STATE_FILE")
+		}
+	}()
+
+	os.Unsetenv("RATE_LIMIT_STATE_FILE")
+	if got := config.GetRateLimitStateFile(); got != config.DefaultRateLimitStateFile {
+		t.Errorf("GetRateLimitStateFile() = %q, want default %q", got, config.DefaultRateLimitStateFile)
+	}
+
+	os.Setenv("RATE_LIMIT_STATE_FILE", "/tmp/ceiling.json")
+	if got := config.GetRateLimitStateFile(); got != "/tmp/ceiling.json" {
+		t.Errorf("GetRateLimitStateFile() = %q, want /tmp/ceiling.json", got)
+	}
+}
+
+// TestEnvRateLimitStateMaxAge verifies that GetRateLimitStateMaxAge returns
+// the default when RATE_LIMIT_STATE_MAX_AGE is unset, honours a valid Go
+// duration, and falls back to the default on an invalid value.
+func TestEnvRateLimitStateMaxAge(t *testing.T) {
+	orig := os.Getenv("RATE_LIMIT_STATE_MAX_AGE")
+	defer func() {
+		if orig != "" {
+			os.Setenv("RATE_LIMIT_STATE_MAX_AGE", orig)
+		} else {
+			os.Unsetenv("RATE_LIMIT_STATE_MAX_AGE")
+		}
+	}()
+
+	os.Unsetenv("RATE_LIMIT_STATE_MAX_AGE")
+	if got := config.GetRateLimitStateMaxAge(); got != config.DefaultRateLimitStateMaxAge {
+		t.Errorf("GetRateLimitStateMaxAge() = %v, want default %v", got, config.DefaultRateLimitStateMaxAge)
+	}
+
+	os.Setenv("RATE_LIMIT_STATE_MAX_AGE", "30m")
+	if got := config.GetRateLimitStateMaxAge(); got != 30*time.Minute {
+		t.Errorf("GetRateLimitStateMaxAge() = %v, want 30m", got)
+	}
+
+	os.Setenv("RATE_LIMIT_STATE_MAX_AGE", "not-a-duration")
+	if got := config.GetRateLimitStateMaxAge(); got != config.DefaultRateLimitStateMaxAge {
+		t.Errorf("GetRateLimitStateMaxAge() with invalid value = %v, want default %v", got, config.DefaultRateLimitStateMaxAge)
 	}
 }

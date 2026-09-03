@@ -104,7 +104,9 @@ echo ""
 # Test 1: Health Check
 echo "=== Test 1: Health Check ==="
 HEALTH=$(curl -sf "$PROXY_URL/health" || echo "failed")
-if [ "$HEALTH" = "ok" ]; then
+# /health returns JSON whose status field carries the health word; the
+# rate_limit object mirrors the persisted ceiling snapshot.
+if echo "$HEALTH" | grep -q '"status":"ok"'; then
     log_result "Health Endpoint" "PASS" "Service healthy"
 else
     log_result "Health Endpoint" "FAIL" "Health check returned: $HEALTH"

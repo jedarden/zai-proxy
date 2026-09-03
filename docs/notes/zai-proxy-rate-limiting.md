@@ -107,6 +107,8 @@ This means most transient rate limits are absorbed by the proxy.
 | `RATE_LIMIT_CEILING_ALPHA` | `0.3` | EWMA weight for new ceiling observations |
 | `RATE_LIMIT_HOLD_MARGIN` | `0.02` | Fraction held below the estimated ceiling |
 | `RATE_LIMIT_PROBE_INTERVAL` | `10` | Clean windows before a ceiling probe |
+| `RATE_LIMIT_STATE_FILE` | `/var/lib/zai-proxy/ceiling.json` | Path of the persisted ceiling snapshot |
+| `RATE_LIMIT_STATE_MAX_AGE` | `6h` | Maximum age of a snapshot restored on startup |
 | `MAX_RETRIES` | `3` | Number of retry attempts on 429/errors |
 | `MAX_WORKERS` | `20` | Max concurrent requests (separate from rate) |
 
@@ -137,6 +139,30 @@ env:
   - name: MAX_RETRIES
     value: "2"    # Fewer retries
 ```
+
+## Ceiling Persistence Across Restarts
+
+The ceiling is inferred, not configured, so it is the proxy's most valuable state — and the only
+state a restart used to throw away: each container start logged `Ceiling updated 40.00 -> 30.40`
+and then burned a 40-60% 429 burst while re-learning from `RATE_LIMIT_MAX` (13 restarts in 62
+minutes on 2026-09-02).
+
+- On every ceiling update the limiter writes `{"ceiling": .., "hold": .., "ts": ..}` to
+  `RATE_LIMIT_STATE_FILE` (default `/var/lib/zai-proxy/ceiling.json`), atomically via temp file +
+  rename. Converge/probe adjustments do not write; only learned ceilings do.
+- On start, a snapshot younger than `RATE_LIMIT_STATE_MAX_AGE` (default `6h`) seeds the limiter at
+  the stored ceiling and hold rate, clamped to the configured `RATE_LIMIT_MIN`/`MAX` range.
+  A missing, corrupt, or stale snapshot falls back to the previous behaviour (start from
+  `RATE_LIMIT_MAX` and learn).
+- The probe-for-shift loop is unchanged, so if upstream loosens the estimate still drifts upward.
+- `POST /admin/reset-rate-limit` also removes the snapshot, so a restart honours the reset instead
+  of resurrecting the discarded estimate.
+- `/health` reports the live state — `ceiling`, `hold`, `current_rate`, `ceiling_updated_at`,
+  `state_file`, `restored_from_state` — mirroring what the snapshot holds. Probes read the status
+  code only.
+
+The cluster deployment mounts an emptyDir at `/var/lib/zai-proxy`: the snapshot survives container
+restarts (the case that matters — liveness kills), not pod rescheduling, which re-learns anyway.
 
 ## New Metrics
 

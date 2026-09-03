@@ -117,7 +117,8 @@ compare_metrics() {
 # ============================================================
 test_production_health() {
     local response=$(curl -s --connect-timeout 5 "$PRODUCTION_URL/health" 2>/dev/null)
-    if [ "$response" = "ok" ]; then
+    echo "$response" | grep -q '"status":"ok"' || response="unhealthy"
+    if [ "$response" != "unhealthy" ]; then
         echo "Response: $response" >> "$RESULTS_FILE"
         return 0
     else
@@ -131,7 +132,8 @@ test_production_health() {
 # ============================================================
 test_canary_health() {
     local response=$(curl -s --connect-timeout 5 "$CANARY_URL/health" 2>/dev/null)
-    if [ "$response" = "ok" ]; then
+    echo "$response" | grep -q '"status":"ok"' || response="unhealthy"
+    if [ "$response" != "unhealthy" ]; then
         echo "Response: $response" >> "$RESULTS_FILE"
         return 0
     else

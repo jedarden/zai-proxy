@@ -69,6 +69,8 @@ go run .
 | `RATE_LIMIT_CEILING_ALPHA` | `0.3` | EWMA smoothing factor for ceiling estimation |
 | `RATE_LIMIT_HOLD_MARGIN` | `0.02` | Hold margin below ceiling (as fraction, e.g., 0.02 = 2%) |
 | `RATE_LIMIT_PROBE_INTERVAL` | `10` | Probe ceiling every N clean windows |
+| `RATE_LIMIT_STATE_FILE` | `/var/lib/zai-proxy/ceiling.json` | Where the inferred ceiling is persisted across restarts |
+| `RATE_LIMIT_STATE_MAX_AGE` | `6h` | Ignore a persisted ceiling older than this on startup |
 | `MAX_RETRIES` | `3` | Retry count on transient errors |
 
 ### Dashboard
