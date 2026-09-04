@@ -196,7 +196,19 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		upstreamReq.Header.Set("Host", "api.z.ai")
-		upstreamReq.Header.Set("Authorization", "Bearer "+h.apiKey)
+		// The caller's own Authorization/x-api-key is meaningless here -- this
+		// proxy's whole purpose is to hold the real credential so callers don't
+		// need it (NEEDLE's adapters literally send ANTHROPIC_AUTH_TOKEN=
+		// 'proxy-handles-auth'). Z.AI's Anthropic-compatible endpoint
+		// authenticates via x-api-key, not Authorization: Bearer -- setting
+		// Bearer here left the real key in a header upstream ignores while the
+		// caller's placeholder sat untouched in the header it actually reads,
+		// which its WAF/CDN front silently rejected with a bare nginx 404
+		// instead of Z.AI's own structured 401 (verified 2026-09-04: a direct
+		// x-api-key request to https://api.z.ai/api/anthropic/v1/messages gets
+		// Z.AI's real JSON error; the old Authorization: Bearer path did not).
+		upstreamReq.Header.Del("Authorization")
+		upstreamReq.Header.Set("x-api-key", h.apiKey)
 		// Disable gzip so the proxy can parse/modify the response body
 		upstreamReq.Header.Set("Accept-Encoding", "identity")
 
