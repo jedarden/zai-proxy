@@ -1,7 +1,7 @@
 # ZAI Proxy Ecosystem — Plan
 
-**Last updated:** 2026-07-20
-**Version:** proxy/1.10.0, dashboard/1.1.5
+**Last updated:** 2026-09-04
+**Version:** proxy/1.11.1, dashboard/1.1.5
 
 ## Objective
 
@@ -18,8 +18,9 @@ network layer, not via per-agent authentication.
 | Network path to proxy compromised | Proxy is not reachable outside the cluster except via Tailscale ingress; no public IP |
 | Log scraping leaks key | Z.AI key is never logged; incoming Authorization header is overwritten before forwarding, never echoed |
 | Metric label leakage | No credential values in metric labels |
-| Runaway agent burns quota | Global adaptive rate limiter + 429 backoff + `MAX_WORKERS` concurrency cap |
-| Z.AI quota exhaustion | 429 counter triggers alerts before quota fully consumed |
+| Runaway agent burns quota | Account-quota pacing supervises the global adaptive rate limiter; `MAX_WORKERS` remains the independent concurrency cap |
+| Z.AI quota exhaustion | Poll the provider quota windows, reserve capacity, and fail fast until reset instead of discovering exhaustion through retry storms |
+| Promotional or harness-specific allowance changes | Treat cost/allowance as observed provider state, not a permanent property of a model or client; keep a fallback path until the entitlement is verified over time |
 | Malformed upstream response | Proxy validates response body before committing; retries on empty/truncated JSON |
 
 **What the proxy does NOT do:**
@@ -35,14 +36,14 @@ network layer, not via per-agent authentication.
 LLM Agent (Claude Code, NEEDLE worker, etc.)
     │
     │  POST /v1/messages  (or any path)
-    │  Authorization: Bearer <any-value>     ← overwritten; not validated
+    │  Authorization: <any-value>            ← removed; not validated
     ▼
 ┌─────────────────────────────────────────────────────┐
 │                    zai-proxy                        │
 │                                                     │
-│  • Overwrites Authorization → Bearer <zai-api-key>  │
+│  • Replaces caller auth with x-api-key              │
 │  • Enforces concurrency cap (MAX_WORKERS)           │
-│  • Global adaptive AIMD rate limiter                │
+│  • Quota-paced adaptive request admission           │
 │  • Counts tokens (tiktoken / API-reported)          │
 │  • Validates response body; retries on truncation   │
 │  • Records metrics (Prometheus)                     │
@@ -64,14 +65,15 @@ sees the upstream key.
 
 The core component. Handles:
 
-- **Credential injection:** overwrites the incoming `Authorization` header with
-  `Bearer <ZAI_API_KEY>`. No incoming credential is validated — access is controlled
-  entirely by network policy (cluster-internal DNS + Tailscale boundary).
+- **Credential injection:** removes incoming `Authorization` and replaces any caller
+  credential with `x-api-key: <ZAI_API_KEY>` for the Anthropic-compatible upstream.
+  No incoming credential is validated — access is controlled entirely by network policy
+  (cluster-internal DNS + Tailscale boundary).
 
 - **Concurrency cap:** `MAX_WORKERS` (default 10) bounds the number of in-flight
   requests. Requests beyond the cap receive 503 immediately.
 
-- **Global adaptive rate limiter (AIMD/EWMA):**
+- **Global adaptive rate limiter (AIMD/EWMA, current short-horizon control):**
   A single adaptive token-bucket limiter remains the global ceiling for all traffic.
   When that ceiling is contended, requests are queued into 64 deterministic source
   buckets derived from the direct peer IP and dispatched round-robin, so one source
@@ -87,6 +89,12 @@ The core component. Handles:
   - Parameters tunable via env: `RATE_LIMIT_CEILING_ALPHA`, `RATE_LIMIT_HOLD_MARGIN`,
     `RATE_LIMIT_PROBE_INTERVAL`.
   - Reset endpoint: `POST /admin/reset-rate-limit` resets to initial rate (unauthenticated).
+
+- **Quota-aware supervisor (planned long-horizon control):** periodically reads Z.AI's
+  account quota windows and derives a quota-paced admission cap. The effective request
+  rate is the minimum of the configured maximum, the learned short-horizon congestion
+  ceiling, and the quota cap. Quota data guides pacing; it does not replace the
+  concurrency cap or the 429-based congestion controller.
 
 - **Retry logic:** on network error, 429, or truncated/empty response body, the proxy
   retries up to `MAX_RETRIES` times (default 3) with exponential backoff (1 s, 2 s, 4 s).
@@ -118,6 +126,103 @@ The core component. Handles:
 - **Canary support:** the `zai-proxy` Deployment is the two-replica production
   workload selected by the `zai-proxy` Service. The separate `zai-proxy-canary`
   Deployment and Service isolate canary traffic for testing new versions.
+
+#### Quota-aware throttling plan
+
+Z.AI exposes two distinct usage signals, and the proxy must not conflate them:
+
+1. Anthropic-compatible model responses contain per-call token usage. The proxy already
+   prefers these values over local token estimates. They are useful for attribution and
+   burn-rate diagnostics, but plan credits are not assumed to equal raw tokens because
+   model, cache, and promotional multipliers can change.
+2. Z.AI's official Coding Plan usage tooling queries account-level endpoints at
+   `/api/monitor/usage/model-usage`, `/api/monitor/usage/tool-usage`, and
+   `/api/monitor/usage/quota/limit`. The quota endpoint is the primary observed budget
+   signal for five-hour and weekly model-usage windows. It is polled out of band, never
+   once per model request. The integration must accept both legacy limit types and the
+   current credit-based schema, ignore unknown types safely, and retain only normalized,
+   non-secret state in logs and metrics. The endpoint set and authentication pattern are
+   taken from Z.AI's
+   [official usage-query plugin](https://github.com/zai-org/zai-coding-plugins/blob/main/plugins/glm-plan-usage/skills/usage-query-skill/scripts/query-usage.mjs).
+
+The quota controller is deliberately supervisory because quota observations may lag,
+may include traffic outside this proxy, and do not describe instantaneous upstream
+concurrency. For every valid quota window it computes:
+
+- usable remaining allowance after `QUOTA_RESERVE_FRACTION`;
+- time remaining until the provider's reset;
+- an EWMA of observed allowance burn between successful polls;
+- an estimated sustainable admission rate from allowed burn per second divided by
+  observed burn per completed request.
+
+The smallest sustainable rate across active model-quota windows becomes the quota cap.
+Reductions take effect immediately; increases are smoothed and step-limited so a reset
+or promotional allowance does not create a burst. Until enough deltas exist to estimate
+burn per request, quota state is advisory and the existing congestion limiter remains
+authoritative. If quota data becomes stale, the proxy keeps the last cap only until
+`QUOTA_STALE_AFTER`, then degrades to congestion-only control and alerts rather than
+inventing quota state.
+
+The resulting admission decision is:
+
+```text
+effective_rate = min(configured_max, congestion_hold_rate, quota_rate_cap)
+```
+
+`RATE_LIMIT_MIN` applies only to the congestion controller. The quota supervisor may
+pace below that floor. Confirmed exhaustion opens a circuit and fails new requests fast
+with HTTP 429 plus the known reset time; it must not leave requests queued until a
+five-hour or weekly reset. Every actual upstream attempt, including a proxy retry, must
+obtain admission so retries cannot bypass quota pacing.
+
+HTTP status alone is insufficient feedback. The proxy will read a bounded Z.AI error
+body and classify its business code before adapting:
+
+| Z.AI condition | Supervisory action |
+|----------------|--------------------|
+| Concurrency limit (`1302`) | Reduce/hold concurrent admission; do not poison the RPS ceiling |
+| Frequency/rate limit (`1303`, `1305`) | Feed the short-horizon congestion controller and honor `Retry-After` |
+| Five-hour quota exhausted (`1308`) | Open the quota circuit until the advertised reset |
+| Weekly/monthly quota exhausted (`1310`) | Open the applicable longer-window circuit until reset |
+| Temporary model congestion (`1312`) | Jittered backoff and optional model fallback; do not treat as account-quota exhaustion |
+| Unknown 429 | Conservative bounded retry, preserve the upstream response, and expose an `unknown` classification metric |
+
+On the final failed attempt, the proxy preserves the safe upstream error body,
+`Retry-After`, and reset metadata for the caller. Quota polling uses a separate client
+with a short timeout, exponential backoff, and cached last-known-good state; a monitor
+endpoint failure must never block the model data path.
+
+Quota is account-wide. A multi-replica deployment must not give every pod the full
+account cap independently. Before enabling enforcement with more than one replica, use
+one leader to publish normalized quota state and divide the account admission budget
+among healthy replicas, or use an equivalent shared account-level limiter. The
+single-replica apex deployment may enforce the cap locally during the first rollout.
+
+ZCode is a separate execution path. First-party ZCode idle-time tasks are documented as
+free and quota-free for eligible subscribers, but ordinary ZCode tasks use the connected
+Coding Plan and its quota. Time-limited Unlimited Flash promotions are not a permanent
+cost guarantee. NEEDLE may prefer ZCode for bead work when live usage observations show
+zero quota burn, but it must keep the direct proxy harness as a fallback until ZCode has
+met reliability, headless-control, and sustained zero-burn acceptance gates. ZCode
+traffic that bypasses this proxy remains visible only through account-level quota deltas;
+the proxy must include that external burn when calculating its own safe cap. The
+[ZCode documentation](https://zcode.z.ai/en/docs/welcome) is the authority for which task
+modes are quota-free, and its [usage view](https://zcode.z.ai/en/docs/usage-stats) is an
+independent operator check on the proxy's normalized quota telemetry.
+
+Rollout and acceptance:
+
+1. Ship quota polling and metrics in observe-only mode; compare provider quota deltas
+   with proxy request/token metrics and ZCode activity for at least one full five-hour
+   window and one weekly reset.
+2. Parse and expose Z.AI business error classes without changing admission behavior.
+3. Enable a quota cap in canary, with a configurable reserve and an immediate kill
+   switch; prove that stale/malformed quota responses degrade safely.
+4. Enable production enforcement after canary shows no premature circuit opens, no
+   retry amplification, and quota consumption remains within the planned pace.
+5. Treat ZCode as the default bead worker only after repeated end-to-end bead completion,
+   verification, and usage telemetry demonstrate that its target task mode consumes no
+   paid quota. Deprecate, but do not initially remove, the Claude-Code-plus-GLM adapter.
 
 ### dashboard/ — Metrics Dashboard (Go + React)
 
@@ -188,6 +293,9 @@ with an empty window, which refills through normal scraping.
 | `status_code_rates` | Per-status-code req/s map |
 | `rate_limit_rps` | Current limiter rate |
 | `rate_limit_adj_increase/decrease` | AIMD adjustment counters |
+| `quota_used_ratio` / `quota_remaining_ratio` | Provider-reported account quota state by window |
+| `quota_rate_cap` / `quota_gate_open` | Quota supervisor's current pacing decision |
+| `quota_sample_age_seconds` | Freshness of the last valid account-quota sample |
 | `worker_utilization` | `concurrent / max_workers` |
 
 **Frontend (React/Vite/Tailwind, embedded in binary via `//go:embed`):**
@@ -200,7 +308,7 @@ Six panels in a 2×3 responsive grid, each wrapped in an error boundary:
 | Latency | p50 / p95 / p99 (ms) time series |
 | Tokens | Input + output + cache-read + cache-write token rate (tokens/s) and window running totals |
 | Concurrency | In-flight requests vs MAX_WORKERS |
-| Rate Limiter | Current rate, AIMD adjustments, rejections |
+| Rate Limiter | Effective rate, congestion ceiling, quota cap/gate, sample freshness, adjustments, and rejections |
 | Errors | Error rate %, upstream errors by type |
 
 Global controls:
@@ -285,13 +393,24 @@ agents can track their own consumption without querying the dashboard.
 | `zai_proxy_rate_limit_rejections_total` | `variant`, `client={source-00…source-63}` | Requests rejected at the concurrency cap, by bounded source bucket |
 | `zai_proxy_retry_attempts_total` | `reason={retry,network_error,429,truncated_response,empty_streaming}`, `variant` | Retry causes |
 | `zai_proxy_upstream_errors_total` | `error_type={HTTP status (for example 400,422,429,500),truncated_response,empty_streaming,upstream_connection,write_error,read_error,request_creation}`, `variant` | Error taxonomy |
+| `zai_proxy_quota_usage_ratio` | `window={five_hour,weekly}`, `limit_type`, `variant` | Normalized provider-reported usage |
+| `zai_proxy_quota_remaining_ratio` | `window`, `limit_type`, `variant` | Remaining fraction after no local policy adjustment |
+| `zai_proxy_quota_reset_time_seconds` | `window`, `limit_type`, `variant` | Provider reset time as a Unix timestamp |
+| `zai_proxy_quota_rate_cap` | `variant` | Account-level cap derived from quota pacing |
+| `zai_proxy_quota_gate_open` | `window`, `variant` | Whether confirmed exhaustion is rejecting new work |
+| `zai_proxy_quota_sample_age_seconds` | `variant` | Age of the last valid quota sample |
+| `zai_proxy_quota_poll_total` | `result={success,error,malformed,stale}`, `variant` | Quota monitor health |
+| `zai_proxy_zai_errors_total` | `class={concurrency,frequency,quota,model_congestion,unknown}`, `code`, `variant` | Bounded business-error classification |
 
 ### Error classification
 
 | Upstream condition | Proxy action |
 |-------------------|--------------|
-| 429 + Retry-After | Wait header delay, then retry (up to MAX_RETRIES) |
-| 429 no header | Exponential backoff retry |
+| 429 frequency limit (`1303`, `1305`) | Acquire admission, wait the larger of jittered backoff or `Retry-After`, then retry up to `MAX_RETRIES` |
+| 429 quota exhaustion (`1308`, `1310`) | Do not retry; open quota circuit until reset and preserve reset metadata |
+| 429 concurrency limit (`1302`) | Reduce/hold concurrent admission and retry only within the bounded retry policy |
+| Temporary model congestion (`1312`) | Jittered retry and optional fallback without reducing the account quota cap |
+| Unknown 429 | Conservative bounded retry; preserve upstream error response and classify as unknown |
 | 422 | Log bodies, no retry, return 422 to client |
 | Empty/invalid JSON body (2xx) | Retry; 502 after MAX_RETRIES |
 | Empty streaming response | Retry; 502 after MAX_RETRIES |
@@ -300,7 +419,11 @@ agents can track their own consumption without querying the dashboard.
 
 ### Dashboard alerting targets (future)
 
-- 429 rate from Z.AI > 5 % over 5 m → alert (quota pressure)
+- Frequency-limit 429 rate from Z.AI > 5 % over 5 m → alert (short-horizon pressure)
+- Five-hour or weekly quota is ahead of planned burn pace → warning
+- Remaining usable quota reaches the configured reserve → critical
+- Quota sample older than `QUOTA_STALE_AFTER` → warning; enforcement degrades safely
+- Quota gate remains open after the advertised reset → critical
 - p95 latency > 10 s → alert (upstream degradation)
 - Error rate > 2 % → alert
 
@@ -322,6 +445,13 @@ reference. Key variables:
 | `RATE_LIMIT_CEILING_ALPHA` | `0.3` | EWMA smoothing factor |
 | `RATE_LIMIT_HOLD_MARGIN` | `0.02` | Hold this % below estimated ceiling |
 | `RATE_LIMIT_PROBE_INTERVAL` | `10` | Probe above ceiling every N clean windows |
+| `QUOTA_TRACKING_ENABLED` | `true` | Poll and expose account-quota state; enforcement remains separately gated during rollout |
+| `QUOTA_ENFORCEMENT_ENABLED` | `false` | Apply the derived quota cap and exhaustion circuit |
+| `QUOTA_POLL_INTERVAL` | `60s` | Normal account-quota polling interval |
+| `QUOTA_STALE_AFTER` | `5m` | Maximum age for quota state to affect admission |
+| `QUOTA_RESERVE_FRACTION` | `0.05` | Preserve this fraction of each quota window from routine fleet consumption |
+| `QUOTA_RATE_ALPHA` | `0.2` | EWMA smoothing for observed quota burn and upward cap changes |
+| `QUOTA_RATE_MAX_INCREASE` | `0.20` | Maximum fractional cap increase per valid quota sample |
 | `MAX_RETRIES` | `3` | Max retry attempts |
 | `ZAI_TARGET_URL` | `https://api.z.ai/api/anthropic` | Upstream URL |
 
