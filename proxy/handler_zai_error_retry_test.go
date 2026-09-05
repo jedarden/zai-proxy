@@ -482,9 +482,30 @@ func TestZaiErrorRetryWaitAbandonsOnClientCancellation(t *testing.T) {
 	})
 }
 
+// cancellationResponseRecorder records whether the handler committed any part
+// of a response, which a bare ResponseRecorder cannot answer: it reports code
+// 200 with an empty body both for a response that was written and for one
+// that never was.
+type cancellationResponseRecorder struct {
+	*httptest.ResponseRecorder
+	wroteHeader bool
+	wroteBody   bool
+}
+
+func (r *cancellationResponseRecorder) WriteHeader(code int) {
+	r.wroteHeader = true
+	r.ResponseRecorder.WriteHeader(code)
+}
+
+func (r *cancellationResponseRecorder) Write(p []byte) (int, error) {
+	r.wroteBody = true
+	return r.ResponseRecorder.Write(p)
+}
+
 // assertCancelledWaitAbandons runs one request whose context is cancelled
 // after delay and asserts the handler gave up at wantAttempts: no admission
-// and no upstream attempt beyond that point, well before the waits elapse.
+// and no upstream attempt beyond that point, well before the waits elapse,
+// and no response written to the caller who is no longer there.
 func assertCancelledWaitAbandons(t *testing.T, f *classRetryFixture, cancelAfter time.Duration, wantAttempts int32) {
 	t.Helper()
 
@@ -501,7 +522,7 @@ func assertCancelledWaitAbandons(t *testing.T, f *classRetryFixture, cancelAfter
 
 	start := time.Now()
 	done := make(chan struct{})
-	rec := httptest.NewRecorder()
+	rec := &cancellationResponseRecorder{ResponseRecorder: httptest.NewRecorder()}
 	go func() {
 		defer close(done)
 		f.handler.ServeHTTP(rec, req)
@@ -519,6 +540,10 @@ func assertCancelledWaitAbandons(t *testing.T, f *classRetryFixture, cancelAfter
 	}
 	if got := rateLimitAdmissions(t, f.handler.deploymentVariant) - admissionsBefore; got != float64(wantAttempts) {
 		t.Errorf("limiter admissions after cancellation = %v, want %d (one per attempt, none further)", got, wantAttempts)
+	}
+	if rec.wroteHeader || rec.wroteBody {
+		t.Errorf("handler wrote a response after the client left (header=%v, body=%d bytes); abandonment must write nothing",
+			rec.wroteHeader, rec.Body.Len())
 	}
 	// The waits being cut short (60s, or 1s+2s) must show up as an early
 	// return, not a completed retry sequence.
