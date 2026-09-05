@@ -1,6 +1,8 @@
 package main
 
 import (
+	"math"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -208,6 +210,68 @@ var (
 		},
 		[]string{"version", "variant", "commit", "build_time"},
 	)
+
+	// Quota supervisor metrics (docs/plan/plan.md, "Rate-limiter metrics").
+	// All labels are bounded: window and poll-result values come from fixed
+	// enums, and limit_type/variant values are sanitized and length-capped so
+	// provider payloads, credentials, account identifiers, or raw model
+	// strings can never reach a label. These are registered through
+	// registerQuotaCollector so duplicate initialization stays safe.
+	quotaUsageRatio = registerQuotaCollector(prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "zai_proxy_quota_usage_ratio",
+			Help: "Normalized provider-reported quota usage ratio by window and limit type",
+		},
+		[]string{"window", "limit_type", "variant"},
+	))
+
+	quotaRemainingRatio = registerQuotaCollector(prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "zai_proxy_quota_remaining_ratio",
+			Help: "Remaining fraction of the provider-reported quota after no local policy adjustment",
+		},
+		[]string{"window", "limit_type", "variant"},
+	))
+
+	quotaResetTimeSeconds = registerQuotaCollector(prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "zai_proxy_quota_reset_time_seconds",
+			Help: "Provider quota reset time as a Unix timestamp",
+		},
+		[]string{"window", "limit_type", "variant"},
+	))
+
+	quotaRateCap = registerQuotaCollector(prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "zai_proxy_quota_rate_cap",
+			Help: "Account-level admission rate cap derived from quota pacing",
+		},
+		[]string{"variant"},
+	))
+
+	quotaGateOpen = registerQuotaCollector(prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "zai_proxy_quota_gate_open",
+			Help: "Whether confirmed quota exhaustion is rejecting new work",
+		},
+		[]string{"window", "variant"},
+	))
+
+	quotaSampleAgeSeconds = registerQuotaCollector(prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "zai_proxy_quota_sample_age_seconds",
+			Help: "Age of the last valid account quota sample",
+		},
+		[]string{"variant"},
+	))
+
+	quotaPollsTotal = registerQuotaCollector(prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "zai_proxy_quota_poll_total",
+			Help: "Quota poll outcomes by result (success, error, malformed, stale)",
+		},
+		[]string{"result", "variant"},
+	))
 )
 
 // GetPricingTier returns "peak" during 02:00-06:00 ET, "off_peak" otherwise.
@@ -314,4 +378,178 @@ func RecordUsage(model, variant string, usage UsageData) {
 	recordTokenUsage("output", model, variant, tier, usage.OutputTokens)
 	recordTokenUsage("cache_read", model, variant, tier, usage.CacheReadTokens)
 	recordTokenUsage("cache_write", model, variant, tier, usage.CacheWriteTokens)
+}
+
+const quotaLabelValueMaxLength = 32
+
+var (
+	// quotaWindows is the bounded set of provider quota windows this proxy
+	// tracks, per docs/plan/plan.md.
+	quotaWindows = map[string]struct{}{
+		"five_hour": {},
+		"weekly":    {},
+	}
+
+	// quotaPollResults is the bounded set of documented poll outcomes.
+	quotaPollResults = map[string]struct{}{
+		"success":   {},
+		"error":     {},
+		"malformed": {},
+		"stale":     {},
+	}
+)
+
+// registerQuotaCollector registers c with the default Prometheus registry and
+// returns c. When a collector with an identical definition is already
+// registered — which duplicate initialization in tests can produce — it
+// returns the existing collector instead of failing. A definition conflict
+// (same name, different help or labels) is a programming error and stays
+// fatal.
+func registerQuotaCollector[T prometheus.Collector](c T) T {
+	err := prometheus.DefaultRegisterer.Register(c)
+	if err == nil {
+		return c
+	}
+
+	already, ok := err.(prometheus.AlreadyRegisteredError)
+	if !ok {
+		panic(err)
+	}
+
+	existing, ok := already.ExistingCollector.(T)
+	if !ok {
+		panic(err)
+	}
+
+	return existing
+}
+
+// sanitizeQuotaLabel bounds a label value to a fixed charset and length so
+// unbounded provider or configuration strings cannot inflate Prometheus
+// cardinality or smuggle payloads into labels. Lowercase letters, digits,
+// "-", and "_" survive; every other rune collapses to "_"; values longer
+// than 32 characters truncate; an empty value becomes "unknown".
+func sanitizeQuotaLabel(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+
+	var kept strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+			kept.WriteRune(r)
+		default:
+			kept.WriteByte('_')
+		}
+	}
+
+	label := kept.String()
+	if len(label) > quotaLabelValueMaxLength {
+		label = label[:quotaLabelValueMaxLength]
+	}
+	if label == "" {
+		return "unknown"
+	}
+	return label
+}
+
+// quotaWindowLabel maps a provider window onto the documented bounded enum,
+// collapsing unrecognized windows into "unknown".
+func quotaWindowLabel(window string) string {
+	label := sanitizeQuotaLabel(window)
+	if _, ok := quotaWindows[label]; !ok {
+		return "unknown"
+	}
+	return label
+}
+
+// quotaPollResultLabel maps a poll outcome onto the documented bounded enum.
+// Unrecognized outcomes count as "error" so unanticipated provider behavior
+// cannot silently extend the label set.
+func quotaPollResultLabel(result string) string {
+	label := sanitizeQuotaLabel(result)
+	if _, ok := quotaPollResults[label]; !ok {
+		return "error"
+	}
+	return label
+}
+
+// exportableQuotaValue reports whether a provider-provided number is safe to
+// export. NaN and infinities are dropped rather than exported as gauges.
+func exportableQuotaValue(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+// quotaLabels normalizes the observation labels shared by the usage-ratio,
+// remaining-ratio, and reset-time metrics.
+func quotaLabels(window, limitType, variant string) (string, string, string) {
+	return quotaWindowLabel(window), sanitizeQuotaLabel(limitType), sanitizeQuotaLabel(variant)
+}
+
+// RecordQuotaUsageRatio records the normalized provider-reported usage ratio
+// for one quota window. Ratios are recorded unclamped so an overdrawn window
+// stays visible; non-finite values are dropped.
+func RecordQuotaUsageRatio(window, limitType, variant string, ratio float64) {
+	if !exportableQuotaValue(ratio) {
+		return
+	}
+	w, lt, v := quotaLabels(window, limitType, variant)
+	quotaUsageRatio.WithLabelValues(w, lt, v).Set(ratio)
+}
+
+// RecordQuotaRemainingRatio records the remaining fraction of one quota
+// window after no local policy adjustment. Non-finite values are dropped.
+func RecordQuotaRemainingRatio(window, limitType, variant string, ratio float64) {
+	if !exportableQuotaValue(ratio) {
+		return
+	}
+	w, lt, v := quotaLabels(window, limitType, variant)
+	quotaRemainingRatio.WithLabelValues(w, lt, v).Set(ratio)
+}
+
+// RecordQuotaResetTime records the provider reset time for one quota window
+// as a Unix timestamp. A zero time means no reset was advertised and nothing
+// is recorded.
+func RecordQuotaResetTime(window, limitType, variant string, reset time.Time) {
+	if reset.IsZero() {
+		return
+	}
+	w, lt, v := quotaLabels(window, limitType, variant)
+	quotaResetTimeSeconds.WithLabelValues(w, lt, v).Set(float64(reset.Unix()))
+}
+
+// RecordQuotaRateCap records the account-level admission rate cap derived
+// from quota pacing. Negative caps clamp to zero; non-finite values are
+// dropped.
+func RecordQuotaRateCap(variant string, requestsPerSecond float64) {
+	if !exportableQuotaValue(requestsPerSecond) {
+		return
+	}
+	if requestsPerSecond < 0 {
+		requestsPerSecond = 0
+	}
+	quotaRateCap.WithLabelValues(sanitizeQuotaLabel(variant)).Set(requestsPerSecond)
+}
+
+// RecordQuotaGateOpen records whether confirmed quota exhaustion is currently
+// rejecting new work for one window.
+func RecordQuotaGateOpen(window, variant string, open bool) {
+	value := 0.0
+	if open {
+		value = 1
+	}
+	quotaGateOpen.WithLabelValues(quotaWindowLabel(window), sanitizeQuotaLabel(variant)).Set(value)
+}
+
+// RecordQuotaSampleAge records the age of the last valid account-quota
+// sample. Negative ages, which only clock skew can produce, clamp to zero.
+func RecordQuotaSampleAge(variant string, age time.Duration) {
+	if age < 0 {
+		age = 0
+	}
+	quotaSampleAgeSeconds.WithLabelValues(sanitizeQuotaLabel(variant)).Set(age.Seconds())
+}
+
+// RecordQuotaPollOutcome counts one quota poll outcome.
+func RecordQuotaPollOutcome(result, variant string) {
+	quotaPollsTotal.WithLabelValues(quotaPollResultLabel(result), sanitizeQuotaLabel(variant)).Inc()
 }

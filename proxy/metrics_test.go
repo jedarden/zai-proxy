@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -426,5 +427,219 @@ func TestMetricsExportFormat(t *testing.T) {
 	// Verify metric can be collected
 	if err := testutil.CollectAndCompare(tokensTotal, strings.NewReader(metadata+expectedInputLine+"\n"+expectedOutputLine+"\n")); err != nil {
 		t.Errorf("Metrics export format incorrect: %v", err)
+	}
+}
+
+var quotaMetricNames = []string{
+	"zai_proxy_quota_usage_ratio",
+	"zai_proxy_quota_remaining_ratio",
+	"zai_proxy_quota_reset_time_seconds",
+	"zai_proxy_quota_rate_cap",
+	"zai_proxy_quota_gate_open",
+	"zai_proxy_quota_sample_age_seconds",
+	"zai_proxy_quota_poll_total",
+}
+
+func resetQuotaMetrics() {
+	quotaUsageRatio.Reset()
+	quotaRemainingRatio.Reset()
+	quotaResetTimeSeconds.Reset()
+	quotaRateCap.Reset()
+	quotaGateOpen.Reset()
+	quotaSampleAgeSeconds.Reset()
+	quotaPollsTotal.Reset()
+}
+
+func TestQuotaRegistrationIsDuplicateSafe(t *testing.T) {
+	// Re-registering a collector with an identical definition — as duplicate
+	// initialization in tests can do — must return the already-registered
+	// collector instead of panicking.
+	duplicate := registerQuotaCollector(prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "zai_proxy_quota_usage_ratio",
+			Help: "Normalized provider-reported quota usage ratio by window and limit type",
+		},
+		[]string{"window", "limit_type", "variant"},
+	))
+
+	if duplicate != quotaUsageRatio {
+		t.Fatal("duplicate registration returned a new collector; want the already-registered one")
+	}
+
+	// A same-name definition with different help or labels is a programming
+	// error, not a duplicate, and must stay fatal.
+	defer func() {
+		if recover() == nil {
+			t.Error("registering a conflicting quota metric definition did not panic")
+		}
+	}()
+	registerQuotaCollector(prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "zai_proxy_quota_usage_ratio",
+			Help: "deliberately different help text",
+		},
+		[]string{"window", "limit_type", "variant"},
+	))
+}
+
+func TestQuotaObservationMetrics(t *testing.T) {
+	resetQuotaMetrics()
+
+	reset := time.Unix(1790000000, 0).UTC()
+	RecordQuotaUsageRatio("five_hour", "credits", "production", 0.42)
+	RecordQuotaRemainingRatio("five_hour", "credits", "production", 0.58)
+	RecordQuotaResetTime("five_hour", "credits", "production", reset)
+
+	if got := testutil.ToFloat64(quotaUsageRatio.WithLabelValues("five_hour", "credits", "production")); got != 0.42 {
+		t.Errorf("usage ratio = %v, want 0.42", got)
+	}
+	if got := testutil.ToFloat64(quotaRemainingRatio.WithLabelValues("five_hour", "credits", "production")); got != 0.58 {
+		t.Errorf("remaining ratio = %v, want 0.58", got)
+	}
+	if got := testutil.ToFloat64(quotaResetTimeSeconds.WithLabelValues("five_hour", "credits", "production")); got != float64(reset.Unix()) {
+		t.Errorf("reset time = %v, want %v", got, float64(reset.Unix()))
+	}
+
+	// Ratios are recorded unclamped so an overdrawn window stays visible.
+	RecordQuotaUsageRatio("weekly", "credits", "production", 1.05)
+	if got := testutil.ToFloat64(quotaUsageRatio.WithLabelValues("weekly", "credits", "production")); got != 1.05 {
+		t.Errorf("overdrawn usage ratio = %v, want 1.05", got)
+	}
+}
+
+func TestQuotaDecisionMetrics(t *testing.T) {
+	resetQuotaMetrics()
+
+	RecordQuotaRateCap("production", 3.5)
+	RecordQuotaGateOpen("five_hour", "production", true)
+	RecordQuotaGateOpen("weekly", "production", false)
+	RecordQuotaSampleAge("production", 90*time.Second)
+	RecordQuotaPollOutcome("success", "production")
+	RecordQuotaPollOutcome("success", "production")
+	RecordQuotaPollOutcome("malformed", "production")
+	RecordQuotaPollOutcome("stale", "production")
+	RecordQuotaPollOutcome("error", "production")
+
+	if got := testutil.ToFloat64(quotaRateCap.WithLabelValues("production")); got != 3.5 {
+		t.Errorf("quota rate cap = %v, want 3.5", got)
+	}
+	if got := testutil.ToFloat64(quotaGateOpen.WithLabelValues("five_hour", "production")); got != 1 {
+		t.Errorf("five-hour quota gate = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(quotaGateOpen.WithLabelValues("weekly", "production")); got != 0 {
+		t.Errorf("weekly quota gate = %v, want 0", got)
+	}
+	if got := testutil.ToFloat64(quotaSampleAgeSeconds.WithLabelValues("production")); got != 90 {
+		t.Errorf("sample age = %v, want 90", got)
+	}
+	if got := testutil.ToFloat64(quotaPollsTotal.WithLabelValues("success", "production")); got != 2 {
+		t.Errorf("success polls = %v, want 2", got)
+	}
+	for _, result := range []string{"error", "malformed", "stale"} {
+		if got := testutil.ToFloat64(quotaPollsTotal.WithLabelValues(result, "production")); got != 1 {
+			t.Errorf("%s polls = %v, want 1", result, got)
+		}
+	}
+}
+
+func TestQuotaLabelsStayBounded(t *testing.T) {
+	resetQuotaMetrics()
+
+	// Unrecognized windows collapse into the bounded "unknown" value.
+	RecordQuotaUsageRatio("daily", "credits", "production", 0.25)
+	if got := testutil.ToFloat64(quotaUsageRatio.WithLabelValues("unknown", "credits", "production")); got != 0.25 {
+		t.Errorf("unknown window usage ratio = %v, want it under the \"unknown\" window label", got)
+	}
+	if got := testutil.CollectAndCount(quotaUsageRatio); got != 1 {
+		t.Errorf("unrecognized window created extra series: got %d children, want 1", got)
+	}
+
+	// limit_type values are sanitized and length-capped.
+	RecordQuotaUsageRatio("weekly", strings.Repeat("T", 64), "Production", 0.5)
+	if got := testutil.ToFloat64(quotaUsageRatio.WithLabelValues("weekly", strings.Repeat("t", 32), "production")); got != 0.5 {
+		t.Errorf("long limit_type = %v, want it under the sanitized 32-character label", got)
+	}
+
+	// Empty label values fall back to "unknown".
+	RecordQuotaRemainingRatio("weekly", "", "", 0.75)
+	if got := testutil.ToFloat64(quotaRemainingRatio.WithLabelValues("weekly", "unknown", "unknown")); got != 0.75 {
+		t.Errorf("empty labels = %v, want them under the \"unknown\" labels", got)
+	}
+
+	// Unrecognized poll results count as errors, keeping the result enum
+	// bounded to the documented values.
+	RecordQuotaPollOutcome("exploded", "production")
+	if got := testutil.ToFloat64(quotaPollsTotal.WithLabelValues("error", "production")); got != 1 {
+		t.Errorf("unrecognized poll result = %v, want it counted as \"error\"", got)
+	}
+	if got := testutil.CollectAndCount(quotaPollsTotal); got != 1 {
+		t.Errorf("unrecognized poll result created extra series: got %d children, want 1", got)
+	}
+}
+
+func TestQuotaValueGuards(t *testing.T) {
+	resetQuotaMetrics()
+
+	// Non-finite provider values are never exported.
+	RecordQuotaUsageRatio("five_hour", "credits", "production", math.NaN())
+	RecordQuotaUsageRatio("five_hour", "credits", "production", math.Inf(1))
+	RecordQuotaRemainingRatio("five_hour", "credits", "production", math.Inf(-1))
+	if got := testutil.CollectAndCount(quotaUsageRatio); got != 0 {
+		t.Errorf("NaN/Inf usage ratio exported: got %d children, want 0", got)
+	}
+	if got := testutil.CollectAndCount(quotaRemainingRatio); got != 0 {
+		t.Errorf("Inf remaining ratio exported: got %d children, want 0", got)
+	}
+
+	// A zero reset time means no reset was advertised; nothing is recorded.
+	RecordQuotaResetTime("five_hour", "credits", "production", time.Time{})
+	if got := testutil.CollectAndCount(quotaResetTimeSeconds); got != 0 {
+		t.Errorf("zero reset time exported: got %d children, want 0", got)
+	}
+
+	// Negative rate caps clamp to zero instead of exporting an impossible cap.
+	RecordQuotaRateCap("production", -3)
+	if got := testutil.ToFloat64(quotaRateCap.WithLabelValues("production")); got != 0 {
+		t.Errorf("negative rate cap = %v, want 0", got)
+	}
+	RecordQuotaRateCap("production", math.NaN())
+	if got := testutil.CollectAndCount(quotaRateCap); got != 1 {
+		t.Errorf("NaN rate cap changed the series: got %d children, want 1", got)
+	}
+
+	// Negative sample ages clamp to zero.
+	RecordQuotaSampleAge("production", -5*time.Second)
+	if got := testutil.ToFloat64(quotaSampleAgeSeconds.WithLabelValues("production")); got != 0 {
+		t.Errorf("negative sample age = %v, want 0", got)
+	}
+}
+
+func TestQuotaMetricsRegisteredInDefaultRegistry(t *testing.T) {
+	resetQuotaMetrics()
+
+	// A Vec without children is omitted from a gather, so record one child
+	// for every quota metric before collecting.
+	RecordQuotaUsageRatio("five_hour", "credits", "production", 0.1)
+	RecordQuotaRemainingRatio("five_hour", "credits", "production", 0.9)
+	RecordQuotaResetTime("five_hour", "credits", "production", time.Unix(1790000000, 0))
+	RecordQuotaRateCap("production", 2)
+	RecordQuotaGateOpen("weekly", "production", true)
+	RecordQuotaSampleAge("production", time.Second)
+	RecordQuotaPollOutcome("success", "production")
+
+	families, err := prometheus.DefaultGatherer.Gather()
+	if err != nil {
+		t.Fatalf("gathering default registry: %v", err)
+	}
+
+	gathered := map[string]bool{}
+	for _, family := range families {
+		gathered[family.GetName()] = true
+	}
+
+	for _, name := range quotaMetricNames {
+		if !gathered[name] {
+			t.Errorf("quota metric %s is not registered in the default registry", name)
+		}
 	}
 }
