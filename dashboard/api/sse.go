@@ -25,8 +25,8 @@ type SSEHub struct {
 	clients map[*SSEClient]bool
 	mu      sync.RWMutex
 
-	broadcast chan *model.MetricSnapshot
-	register  chan *SSEClient
+	broadcast  chan *model.MetricSnapshot
+	register   chan *SSEClient
 	unregister chan *SSEClient
 
 	config *Config

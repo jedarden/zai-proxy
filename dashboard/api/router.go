@@ -13,9 +13,9 @@ import (
 
 // Router sets up the HTTP routes.
 type Router struct {
-	hub      *SSEHub
-	storage  *storage.Storage
-	config   *Config
+	hub     *SSEHub
+	storage *storage.Storage
+	config  *Config
 }
 
 // Config holds API configuration.
@@ -96,17 +96,20 @@ func (r *Router) handleMetrics(w http.ResponseWriter, req *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
-	// Write JSON array
+	// Write JSON array. Commas join only entries that actually serialized, so
+	// a marshal failure cannot leave a dangling comma behind.
 	w.Write([]byte("["))
-	for i, s := range snapshots {
-		if i > 0 {
-			w.Write([]byte(","))
-		}
+	wrote := false
+	for _, s := range snapshots {
 		data, err := s.ToJSON()
 		if err != nil {
 			continue
 		}
+		if wrote {
+			w.Write([]byte(","))
+		}
 		w.Write(data)
+		wrote = true
 	}
 	w.Write([]byte("]"))
 }
@@ -132,6 +135,7 @@ func (r *Router) handleStatus(w http.ResponseWriter, req *http.Request) {
 			RateLimitRps:      snapshot.RateLimitRps,
 			TokenRateIn:       snapshot.TokenRateIn,
 			TokenRateOut:      snapshot.TokenRateOut,
+			Quota:             snapshot.Quota.Clone(),
 		}
 
 		if variant == "production" {

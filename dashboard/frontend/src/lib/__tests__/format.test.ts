@@ -8,6 +8,8 @@ import {
   formatCurrencyUSD,
   formatRelativeTime,
   formatUtilization,
+  formatAge,
+  formatCountdown,
   getUtilizationColor,
   getErrorRateColor,
 } from '../format';
@@ -148,6 +150,47 @@ describe('format utilities', () => {
     it('should handle null/undefined/NaN', () => {
       expect(formatUtilization(null as unknown as number)).toBe('-');
       expect(formatUtilization(NaN)).toBe('-');
+    });
+  });
+
+  describe('formatAge', () => {
+    it('should format sub-minute ages in seconds', () => {
+      expect(formatAge(0)).toBe('0s');
+      expect(formatAge(42.7)).toBe('42s');
+    });
+
+    it('should format minute and hour ages', () => {
+      expect(formatAge(60)).toBe('1m');
+      expect(formatAge(754)).toBe('12m');
+      expect(formatAge(7200)).toBe('2h');
+    });
+
+    it('should handle null/undefined/NaN/negative', () => {
+      expect(formatAge(null as unknown as number)).toBe('-');
+      expect(formatAge(NaN)).toBe('-');
+      expect(formatAge(-5)).toBe('-');
+    });
+  });
+
+  describe('formatCountdown', () => {
+    it('should format sub-hour countdowns in minutes', () => {
+      expect(formatCountdown(45 * 60000)).toBe('45m');
+      expect(formatCountdown(59000)).toBe('0m');
+    });
+
+    it('should format hour and day countdowns', () => {
+      expect(formatCountdown(90 * 60000)).toBe('1h 30m');
+      expect(formatCountdown(26 * 3600000)).toBe('1d 2h');
+    });
+
+    it('should report a passed reset time as due', () => {
+      expect(formatCountdown(0)).toBe('due');
+      expect(formatCountdown(-30000)).toBe('due');
+    });
+
+    it('should handle null/undefined/NaN', () => {
+      expect(formatCountdown(null as unknown as number)).toBe('-');
+      expect(formatCountdown(NaN)).toBe('-');
     });
   });
 

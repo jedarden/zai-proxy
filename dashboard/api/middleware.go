@@ -112,4 +112,3 @@ func (rw *responseWriter) Flush() {
 		f.Flush()
 	}
 }
-

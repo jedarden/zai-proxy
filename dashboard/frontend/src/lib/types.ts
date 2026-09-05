@@ -38,6 +38,28 @@ export interface MetricSnapshot {
   error_rate_pct: number; // percentage
   worker_utilization: number; // ratio 0-1
   status_code_rates?: Record<string, number>; // Per-status-code request rates (req/s)
+  quota?: QuotaState; // Provider quota telemetry; absent = none exported
+}
+
+/** One provider quota window (five-hour or weekly) as observed by the proxy */
+export interface QuotaWindowState {
+  limit_type?: string; // Provider schema variant this state came from
+  usage_ratio?: number; // Provider-reported usage fraction (may exceed 1)
+  remaining_ratio?: number; // Remaining fraction of the window
+  reset_time_unix?: number; // Provider reset time (Unix seconds)
+}
+
+/**
+ * Quota telemetry block of one snapshot. Absent optional fields mean that
+ * specific observation was missing — they must stay distinguishable from zero.
+ * enforcement === false means the proxy is observe-only.
+ */
+export interface QuotaState {
+  five_hour?: QuotaWindowState;
+  weekly?: QuotaWindowState;
+  sample_age_seconds?: number; // Age of the last valid quota sample
+  gate_open?: boolean; // Confirmed exhaustion is rejecting work
+  enforcement?: boolean;
 }
 
 /** Health status of a single variant */
@@ -52,6 +74,7 @@ export interface VariantStatus {
   rate_limit_rps: number;
   token_rate_in: number;
   token_rate_out: number;
+  quota?: QuotaState; // Absent = the variant exported no quota telemetry
 }
 
 /** Response from /api/status */

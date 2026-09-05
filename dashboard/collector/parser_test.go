@@ -9,11 +9,11 @@ import (
 
 func TestParser_ParseCounter(t *testing.T) {
 	tests := []struct {
-		name     string
-		input    string
-		metric   string
-		wantVal  float64
-		wantLen  int
+		name    string
+		input   string
+		metric  string
+		wantVal float64
+		wantLen int
 	}{
 		{
 			name: "simple counter",
@@ -117,11 +117,11 @@ memory_bytes{type="free"} 2097152`,
 
 func TestParser_ParseHistogram(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
-		metric    string
-		wantCount float64
-		wantSum   float64
+		name        string
+		input       string
+		metric      string
+		wantCount   float64
+		wantSum     float64
 		wantBuckets int
 	}{
 		{

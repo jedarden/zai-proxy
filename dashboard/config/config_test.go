@@ -24,8 +24,8 @@ func TestSplitTargets(t *testing.T) {
 			expected: []string{"http://example.com:8080/metrics"},
 		},
 		{
-			name:     "multiple comma-separated values",
-			input:    "http://proxy1:8080/metrics,http://proxy2:8080/metrics,http://proxy3:8080/metrics",
+			name:  "multiple comma-separated values",
+			input: "http://proxy1:8080/metrics,http://proxy2:8080/metrics,http://proxy3:8080/metrics",
 			expected: []string{
 				"http://proxy1:8080/metrics",
 				"http://proxy2:8080/metrics",
@@ -33,16 +33,16 @@ func TestSplitTargets(t *testing.T) {
 			},
 		},
 		{
-			name:     "two values",
-			input:    "http://zai-proxy:8080/metrics,http://zai-proxy-canary:8080/metrics",
+			name:  "two values",
+			input: "http://zai-proxy:8080/metrics,http://zai-proxy-canary:8080/metrics",
 			expected: []string{
 				"http://zai-proxy:8080/metrics",
 				"http://zai-proxy-canary:8080/metrics",
 			},
 		},
 		{
-			name:     "empty strings between commas are skipped",
-			input:    "http://proxy1:8080/metrics,,http://proxy2:8080/metrics",
+			name:  "empty strings between commas are skipped",
+			input: "http://proxy1:8080/metrics,,http://proxy2:8080/metrics",
 			expected: []string{
 				"http://proxy1:8080/metrics",
 				"http://proxy2:8080/metrics",
@@ -69,8 +69,8 @@ func TestSplitTargets(t *testing.T) {
 			expected: nil,
 		},
 		{
-			name:     "whitespace is preserved in values",
-			input:    " http://proxy1:8080/metrics , http://proxy2:8080/metrics ",
+			name:  "whitespace is preserved in values",
+			input: " http://proxy1:8080/metrics , http://proxy2:8080/metrics ",
 			expected: []string{
 				" http://proxy1:8080/metrics ",
 				" http://proxy2:8080/metrics ",
@@ -82,8 +82,8 @@ func TestSplitTargets(t *testing.T) {
 			expected: []string{"  http://proxy:8080/metrics  "},
 		},
 		{
-			name:     "whitespace between commas is treated as non-empty",
-			input:    "http://proxy1:8080/metrics,  ,http://proxy2:8080/metrics",
+			name:  "whitespace between commas is treated as non-empty",
+			input: "http://proxy1:8080/metrics,  ,http://proxy2:8080/metrics",
 			expected: []string{
 				"http://proxy1:8080/metrics",
 				"  ",

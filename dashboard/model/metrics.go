@@ -43,11 +43,56 @@ type MetricSnapshot struct {
 	ErrorRatePct               float64            `json:"error_rate_pct"`                 // Error rate percentage
 	WorkerUtilization          float64            `json:"worker_utilization"`             // Worker utilization ratio (0-1)
 	StatusCodeRates            map[string]float64 `json:"status_code_rates,omitempty"`    // Per-status-code request rates (req/s)
+	Quota                      *QuotaState        `json:"quota,omitempty"`                // Provider quota telemetry; nil = none exported
 }
 
 // ToJSON serializes the snapshot to JSON bytes.
 func (s *MetricSnapshot) ToJSON() ([]byte, error) {
 	return json.Marshal(s)
+}
+
+// QuotaWindowState is one provider quota window (five-hour or weekly) as
+// observed by the proxy. Every field is optional: the provider advertises
+// usage, remaining allowance, and reset time independently, so a missing
+// field must stay distinguishable from a zero value.
+type QuotaWindowState struct {
+	LimitType      string   `json:"limit_type,omitempty"`      // Provider schema variant this state came from
+	UsageRatio     *float64 `json:"usage_ratio,omitempty"`     // Provider-reported usage fraction (may exceed 1)
+	RemainingRatio *float64 `json:"remaining_ratio,omitempty"` // Remaining fraction of the window
+	ResetTimeUnix  *int64   `json:"reset_time_unix,omitempty"` // Provider reset time (Unix seconds); nil = no reset advertised
+}
+
+// QuotaState is the quota telemetry block of one snapshot. It is nil when the
+// proxy exported no quota series at all; a non-nil block with missing fields
+// means those specific observations were absent. Enforcement reports whether
+// the scrape carried enforcement telemetry (gate or rate cap); when false the
+// proxy is observe-only.
+type QuotaState struct {
+	FiveHour         *QuotaWindowState `json:"five_hour,omitempty"`
+	Weekly           *QuotaWindowState `json:"weekly,omitempty"`
+	SampleAgeSeconds *float64          `json:"sample_age_seconds,omitempty"` // Age of the last valid quota sample
+	GateOpen         *bool             `json:"gate_open,omitempty"`          // Confirmed exhaustion is rejecting work
+	Enforcement      bool              `json:"enforcement,omitempty"`        // False = observe-only
+}
+
+// Clone returns a deep copy so stored snapshots cannot alias each other's
+// quota blocks.
+func (q *QuotaState) Clone() *QuotaState {
+	if q == nil {
+		return nil
+	}
+	clone := *q
+	clone.FiveHour = cloneWindow(q.FiveHour)
+	clone.Weekly = cloneWindow(q.Weekly)
+	return &clone
+}
+
+func cloneWindow(w *QuotaWindowState) *QuotaWindowState {
+	if w == nil {
+		return nil
+	}
+	c := *w
+	return &c
 }
 
 // FromJSON deserializes a snapshot from JSON bytes.
@@ -59,16 +104,17 @@ func FromJSON(data []byte) (*MetricSnapshot, error) {
 
 // VariantStatus represents the health status of a single variant.
 type VariantStatus struct {
-	Healthy           bool      `json:"healthy"`
-	LastScrape        time.Time `json:"last_scrape"`
-	ReqRate           float64   `json:"req_rate"`
-	ErrorRatePct      float64   `json:"error_rate_pct"`
-	LatencyP50Ms      float64   `json:"latency_p50_ms"`
-	Concurrent        float64   `json:"concurrent"`
-	WorkerUtilization float64   `json:"worker_utilization"`
-	RateLimitRps      float64   `json:"rate_limit_rps"`
-	TokenRateIn       float64   `json:"token_rate_in"`
-	TokenRateOut      float64   `json:"token_rate_out"`
+	Healthy           bool        `json:"healthy"`
+	LastScrape        time.Time   `json:"last_scrape"`
+	ReqRate           float64     `json:"req_rate"`
+	ErrorRatePct      float64     `json:"error_rate_pct"`
+	LatencyP50Ms      float64     `json:"latency_p50_ms"`
+	Concurrent        float64     `json:"concurrent"`
+	WorkerUtilization float64     `json:"worker_utilization"`
+	RateLimitRps      float64     `json:"rate_limit_rps"`
+	TokenRateIn       float64     `json:"token_rate_in"`
+	TokenRateOut      float64     `json:"token_rate_out"`
+	Quota             *QuotaState `json:"quota,omitempty"` // Nil = the variant exported no quota telemetry
 }
 
 // StatusResponse is the response for /api/status.

@@ -317,6 +317,7 @@ func cloneSnapshot(snapshot *model.MetricSnapshot) *model.MetricSnapshot {
 			clone.StatusCodeRates[status] = rate
 		}
 	}
+	clone.Quota = snapshot.Quota.Clone()
 	return &clone
 }
 
@@ -403,6 +404,21 @@ func computeAverage(snapshots []*model.MetricSnapshot) *model.MetricSnapshot {
 		for status := range average.StatusCodeRates {
 			average.StatusCodeRates[status] /= n
 		}
+	}
+
+	// Quota is a provider-polled gauge sampled on its own cadence, not a
+	// per-scrape counter, so the minute bucket carries the freshest quota
+	// block in the bucket rather than an average across possibly absent
+	// samples. Clone once after the loop: every earlier non-nil block would
+	// only be discarded.
+	var freshestQuota *model.QuotaState
+	for _, snapshot := range snapshots {
+		if snapshot.Quota != nil {
+			freshestQuota = snapshot.Quota
+		}
+	}
+	if freshestQuota != nil {
+		average.Quota = freshestQuota.Clone()
 	}
 
 	return average

@@ -10,8 +10,15 @@ import {
   Tooltip,
   Legend,
 } from 'recharts';
-import type { MetricSnapshot, VariantFilter } from '../../lib/types';
-import { formatRate } from '../../lib/format';
+import type { MetricSnapshot, QuotaState, QuotaWindowState, VariantFilter } from '../../lib/types';
+import {
+  formatAge,
+  formatCountdown,
+  formatRate,
+  formatUtilization,
+  getUtilizationColor,
+  QUOTA_STALE_AFTER_MS,
+} from '../../lib/format';
 
 interface RateLimitPanelProps {
   data: MetricSnapshot[];
@@ -42,6 +49,116 @@ const COLORS = {
   decrease: '#ef4444', // red
   rejection: '#f59e0b', // orange
 };
+
+const QUOTA_WINDOWS: Array<{ key: 'five_hour' | 'weekly'; label: string }> = [
+  { key: 'five_hour', label: '5h' },
+  { key: 'weekly', label: 'Week' },
+];
+
+/** Latest snapshot per variant, preserving data order for ties. */
+function latestByVariant(data: MetricSnapshot[]): Record<string, MetricSnapshot> {
+  const latest: Record<string, MetricSnapshot> = {};
+  for (const snapshot of data) {
+    latest[snapshot.variant] = snapshot;
+  }
+  return latest;
+}
+
+interface QuotaWindowRowProps {
+  variant: string;
+  windowKey: 'five_hour' | 'weekly';
+  label: string;
+  state?: QuotaWindowState;
+  nowMs: number;
+}
+
+function QuotaWindowRow({ variant, windowKey, label, state, nowMs }: QuotaWindowRowProps) {
+  const missingUsage = state?.usage_ratio === undefined;
+  const missingRemaining = state?.remaining_ratio === undefined;
+  const missingReset = state?.reset_time_unix === undefined;
+
+  return (
+    <div className="flex items-center gap-2 text-xs" data-testid={`quota-${variant}-${windowKey}`}>
+      <span className="w-10 shrink-0 text-slate-400">{label}</span>
+      <span className={`w-12 ${missingUsage ? 'text-slate-500' : getUtilizationColor(state!.usage_ratio!)}`}>
+        {missingUsage ? '—' : formatUtilization(state!.usage_ratio!)}
+      </span>
+      <span className="w-16 text-slate-400">
+        {missingRemaining ? 'left —' : `left ${formatUtilization(state!.remaining_ratio!)}`}
+      </span>
+      <span className={missingReset ? 'text-slate-500' : 'text-slate-300'} title="Time until the provider resets this window">
+        {missingReset ? 'resets —' : `resets in ${formatCountdown(state!.reset_time_unix! * 1000 - nowMs)}`}
+      </span>
+    </div>
+  );
+}
+
+interface QuotaSummaryProps {
+  variant: string;
+  quota?: QuotaState;
+  nowMs: number;
+}
+
+function QuotaSummary({ variant, quota, nowMs }: QuotaSummaryProps) {
+  if (!quota) {
+    return (
+      <div className="text-xs text-slate-500" data-testid={`quota-${variant}-no-data`}>
+        {variant}: quota telemetry unavailable
+      </div>
+    );
+  }
+
+  const fresh =
+    quota.sample_age_seconds !== undefined &&
+    quota.sample_age_seconds * 1000 <= QUOTA_STALE_AFTER_MS;
+
+  return (
+    <div className="space-y-1" data-testid={`quota-${variant}`}>
+      <div className="flex items-center gap-2 text-xs">
+        <span className="font-semibold text-slate-300">{variant}</span>
+        <span
+          className={
+            quota.enforcement
+              ? 'rounded bg-amber-500/20 px-1.5 py-0.5 text-amber-400'
+              : 'rounded bg-slate-600/40 px-1.5 py-0.5 text-slate-300'
+          }
+          data-testid={`quota-${variant}-mode`}
+        >
+          {quota.enforcement ? 'Enforcement' : 'Observe-only'}
+        </span>
+        {quota.gate_open && (
+          <span className="rounded bg-red-500/20 px-1.5 py-0.5 text-red-400" data-testid={`quota-${variant}-gate`}>
+            Gate closed
+          </span>
+        )}
+        {quota.sample_age_seconds === undefined ? (
+          <span className="text-slate-500" data-testid={`quota-${variant}-freshness`}>
+            no sample yet
+          </span>
+        ) : (
+          <span
+            className={fresh ? 'text-green-400' : 'text-yellow-400'}
+            data-testid={`quota-${variant}-freshness`}
+          >
+            sample {formatAge(quota.sample_age_seconds)} old{fresh ? '' : ' (stale)'}
+          </span>
+        )}
+      </div>
+      <div className="space-y-0.5">
+        {QUOTA_WINDOWS.map(({ key, label }) => (
+          <QuotaWindowRow
+            key={key}
+            variant={variant}
+            windowKey={key}
+            label={label}
+            state={quota[key]}
+            nowMs={nowMs}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 const CustomTooltip = ({
   active,
@@ -143,6 +260,13 @@ export function RateLimitPanel({ data, variant, height = 180 }: RateLimitPanelPr
     return value.toFixed(1);
   };
 
+  // Quota telemetry of the latest snapshot per variant. A capture of now
+  // keeps the reset countdowns stable across re-renders of the same data.
+  const quotaByVariant = useMemo(() => latestByVariant(data), [data]);
+  const nowMs = useMemo(() => Date.now(), [data]);
+  const quotaVariants: Array<'production' | 'canary'> =
+    variant === 'both' ? ['production', 'canary'] : [variant];
+
   return (
     <div className="panel">
       <div className="flex items-start justify-between mb-2">
@@ -157,6 +281,11 @@ export function RateLimitPanel({ data, variant, height = 180 }: RateLimitPanelPr
             )}
           </div>
         )}
+      </div>
+      <div className="mb-2 space-y-2" data-testid="quota-section">
+        {quotaVariants.map((v) => (
+          <QuotaSummary key={v} variant={v} quota={quotaByVariant[v]?.quota} nowMs={nowMs} />
+        ))}
       </div>
       <ResponsiveContainer width="100%" height={height}>
         <ComposedChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>

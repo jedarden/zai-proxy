@@ -134,3 +134,49 @@ export function getErrorRateColor(pct: number): string {
   if (pct >= 1) return 'bg-yellow-500/20 text-yellow-400';
   return 'bg-green-500/20 text-green-400';
 }
+
+/**
+ * How old a quota sample may get before the dashboard calls it stale.
+ * Aligned with the proxy's default QUOTA_STALE_AFTER (15 minutes), which is
+ * how long the proxy itself keeps trusting a polled sample.
+ */
+export const QUOTA_STALE_AFTER_MS = 15 * 60 * 1000;
+
+/** Format a quota sample age in seconds for display */
+export function formatAge(seconds: number): string {
+  if (seconds === null || seconds === undefined || isNaN(seconds) || seconds < 0) {
+    return '-';
+  }
+  if (seconds < 60) {
+    return `${Math.floor(seconds)}s`;
+  }
+  if (seconds < 3600) {
+    return `${Math.floor(seconds / 60)}m`;
+  }
+  return `${Math.floor(seconds / 3600)}h`;
+}
+
+/**
+ * Format the time left until a quota reset from milliseconds remaining.
+ * A non-positive remainder means the provider's reset time has passed but
+ * fresh telemetry has not arrived yet.
+ */
+export function formatCountdown(msRemaining: number): string {
+  if (msRemaining === null || msRemaining === undefined || isNaN(msRemaining)) {
+    return '-';
+  }
+  if (msRemaining <= 0) {
+    return 'due';
+  }
+  const totalMinutes = Math.floor(msRemaining / 60000);
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) {
+    return `${days}d ${hours}h`;
+  }
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  return `${minutes}m`;
+}
