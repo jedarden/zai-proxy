@@ -681,6 +681,42 @@ func TestQuotaPollerStopsOnContextCancel(t *testing.T) {
 	}
 }
 
+// TestQuotaPollerRefusesAlreadyCancelledContext covers the shutdown edge the
+// cancel test above cannot: a poller handed a context that was already
+// cancelled never polls at all. Returning before the first poll keeps a
+// startup/shutdown race from recording an error and a staleness transition
+// for a poll that never happened.
+func TestQuotaPollerRefusesAlreadyCancelledContext(t *testing.T) {
+	resetQuotaMetrics()
+	fetcher := newScriptedFetcher(successStep(pollerTestStart))
+	poller := newTestPoller(t, fetcher, newFakeQuotaClock(), time.Minute, 15*time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- poller.Run(ctx) }()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Run() on a cancelled context returned %v, want context.Canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Run() did not return for an already-cancelled context")
+	}
+
+	if got := fetcher.callCount(); got != 0 {
+		t.Errorf("Fetch ran %d times on an already-cancelled context, want 0", got)
+	}
+	if got := testutil.ToFloat64(quotaPollsTotal.WithLabelValues(quotaPollOutcomeError, pollerTestVariant)); got != 0 {
+		t.Errorf("error polls = %v, want no outcome counted for a poll that never ran", got)
+	}
+	if got := testutil.ToFloat64(quotaPollsTotal.WithLabelValues(quotaPollOutcomeStale, pollerTestVariant)); got != 0 {
+		t.Errorf("stale polls = %v, want no staleness counted for a poll that never ran", got)
+	}
+}
+
 // TestQuotaPollerNeverLogsCredential drives a successful poll, a provider
 // rejection, and a malformed payload through the real client with a
 // capturing logger, and asserts neither the credential nor the
