@@ -1,2 +1,17 @@
 bead_cli:
   backend: bead-rs
+
+# Keep the booked implementation queue bounded: these workspace-supported
+# overrides prevent generator strands from synthesizing follow-on beads after
+# the ZCode + GLM-5.3-Flash proving tranche is exhausted. Explore is disabled
+# for dispatched workers with NEEDLE_STRANDS__EXPLORE__ENABLED=false because
+# it is a global-only setting in the current NEEDLE configuration schema.
+strands:
+  generation:
+    enabled: false
+  weave:
+    enabled: false
+  pulse:
+    enabled: false
+  unravel:
+    enabled: false
