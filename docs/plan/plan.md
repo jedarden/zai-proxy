@@ -224,6 +224,44 @@ Rollout and acceptance:
    verification, and usage telemetry demonstrate that its target task mode consumes no
    paid quota. Deprecate, but do not initially remove, the Claude-Code-plus-GLM adapter.
 
+##### ZCode proving tranche (2026-09-05)
+
+Use the observe-only implementation as a production-quality build evaluation for the
+custom `zcode-headless` NEEDLE adapter during Z.AI's
+[GLM-5.3-Flash Usage Campaign](https://docs.z.ai/devpack/notice/event-glm-5.3-flash).
+From 2026-09-03 through 2026-09-20, the campaign makes ZCode + GLM-5.3-Flash
+zero-quota and unlimited daily from 23:00 to 09:00 Singapore time (15:00 to 01:00
+UTC; 11:00 to 21:00 EDT). Each NEEDLE invocation remains bound to exactly one
+harness and inference model: `zcode-headless` + `glm-5.3-flash`. It does not switch
+to Claude Code or another model. Separate adapters and worker invocations own any
+fallback path.
+
+The first dispatch uses only the three independent, ready work packages below. Their
+resource keys and file ownership keep concurrent workers from editing the same surface:
+
+| Bead | Work package | Initial dependency/state |
+|------|--------------|--------------------------|
+| `zaiproxy-3c47e2c0` | Credential-safe quota client and schema normalizer | Ready; owns new `proxy/quota/` files |
+| `zaiproxy-04dbae1f` | Bounded Prometheus quota metrics | Ready; owns `proxy/metrics*` |
+| `zaiproxy-d032b140` | Bounded Z.AI business-error parser | Ready; owns new `proxy/zai_error*` files |
+| `zaiproxy-00dedd67` | Observe-only poller, health, and configuration wiring | Blocked by client + metrics |
+| `zaiproxy-e212b64b` | Retry/rate-feedback integration | Blocked by error parser + metrics |
+| `zaiproxy-34621366` | Dashboard quota and freshness presentation | Blocked by poller + metrics |
+| `zaiproxy-6e54beab` | End-to-end observe-only and campaign zero-burn validation | Blocked by all integration work |
+| `zaiproxy-0a1eaf6d` | Quota-cap enforcement in single-replica canary | Deferred until validation evidence exists |
+| `zaiproxy-88f2b3d6` | Multi-replica account-budget coordination | Deferred until canary enforcement succeeds |
+
+The umbrella bead is `zaiproxy-a544ad8a` and remains deferred so a worker cannot claim
+planning prose as implementation. ZCode workers must run with Explore and generative
+strands disabled for this tranche, must hold no bead while waiting outside the campaign
+window, and should exit after the scoped ready frontier is exhausted. A worker already
+executing at 21:00 EDT may finish and verify its bead; it must not begin a new claim.
+
+This tranche passes the build evaluation only when workers independently produce
+reviewable commits, respect file/resource boundaries, close beads only after repository
+tests pass, avoid credentials and raw account payloads, and require no human repair of
+their implementation. Throughput alone is not success.
+
 ### dashboard/ — Metrics Dashboard (Go + React)
 
 The observability layer. Three subsystems work together:
