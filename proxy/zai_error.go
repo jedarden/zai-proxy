@@ -269,6 +269,14 @@ var zaiProviderLocation = time.FixedZone("UTC+8", 8*3600)
 // quota message text, e.g. "Your limit will reset at 2026-09-06 00:00:00".
 var zaiMessageResetPattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}`)
 
+// zaiPlausibleResetBounds is the inclusive wall-clock window a parsed
+// timestamp must land in to be believed, mirroring the epoch range
+// zaiEpochFromSeconds accepts (~2001 through ~year 2600). Timestamps
+// outside it are treated as absent rather than clamped, on the same
+// reasoning: inventing a reset instant would hold a circuit open until the
+// wrong time.
+var zaiPlausibleResetBounds = [2]time.Time{time.Unix(1e9, 0).UTC(), time.Unix(2e10, 0).UTC()}
+
 // zaiResetTimeFromRaw converts a raw reset-time value into a UTC instant,
 // accepting unix seconds or unix milliseconds (as a JSON number or numeric
 // string), an RFC3339 timestamp, or a naive "2006-01-02 15:04:05" stamp
@@ -308,18 +316,29 @@ func zaiEpochFromSeconds(v float64) time.Time {
 // zaiParseTimestamp parses an RFC3339 timestamp, or a naive
 // "2006-01-02 15:04:05" stamp interpreted in the provider's Beijing wall
 // clock (UTC+8), which is how Z.AI's documented "limit will reset at
-// {next_flush_time}" message template advertises quota resets.
+// {next_flush_time}" message template advertises quota resets. Stamps
+// outside zaiPlausibleResetBounds are rejected so an implausible field or
+// an incidental date in prose can never become a reset instant.
 func zaiParseTimestamp(s string) (time.Time, bool) {
 	s = strings.TrimSpace(s)
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return t.UTC(), true
-	}
-	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02T15:04:05"} {
-		if t, err := time.ParseInLocation(layout, s, zaiProviderLocation); err == nil {
-			return t.UTC(), true
+	var t time.Time
+	var err error
+	if t, err = time.Parse(time.RFC3339, s); err != nil {
+		for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02T15:04:05"} {
+			if t, err = time.ParseInLocation(layout, s, zaiProviderLocation); err == nil {
+				break
+			}
 		}
 	}
-	return time.Time{}, false
+	if err != nil {
+		return time.Time{}, false
+	}
+	t = t.UTC()
+	lo, hi := zaiPlausibleResetBounds[0], zaiPlausibleResetBounds[1]
+	if t.Before(lo) || t.After(hi) {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // zaiResetTimeFromMessage extracts the reset instant from the first

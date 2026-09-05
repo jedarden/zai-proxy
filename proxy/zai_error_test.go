@@ -359,3 +359,36 @@ func TestClassifyZaiErrorCode(t *testing.T) {
 		})
 	}
 }
+
+func TestParseZaiError_ResetPlausibilityWindow(t *testing.T) {
+	// Timestamps — structured fields and stamps embedded in message text
+	// alike — outside the same wall-clock window the numeric epoch path
+	// accepts (~2001 through ~year 2600) are treated as absent, never
+	// clamped: a bogus reset instant would hold a circuit open until the
+	// wrong time.
+	tests := []struct {
+		name string
+		body string
+		want ZaiBusinessError
+	}{
+		{"pre-2001 RFC3339 ignored", `{"code":1303,"reset_time":"1999-12-31T23:59:59Z"}`,
+			ZaiBusinessError{Class: ZaiErrorClassFrequency, Code: "1303"}},
+		{"pre-2001 naive stamp ignored", `{"code":1308,"reset_time":"1970-01-01 00:00:00"}`,
+			ZaiBusinessError{Class: ZaiErrorClassQuota, Code: "1308"}},
+		{"far-future RFC3339 ignored", `{"code":1303,"reset_time":"3000-01-01T00:00:00Z"}`,
+			ZaiBusinessError{Class: ZaiErrorClassFrequency, Code: "1303"}},
+		{"far-future naive stamp ignored", `{"code":1308,"reset_time":"2900-01-01 00:00:00"}`,
+			ZaiBusinessError{Class: ZaiErrorClassQuota, Code: "1308"}},
+		{"date-only string ignored", `{"code":1303,"reset_time":"2026-09-06"}`,
+			ZaiBusinessError{Class: ZaiErrorClassFrequency, Code: "1303"}},
+		{"message stamp before the window ignored", `{"code":1308,"msg":"archived 1999-12-31 23:59:59"}`,
+			ZaiBusinessError{Class: ZaiErrorClassQuota, Code: "1308"}},
+		{"window lower edge accepted", `{"code":1303,"reset_time":"2001-09-09T01:46:40Z"}`,
+			ZaiBusinessError{Class: ZaiErrorClassFrequency, Code: "1303", ResetAt: time.Unix(1e9, 0).UTC()}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertZaiBusinessError(t, ParseZaiError([]byte(tt.body), 0), tt.want)
+		})
+	}
+}
