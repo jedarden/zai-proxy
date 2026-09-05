@@ -1,0 +1,28 @@
+{
+  "code": 200,
+  "msg": "Operation successful",
+  "data": {
+    "limits": [
+      {
+        "type": "TIME_LIMIT",
+        "unit": 5,
+        "number": 1,
+        "usage": 100,
+        "currentValue": 12,
+        "remaining": 88,
+        "percentage": 12,
+        "nextResetTime": 1790000000000
+      },
+      {
+        "type": "PROMO_LIMIT",
+        "unit": 42,
+        "number": 2,
+        "usage": 10,
+        "currentValue": 1,
+        "percentage": 10
+      }
+    ],
+    "level": "lite"
+  },
+  "success": true
+}
