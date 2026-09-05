@@ -71,6 +71,10 @@ go run .
 | `RATE_LIMIT_PROBE_INTERVAL` | `10` | Probe ceiling every N clean windows |
 | `RATE_LIMIT_STATE_FILE` | `/var/lib/zai-proxy/ceiling.json` | Where the inferred ceiling is persisted across restarts |
 | `RATE_LIMIT_STATE_MAX_AGE` | `6h` | Ignore a persisted ceiling older than this on startup |
+| `QUOTA_POLL_ENABLED` | `false` | Poll the account quota endpoint out of band (observe-only) |
+| `QUOTA_POLL_INTERVAL` | `1m` | Cadence of the out-of-band quota poll |
+| `QUOTA_POLL_TIMEOUT` | `5s` | Budget for one quota poll |
+| `QUOTA_STALE_AFTER` | `15m` | Age at which the cached quota sample is reported stale |
 | `MAX_RETRIES` | `3` | Retry count on transient errors |
 
 ### Dashboard

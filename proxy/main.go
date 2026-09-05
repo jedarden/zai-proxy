@@ -486,6 +486,38 @@ func main() {
 	log.Printf("Adaptive rate limiting: initial=%.1f, min=%.1f, max=%.1f req/s (ceiling alpha=%.2f, margin=%.1f%%, probe every %d windows, state file=%s, max age=%s, restored=%t)",
 		initialRate, minRate, maxRate, rateLimiter.ceilingSmoothAlpha, rateLimiter.holdMargin*100, rateLimiter.probeInterval, statePath, stateMaxAge, restored)
 
+	// Out-of-band quota polling, observe-only (docs/plan/plan.md, "Quota-aware
+	// throttling plan"): it publishes the account's normalized quota windows to
+	// /health and /metrics and never touches request admission, so a poll that
+	// fails, times out, or returns a malformed payload only changes what
+	// operators see. Enforcement is a separately gated change. A setup failure
+	// is logged and skipped for the same reason: monitoring must not take the
+	// data path down with it.
+	var quotaPoller *QuotaPoller
+	if config.GetQuotaPollEnabled() {
+		poller, err := newQuotaPollerFromConfig(apiKey, deploymentVariant)
+		if err != nil {
+			log.Printf("Quota polling disabled: %v", err)
+		} else {
+			quotaPoller = poller
+			// The poller's lifecycle is this context: it polls immediately,
+			// then once per interval, and stops cleanly on cancellation. It
+			// shares no state with the request path, so whether it is running
+			// is never an admission concern.
+			quotaCtx, cancelQuotaPolling := context.WithCancel(context.Background())
+			defer cancelQuotaPolling()
+			go func() {
+				if err := quotaPoller.Run(quotaCtx); err != nil {
+					log.Printf("Quota polling exited: %v", err)
+				}
+			}()
+			log.Printf("Quota polling enabled (observe-only): interval=%s, timeout=%s, stale_after=%s, base_url=%s",
+				config.GetQuotaPollInterval(), config.GetQuotaPollTimeout(), config.GetQuotaStaleAfter(), config.GetQuotaBaseURL())
+		}
+	} else {
+		log.Println("Quota polling disabled (QUOTA_POLL_ENABLED is not true)")
+	}
+
 	// Retry configuration
 	maxRetries := config.GetMaxRetries()
 
@@ -512,8 +544,9 @@ func main() {
 	http.Handle("/metrics", promhttp.Handler())
 
 	// Health endpoint: status code is what the probes read; the body carries
-	// the live rate-limit state, mirroring the persisted ceiling snapshot.
-	http.Handle("/health", newHealthHandler(rateLimiter))
+	// the live rate-limit state plus the observe-only quota sample, mirroring
+	// the persisted ceiling snapshot and the last-known-good quota poll.
+	http.Handle("/health", newHealthHandler(rateLimiter, quotaPoller))
 
 	// Admin: reset rate limiter
 	http.HandleFunc("/admin/reset-rate-limit", func(w http.ResponseWriter, r *http.Request) {

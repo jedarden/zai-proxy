@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"git.ardenone.com/jedarden/zai-proxy/internal/configenv"
+	"git.ardenone.com/jedarden/zai-proxy/proxy/quota"
 )
 
 // =============================================================================
@@ -32,6 +33,23 @@ const (
 	DefaultRateLimitHoldMargin = 0.02
 	// DefaultRateLimitProbeInterval is the default interval between ceiling probes (in clean windows).
 	DefaultRateLimitProbeInterval = 10
+)
+
+// Quota polling defaults (observe-only; docs/plan/plan.md, "Quota-aware
+// throttling plan"). Polling stays off until a deployment explicitly turns it
+// on, because observe-only telemetry still produces an outbound monitor call
+// carrying the account credential.
+const (
+	// DefaultQuotaPollEnabled keeps quota observation off by default.
+	DefaultQuotaPollEnabled = false
+	// DefaultQuotaPollInterval is the default out-of-band poll cadence.
+	DefaultQuotaPollInterval = time.Minute
+	// DefaultQuotaPollTimeout bounds one quota poll. It mirrors
+	// quota.DefaultTimeout, which is the value the client would apply alone.
+	DefaultQuotaPollTimeout = quota.DefaultTimeout
+	// DefaultQuotaStaleAfter is how long a cached quota sample stays trusted
+	// before /health and /metrics report it as stale.
+	DefaultQuotaStaleAfter = 15 * time.Minute
 )
 
 // Rate limiter state persistence defaults
@@ -152,4 +170,51 @@ func GetRateLimitStateFile() string {
 // set/invalid. Snapshots older than this are ignored on startup.
 func GetRateLimitStateMaxAge() time.Duration {
 	return configenv.ParseDurationOrDefault("RATE_LIMIT_STATE_MAX_AGE", DefaultRateLimitStateMaxAge)
+}
+
+// GetQuotaPollEnabled reports whether out-of-band quota polling is enabled,
+// from QUOTA_POLL_ENABLED env var. It defaults to false: quota observation is
+// observe-only and still makes an authenticated monitor call.
+func GetQuotaPollEnabled() bool {
+	return configenv.GetBool("QUOTA_POLL_ENABLED", DefaultQuotaPollEnabled)
+}
+
+// GetQuotaBaseURL returns the quota endpoint origin from ZAI_QUOTA_BASE_URL
+// env var, or the default value if not set. It shares the client's variable
+// so the proxy cannot drift from the endpoint the quota package documents.
+func GetQuotaBaseURL() string {
+	return configenv.GetString(quota.EnvBaseURL, quota.DefaultBaseURL)
+}
+
+// GetQuotaPollInterval returns the out-of-band poll cadence from
+// QUOTA_POLL_INTERVAL env var, or the default value if not set. A cadence
+// that is not positive would spin the poller, so it falls back to the
+// default instead of reaching it.
+func GetQuotaPollInterval() time.Duration {
+	return positiveDurationOrDefault("QUOTA_POLL_INTERVAL", DefaultQuotaPollInterval)
+}
+
+// GetQuotaPollTimeout returns the per-poll budget from QUOTA_POLL_TIMEOUT
+// env var, or the default value if not set. This is the same variable the
+// quota client applies on its own; reading it here keeps the poller's
+// timeout in the one configuration surface the deployment tunes.
+func GetQuotaPollTimeout() time.Duration {
+	return positiveDurationOrDefault(quota.EnvTimeout, DefaultQuotaPollTimeout)
+}
+
+// GetQuotaStaleAfter returns how long a cached quota sample stays trusted
+// from QUOTA_STALE_AFTER env var, or the default value if not set. Beyond it
+// the poller reports the sample stale and keeps the last-known-good state.
+func GetQuotaStaleAfter() time.Duration {
+	return positiveDurationOrDefault("QUOTA_STALE_AFTER", DefaultQuotaStaleAfter)
+}
+
+// positiveDurationOrDefault parses key as a Go duration, returning def when
+// the variable is unset, unparsable, or not positive. Durations guarded this
+// way bound a loop, so a non-positive value can never reach it.
+func positiveDurationOrDefault(key string, def time.Duration) time.Duration {
+	if parsed := configenv.ParseDurationOrDefault(key, 0); parsed > 0 {
+		return parsed
+	}
+	return def
 }

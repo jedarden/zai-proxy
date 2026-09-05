@@ -214,15 +214,17 @@ func (arl *AdaptiveRateLimiter) HealthState() RateLimitHealth {
 }
 
 // newHealthHandler returns the /health handler. Kubernetes probes only read
-// the status code; the JSON body carries the live rate-limit state for humans
-// and the dashboard.
-func newHealthHandler(arl *AdaptiveRateLimiter) http.HandlerFunc {
+// the status code; the JSON body carries the live rate-limit state and the
+// observe-only quota sample for humans and the dashboard. A nil quotaPoller
+// means quota polling is disabled and is reported as such, not omitted.
+func newHealthHandler(arl *AdaptiveRateLimiter, quotaPoller *QuotaPoller) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":     "ok",
 			"rate_limit": arl.HealthState(),
+			"quota":      quotaHealthSection(quotaPoller),
 		})
 	}
 }

@@ -500,7 +500,7 @@ func TestHealthHandler(t *testing.T) {
 	arl.statePath = config.DefaultRateLimitStateFile
 
 	rec := httptest.NewRecorder()
-	newHealthHandler(arl).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	newHealthHandler(arl, nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("/health status = %d, want 200", rec.Code)

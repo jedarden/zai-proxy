@@ -483,10 +483,11 @@ reference. Key variables:
 | `RATE_LIMIT_CEILING_ALPHA` | `0.3` | EWMA smoothing factor |
 | `RATE_LIMIT_HOLD_MARGIN` | `0.02` | Hold this % below estimated ceiling |
 | `RATE_LIMIT_PROBE_INTERVAL` | `10` | Probe above ceiling every N clean windows |
-| `QUOTA_TRACKING_ENABLED` | `true` | Poll and expose account-quota state; enforcement remains separately gated during rollout |
+| `QUOTA_POLL_ENABLED` | `false` | Poll and expose account-quota state (observe-only); enforcement remains separately gated during rollout |
 | `QUOTA_ENFORCEMENT_ENABLED` | `false` | Apply the derived quota cap and exhaustion circuit |
-| `QUOTA_POLL_INTERVAL` | `60s` | Normal account-quota polling interval |
-| `QUOTA_STALE_AFTER` | `5m` | Maximum age for quota state to affect admission |
+| `QUOTA_POLL_INTERVAL` | `1m` | Out-of-band account-quota polling interval |
+| `QUOTA_POLL_TIMEOUT` | `5s` | Budget for one quota poll |
+| `QUOTA_STALE_AFTER` | `15m` | Maximum age for the cached observe-only quota sample |
 | `QUOTA_RESERVE_FRACTION` | `0.05` | Preserve this fraction of each quota window from routine fleet consumption |
 | `QUOTA_RATE_ALPHA` | `0.2` | EWMA smoothing for observed quota burn and upward cap changes |
 | `QUOTA_RATE_MAX_INCREASE` | `0.20` | Maximum fractional cap increase per valid quota sample |

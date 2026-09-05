@@ -13,9 +13,9 @@ import (
 
 // TestAPIRequest represents a Claude API compatible request
 type TestAPIRequest struct {
-	Model    string    `json:"model"`
+	Model    string        `json:"model"`
 	Messages []TestMessage `json:"messages"`
-	Stream   bool      `json:"stream,omitempty"`
+	Stream   bool          `json:"stream,omitempty"`
 }
 
 type TestMessage struct {
@@ -25,11 +25,11 @@ type TestMessage struct {
 
 // TestAPIResponse represents expected Claude API response format
 type TestAPIResponse struct {
-	ID      string         `json:"id"`
-	Type    string         `json:"type"`
-	Role    string         `json:"role"`
+	ID      string             `json:"id"`
+	Type    string             `json:"type"`
+	Role    string             `json:"role"`
 	Content []TestContentBlock `json:"content"`
-	Usage   *Usage         `json:"usage,omitempty"`
+	Usage   *Usage             `json:"usage,omitempty"`
 }
 
 type TestContentBlock struct {
@@ -165,10 +165,10 @@ func TestTokenCountingMultipleMessages(t *testing.T) {
 // TestTokenCountingMalformedJSON tests error handling with invalid JSON
 func TestTokenCountingMalformedJSON(t *testing.T) {
 	malformedRequests := []string{
-		`{"model": "glm-4", "messages": [}`,                    // Invalid syntax
-		`{"model": "glm-4"}`,                                   // Missing messages
-		`{"messages": [{"role": "user", "content": "hi"}]}`,    // Missing model
-		`not json at all`,                                      // Complete garbage
+		`{"model": "glm-4", "messages": [}`,                 // Invalid syntax
+		`{"model": "glm-4"}`,                                // Missing messages
+		`{"messages": [{"role": "user", "content": "hi"}]}`, // Missing model
+		`not json at all`,                                   // Complete garbage
 	}
 
 	for i, malformed := range malformedRequests {
@@ -272,7 +272,7 @@ func TestProxyHealthEndpoint(t *testing.T) {
 	req := httptest.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
 
-	newHealthHandler(arl).ServeHTTP(w, req)
+	newHealthHandler(arl, nil).ServeHTTP(w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()

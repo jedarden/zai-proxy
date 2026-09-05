@@ -145,6 +145,75 @@ Older snapshots (or a corrupt/missing file) make the proxy fall back to starting
 RATE_LIMIT_STATE_MAX_AGE=30m
 ```
 
+## Quota Polling Configuration (observe-only)
+
+These variables configure the out-of-band poll of Z.AI's account quota endpoint
+(`/api/monitor/usage/quota/limit`). Polling is **observe-only**: it publishes the
+normalized five-hour and weekly windows to `/health` and `/metrics` and never
+changes request admission. A poll that fails, times out, or returns a malformed
+payload keeps the last-known-good sample and counts the outcome; admission stays
+with the congestion limiter. Enforcement is a separately gated change.
+
+### `QUOTA_POLL_ENABLED`
+**Type:** Boolean
+**Default:** `false`
+**Description:** Enables the out-of-band quota poll. It stays off by default
+because a poll is an authenticated monitor call carrying the account credential.
+When disabled, `/health` still reports a `"quota"` section with `enabled: false`.
+
+**Example:**
+```bash
+QUOTA_POLL_ENABLED=true
+```
+
+### `QUOTA_POLL_INTERVAL`
+**Type:** Duration (Go syntax)
+**Default:** `1m`
+**Description:** Cadence of the out-of-band poll. The first poll happens
+immediately at startup, so `/health` and `/metrics` populate without waiting an
+interval. A value that is not positive falls back to the default rather than
+spinning the poll loop.
+
+**Example:**
+```bash
+QUOTA_POLL_INTERVAL=45s
+```
+
+### `QUOTA_POLL_TIMEOUT`
+**Type:** Duration (Go syntax)
+**Default:** `5s`
+**Description:** Budget for one quota poll. A poll that exceeds it counts as an
+error outcome and never blocks the request path.
+
+**Example:**
+```bash
+QUOTA_POLL_TIMEOUT=2s
+```
+
+### `QUOTA_STALE_AFTER`
+**Type:** Duration (Go syntax)
+**Default:** `15m`
+**Description:** How long the cached sample stays trusted. Past this, `/health`
+reports `fresh: false`, the `zai_proxy_quota_poll_total{result="stale"}` counter
+advances once, and the last-known-good values stay exported until a poll
+succeeds.
+
+**Example:**
+```bash
+QUOTA_STALE_AFTER=10m
+```
+
+### `ZAI_QUOTA_BASE_URL`
+**Type:** String (URL)
+**Default:** `https://api.z.ai`
+**Description:** Origin hosting the quota endpoint. Override it only for
+testing; the path is fixed by the quota client.
+
+**Example:**
+```bash
+ZAI_QUOTA_BASE_URL=https://api.z.ai
+```
+
 ## Retry Configuration
 
 ### `MAX_RETRIES`
@@ -195,6 +264,12 @@ RATE_LIMIT_INITIAL=15.0
 RATE_LIMIT_MIN=1.0
 RATE_LIMIT_MAX=50.0
 
+# Quota polling (observe-only; off until explicitly enabled)
+QUOTA_POLL_ENABLED=true
+QUOTA_POLL_INTERVAL=1m
+QUOTA_POLL_TIMEOUT=5s
+QUOTA_STALE_AFTER=15m
+
 # Retry settings
 MAX_RETRIES=3
 ```
@@ -207,6 +282,7 @@ When the proxy starts, it logs the current configuration:
 Token counting enabled (tiktoken cl100k_base encoding, model: glm-4)
 Max workers set to: 20
 Adaptive rate limiting: initial=15.0, min=1.0, max=50.0 req/s
+Quota polling enabled (observe-only): interval=1m0s, timeout=5s, stale_after=15m0s, base_url=https://api.z.ai
 Z.AI proxy listening on :8080
 Metrics available at :8080/metrics
 ```
@@ -217,6 +293,7 @@ If token counting is disabled:
 Token counting disabled (TOKEN_COUNTING_ENABLED=false)
 Max workers set to: 20
 Adaptive rate limiting: initial=15.0, min=1.0, max=50.0 req/s
+Quota polling disabled (QUOTA_POLL_ENABLED is not true)
 Z.AI proxy listening on :8080
 Metrics available at :8080/metrics
 ```
