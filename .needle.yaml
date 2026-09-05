@@ -1,6 +1,18 @@
 bead_cli:
   backend: bead-rs
 
+# The fleet-wide model router maps every glm* model to the Claude Code
+# adapter. This workspace is the ZCode proving ground, so route the adapter's
+# declared model back to ZCode and fail closed if that mapping ever stops
+# matching.
+agent:
+  routing:
+    rules:
+      - match_model: "^glm-5\\.3-flash$"
+        adapter: zcode-headless
+    default_adapter: zcode-headless
+    strict: true
+
 # Keep the booked implementation queue bounded: these workspace-supported
 # overrides prevent generator strands from synthesizing follow-on beads after
 # the ZCode + GLM-5.3-Flash proving tranche is exhausted. Explore is disabled
