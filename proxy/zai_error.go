@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -28,11 +29,14 @@ import (
 //
 // The parser is pure and bounded: it takes an already-read body plus a byte
 // budget, classifies without touching admission behavior, and retains only
-// the class, the code, and reset metadata. The provider message text is
-// inspected transiently at most and never retained — like the quota
-// package, provider messages are not guaranteed to be free of
-// account-identifying material, so they must not reach logs or metrics
-// through this type.
+// the class, the code, and reset metadata. Reset metadata comes from a
+// structured reset field when the body carries one, and otherwise from the
+// naive wall-clock stamp Z.AI embeds in quota message text ("Your limit
+// will reset at 2026-09-06 00:00:00"); only the parsed instant is kept. The
+// provider message text is inspected transiently at most and never
+// retained — like the quota package, provider messages are not guaranteed
+// to be free of account-identifying material, so they must not reach logs
+// or metrics through this type.
 
 // ZaiErrorClass is the bounded business-error classification. The values
 // are the metric label vocabulary reserved for
@@ -84,8 +88,9 @@ type ZaiBusinessError struct {
 	// surfaced without inventing a class for them.
 	Code string
 	// ResetAt is the provider-advertised reset instant in UTC, from a
-	// reset-time field when one is present. It is the zero time when the
-	// body advertised no plausible reset.
+	// structured reset-time field when the body carries one, and otherwise
+	// from the reset stamp embedded in quota message text. It is the zero
+	// time when the body advertised no plausible reset.
 	ResetAt time.Time
 	// RetryAfter is a retry_after value from the body, as a duration. It
 	// is zero when absent or implausible; Retry-After headers are the
@@ -141,7 +146,15 @@ func ParseZaiError(body []byte, maxBytes int) ZaiBusinessError {
 	// unrecognized code that still advertises a reset is exactly the case
 	// a supervisory circuit needs metadata for.
 	if raw, ok := zaiErrorLookup(inner, outer, zaiResetTimeKeys...); ok {
-		result.ResetAt = zaiEpochFromRaw(raw)
+		result.ResetAt = zaiResetTimeFromRaw(raw)
+	}
+	if result.ResetAt.IsZero() {
+		// Quota bodies often advertise the reset only inside message text
+		// ("Your limit will reset at 2026-09-06 00:00:00"). Only the parsed
+		// instant survives; the message itself is never retained.
+		if msg, ok := zaiErrorLookup(inner, outer, "msg", "message"); ok {
+			result.ResetAt = zaiResetTimeFromMessage(unquoteJSONString(msg))
+		}
 	}
 	if raw, ok := zaiErrorLookup(inner, outer, zaiRetryAfterKeys...); ok {
 		result.RetryAfter = zaiRetryAfterFromRaw(raw)
@@ -246,17 +259,37 @@ func zaiCodeFromMessage(msg string) string {
 	return code
 }
 
-// zaiEpochFromRaw converts a raw reset-time value into a UTC instant,
-// accepting unix seconds or unix milliseconds and distinguishing them by
-// magnitude (every post-2001 epoch-millisecond stamp exceeds 1e12). Values
-// outside the plausible epoch range are treated as absent rather than
-// clamped: inventing a reset instant would open a circuit until the wrong
+// zaiProviderLocation is the fixed UTC+8 offset Z.AI uses for the naive
+// wall-clock reset stamps it embeds in quota messages. A fixed zone is used
+// deliberately: the stamp is Beijing time year-round (China has no DST), so
+// parsing must not depend on a time-zone database being installed.
+var zaiProviderLocation = time.FixedZone("UTC+8", 8*3600)
+
+// zaiMessageResetPattern matches the naive wall-clock stamp Z.AI embeds in
+// quota message text, e.g. "Your limit will reset at 2026-09-06 00:00:00".
+var zaiMessageResetPattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}`)
+
+// zaiResetTimeFromRaw converts a raw reset-time value into a UTC instant,
+// accepting unix seconds or unix milliseconds (as a JSON number or numeric
+// string), an RFC3339 timestamp, or a naive "2006-01-02 15:04:05" stamp
+// read in the provider's Beijing wall clock. Anything else yields the zero
 // time.
-func zaiEpochFromRaw(raw json.RawMessage) time.Time {
-	v, ok := zaiFloatFromRaw(raw)
-	if !ok {
-		return time.Time{}
+func zaiResetTimeFromRaw(raw json.RawMessage) time.Time {
+	if v, ok := zaiFloatFromRaw(raw); ok {
+		return zaiEpochFromSeconds(v)
 	}
+	if t, ok := zaiParseTimestamp(unquoteJSONString(raw)); ok {
+		return t
+	}
+	return time.Time{}
+}
+
+// zaiEpochFromSeconds converts a numeric epoch, in seconds or milliseconds
+// distinguished by magnitude (every post-2001 epoch-millisecond stamp
+// exceeds 1e12), into a UTC instant. Values outside the plausible epoch
+// range are treated as absent rather than clamped: inventing a reset
+// instant would open a circuit until the wrong time.
+func zaiEpochFromSeconds(v float64) time.Time {
 	var sec float64
 	switch {
 	case v >= 1e12:
@@ -270,6 +303,40 @@ func zaiEpochFromRaw(raw json.RawMessage) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(int64(sec), 0).UTC()
+}
+
+// zaiParseTimestamp parses an RFC3339 timestamp, or a naive
+// "2006-01-02 15:04:05" stamp interpreted in the provider's Beijing wall
+// clock (UTC+8), which is how Z.AI's documented "limit will reset at
+// {next_flush_time}" message template advertises quota resets.
+func zaiParseTimestamp(s string) (time.Time, bool) {
+	s = strings.TrimSpace(s)
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t.UTC(), true
+	}
+	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02T15:04:05"} {
+		if t, err := time.ParseInLocation(layout, s, zaiProviderLocation); err == nil {
+			return t.UTC(), true
+		}
+	}
+	return time.Time{}, false
+}
+
+// zaiResetTimeFromMessage extracts the reset instant from the first
+// wall-clock stamp embedded in message text. The message carries a single
+// stamp in practice, so an implausible first match is treated as absent
+// rather than mined for later matches. Only the parsed instant survives;
+// the message itself is discarded.
+func zaiResetTimeFromMessage(msg string) time.Time {
+	match := zaiMessageResetPattern.FindString(msg)
+	if match == "" {
+		return time.Time{}
+	}
+	t, ok := zaiParseTimestamp(match)
+	if !ok {
+		return time.Time{}
+	}
+	return t
 }
 
 // zaiRetryAfterFromRaw converts a raw retry_after value into a duration of

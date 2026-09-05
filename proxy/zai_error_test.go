@@ -133,6 +133,14 @@ func TestParseZaiError_ResetMetadata(t *testing.T) {
 			ZaiBusinessError{Class: ZaiErrorClassFrequency, Code: "1305", ResetAt: fixedReset}},
 		{"resetTime scientific notation", `{"code":1303,"resetTime":1.788624e9}`,
 			ZaiBusinessError{Class: ZaiErrorClassFrequency, Code: "1303", ResetAt: fixedReset}},
+		{"reset_time RFC3339 UTC", `{"code":1303,"reset_time":"2026-09-05T16:00:00Z"}`,
+			ZaiBusinessError{Class: ZaiErrorClassFrequency, Code: "1303", ResetAt: fixedReset}},
+		{"reset_time RFC3339 with offset", `{"code":1305,"reset_time":"2026-09-06T00:00:00+08:00"}`,
+			ZaiBusinessError{Class: ZaiErrorClassFrequency, Code: "1305", ResetAt: fixedReset}},
+		{"reset_time RFC3339 fractional seconds", `{"code":1303,"reset_time":"2026-09-05T16:00:00.250Z"}`,
+			ZaiBusinessError{Class: ZaiErrorClassFrequency, Code: "1303", ResetAt: fixedReset.Add(250 * time.Millisecond)}},
+		{"reset_time naive string read as provider time", `{"code":1303,"reset_time":"2026-09-06 00:00:00"}`,
+			ZaiBusinessError{Class: ZaiErrorClassFrequency, Code: "1303", ResetAt: fixedReset}},
 		{"retry_after seconds", `{"code":1303,"retry_after":42}`,
 			ZaiBusinessError{Class: ZaiErrorClassFrequency, Code: "1303", RetryAfter: 42 * time.Second}},
 		{"retryAfter numeric string", `{"code":"1305","retryAfter":"7"}`,
@@ -169,6 +177,52 @@ func TestParseZaiError_ResetMetadata(t *testing.T) {
 			ZaiBusinessError{Class: ZaiErrorClassFrequency, Code: "1303"}},
 		{"infinite retry_after ignored", `{"code":1303,"retry_after":"Inf"}`,
 			ZaiBusinessError{Class: ZaiErrorClassFrequency, Code: "1303"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertZaiBusinessError(t, ParseZaiError([]byte(tt.body), 0), tt.want)
+		})
+	}
+}
+
+func TestParseZaiError_ResetFromMessageText(t *testing.T) {
+	// Z.AI's documented quota messages advertise the reset only as a naive
+	// wall-clock stamp inside the message text ("Your limit will reset at
+	// ..."), read here as the provider's Beijing time (UTC+8).
+	providerStamp := time.Date(2026, 9, 4, 19, 1, 25, 0, zaiProviderLocation).UTC()
+	midnightStamp := time.Date(2026, 9, 6, 0, 0, 0, 0, zaiProviderLocation).UTC()
+
+	tests := []struct {
+		name string
+		body string
+		want ZaiBusinessError
+	}{
+		{"1308 documented English message", `{"error":{"code":"1308","message":"Usage limit reached for 5 hour. Your limit will reset at 2026-09-06 00:00:00"}}`,
+			ZaiBusinessError{Class: ZaiErrorClassQuota, Code: "1308", ResetAt: midnightStamp}},
+		{"1308 English message in Beijing offset form", `{"code":1308,"msg":"Usage limit reached. Your limit will reset at 2026-09-04 19:01:25"}`,
+			ZaiBusinessError{Class: ZaiErrorClassQuota, Code: "1308", ResetAt: providerStamp}},
+		{"1310 Chinese message", `{"code":1310,"msg":"已达到 7 天的使用上限。您的限额将在 2026-09-04 19:01:25 重置。"}`,
+			ZaiBusinessError{Class: ZaiErrorClassQuota, Code: "1310", ResetAt: providerStamp}},
+		{"1310 nested error message", `{"error":{"code":"1310","message":"Weekly/Monthly Limit Exhausted. Your limit will reset at 2026-09-06 00:00:00"}}`,
+			ZaiBusinessError{Class: ZaiErrorClassQuota, Code: "1310", ResetAt: midnightStamp}},
+		{"T-separated stamp", `{"code":1308,"msg":"resets at 2026-09-06T00:00:00"}`,
+			ZaiBusinessError{Class: ZaiErrorClassQuota, Code: "1308", ResetAt: midnightStamp}},
+		{"structured reset beats message stamp", `{"code":1308,"reset_time":1788624000,"message":"will reset at 2020-01-01 00:00:00"}`,
+			ZaiBusinessError{Class: ZaiErrorClassQuota, Code: "1308", ResetAt: fixedReset}},
+		{"message stamp recovered when structured field invalid", `{"code":1308,"reset_time":"soon","message":"Your limit will reset at 2026-09-06 00:00:00"}`,
+			ZaiBusinessError{Class: ZaiErrorClassQuota, Code: "1308", ResetAt: midnightStamp}},
+		{"metadata with unknown code retained", `{"code":9999,"msg":"? will reset at 2026-09-06 00:00:00"}`,
+			ZaiBusinessError{Class: ZaiErrorClassUnknown, Code: "9999", ResetAt: midnightStamp}},
+		{"non-quota class still gets the stamp", `{"code":1303,"msg":"rate limited; window resets 2026-09-06 00:00:00"}`,
+			ZaiBusinessError{Class: ZaiErrorClassFrequency, Code: "1303", ResetAt: midnightStamp}},
+
+		// Absent or implausible stamps yield no reset instant.
+		{"no stamp in message", `{"code":1310,"msg":"weekly limit exhausted"}`,
+			ZaiBusinessError{Class: ZaiErrorClassQuota, Code: "1310"}},
+		{"plain number in message is not a stamp", `{"code":1302,"msg":"retry in 1302 seconds"}`,
+			ZaiBusinessError{Class: ZaiErrorClassConcurrency, Code: "1302"}},
+		{"implausible stamp ignored", `{"code":1308,"msg":"reset at 2026-13-45 99:99:99"}`,
+			ZaiBusinessError{Class: ZaiErrorClassQuota, Code: "1308"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
