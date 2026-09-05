@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -179,6 +180,20 @@ func TestZaiErrorClassRetryContract(t *testing.T) {
 			wantCode:   "1302",
 		},
 		{
+			name: "concurrency_1302_short_header_hint_yields_to_plain_curve",
+			upstreamBod: func() string {
+				return `{"error":{"code":"1302","message":"Concurrent slots full"}}`
+			},
+			retryAfterHeader: "1",
+			wantAttempts:     3,
+			wantAdmissions:   3,
+			// A one-second hint beats the first half of the curve and loses to
+			// the second: the wait is the larger of the two, never their sum.
+			wantSleeps: []time.Duration{time.Second, 2 * time.Second},
+			wantClass:  "concurrency",
+			wantCode:   "1302",
+		},
+		{
 			name: "model_congestion_1312_jitters_without_feeding_rps",
 			upstreamBod: func() string {
 				return `{"code":1312,"msg":"Model busy, try again later"}`
@@ -188,6 +203,21 @@ func TestZaiErrorClassRetryContract(t *testing.T) {
 			wantSleeps:     []time.Duration{500 * time.Millisecond, time.Second},
 			wantClass:      "model_congestion",
 			wantCode:       "1312",
+		},
+		{
+			name: "frequency_1305_header_hint_wins_over_curve",
+			upstreamBod: func() string {
+				return `{"code":1305,"msg":"Too many requests"}`
+			},
+			retryAfterHeader: "7",
+			wantAttempts:     3,
+			wantAdmissions:   3,
+			// One wait per retry, each the larger of the hinted second and the
+			// jittered curve -- the hint is never stacked on the curve.
+			wantSleeps:      []time.Duration{7 * time.Second, 7 * time.Second},
+			wantClass:       "frequency",
+			wantCode:        "1305",
+			wantRateDropped: true,
 		},
 		{
 			name: "quota_1308_never_retries_and_derives_retry_after_from_reset",
@@ -224,6 +254,26 @@ func TestZaiErrorClassRetryContract(t *testing.T) {
 			wantAttempts:    3,
 			wantAdmissions:  3,
 			wantSleeps:      []time.Duration{time.Second, 2 * time.Second},
+			wantClass:       "unknown",
+			wantCode:        "9999",
+			wantRateDropped: true,
+		},
+		{
+			name: "unknown_429_keeps_legacy_header_wait_then_backoff",
+			upstreamBod: func() string {
+				return `{"error":{"code":"9999","message":"Something else"}}`
+			},
+			retryAfterHeader: "7",
+			wantAttempts:     3,
+			wantAdmissions:   3,
+			// The legacy unclassified shape, kept verbatim: honor the header
+			// outright, then wait the curve on top of it. Four waits for two
+			// retries, where every classified class above takes two -- the
+			// stacking is what identifies the legacy path.
+			wantSleeps: []time.Duration{
+				7 * time.Second, time.Second,
+				7 * time.Second, 2 * time.Second,
+			},
 			wantClass:       "unknown",
 			wantCode:        "9999",
 			wantRateDropped: true,
@@ -474,5 +524,114 @@ func assertCancelledWaitAbandons(t *testing.T, f *classRetryFixture, cancelAfter
 	// return, not a completed retry sequence.
 	if elapsed > 2500*time.Millisecond {
 		t.Errorf("ServeHTTP returned after %v, want abandonment well before the waits elapsed", elapsed)
+	}
+}
+
+// TestZaiClassRetryDelayTable pins the delay resolver itself, class by class
+// and hint source by hint source, so the wait each retrying class takes is
+// readable without tracing the request path. Every row runs with a pinned
+// zero jitter, which lands a jittered curve exactly on its half point; the
+// sampled-jitter cases are TestZaiModelCongestionJitterStaysUnderPlainCurve.
+//
+// Quota (1308/1310) has no rows by design: it never retries, so it never
+// reaches delay resolution -- the contract table above pins that instead.
+func TestZaiClassRetryDelayTable(t *testing.T) {
+	noJitter := func() float64 { return 0 }
+
+	tests := []struct {
+		name   string
+		class  ZaiErrorClass
+		retry  int
+		header time.Duration
+		body   time.Duration
+		jitter func() float64
+		want   time.Duration
+	}{
+		// No hint at all: the class's own curve is the whole wait. Frequency
+		// and model congestion jitter onto the half point; concurrency does
+		// not jitter and takes the plain 1s/2s/4s curve.
+		{"concurrency_no_hint_takes_plain_curve", ZaiErrorClassConcurrency, 1, 0, 0, noJitter, time.Second},
+		{"concurrency_third_retry_takes_plain_curve", ZaiErrorClassConcurrency, 3, 0, 0, noJitter, 4 * time.Second},
+		{"frequency_no_hint_takes_halved_curve", ZaiErrorClassFrequency, 1, 0, 0, noJitter, 500 * time.Millisecond},
+		{"frequency_second_retry_takes_halved_curve", ZaiErrorClassFrequency, 2, 0, 0, noJitter, time.Second},
+		{"model_congestion_no_hint_takes_halved_curve", ZaiErrorClassModelCongestion, 1, 0, 0, noJitter, 500 * time.Millisecond},
+		{"model_congestion_second_retry_takes_halved_curve", ZaiErrorClassModelCongestion, 2, 0, 0, noJitter, time.Second},
+
+		// Retry-After header only: the provider's instruction wins outright,
+		// whatever the curve was about to say.
+		{"concurrency_header_hint_wins", ZaiErrorClassConcurrency, 1, 7 * time.Second, 0, noJitter, 7 * time.Second},
+		{"frequency_header_hint_wins", ZaiErrorClassFrequency, 1, 7 * time.Second, 0, noJitter, 7 * time.Second},
+		{"model_congestion_header_hint_wins", ZaiErrorClassModelCongestion, 2, 7 * time.Second, 0, noJitter, 7 * time.Second},
+
+		// retry_after body field only: same standing as the header.
+		{"concurrency_body_hint_wins", ZaiErrorClassConcurrency, 1, 0, 9 * time.Second, noJitter, 9 * time.Second},
+		{"frequency_body_hint_wins", ZaiErrorClassFrequency, 1, 0, 9 * time.Second, noJitter, 9 * time.Second},
+		{"model_congestion_body_hint_wins", ZaiErrorClassModelCongestion, 1, 0, 9 * time.Second, noJitter, 9 * time.Second},
+
+		// Both hints at once: the largest advertised value wins, so a body
+		// hint can overrule a header and vice versa.
+		{"concurrency_larger_body_hint_wins", ZaiErrorClassConcurrency, 1, 7 * time.Second, 9 * time.Second, noJitter, 9 * time.Second},
+		{"frequency_larger_body_hint_wins", ZaiErrorClassFrequency, 1, 7 * time.Second, 9 * time.Second, noJitter, 9 * time.Second},
+		{"model_congestion_larger_header_hint_wins", ZaiErrorClassModelCongestion, 1, 9 * time.Second, 7 * time.Second, noJitter, 9 * time.Second},
+
+		// A hint shorter than the curve yields to the curve rather than
+		// shortening it, and a hint between the halved and plain curve beats
+		// the halved curve without reaching the plain one.
+		{"concurrency_short_header_yields_to_curve", ZaiErrorClassConcurrency, 1, 250 * time.Millisecond, 0, noJitter, time.Second},
+		{"frequency_short_header_yields_to_curve", ZaiErrorClassFrequency, 1, 250 * time.Millisecond, 0, noJitter, 500 * time.Millisecond},
+		{"frequency_short_hints_yield_to_curve", ZaiErrorClassFrequency, 1, 100 * time.Millisecond, 200 * time.Millisecond, noJitter, 500 * time.Millisecond},
+		{"frequency_hint_between_half_and_full_curve", ZaiErrorClassFrequency, 1, 700 * time.Millisecond, 0, noJitter, 700 * time.Millisecond},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := zaiClassRetryDelay(tc.class, tc.retry, tc.header, tc.body, tc.jitter)
+			if got != tc.want {
+				t.Errorf("zaiClassRetryDelay(%q, retry %d, header %v, body %v) = %v, want %v",
+					tc.class, tc.retry, tc.header, tc.body, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestZaiModelCongestionJitterStaysUnderPlainCurve samples the jitter seam
+// across its range and pins the 1312 spread's ceiling: jitter may move a
+// congestion wait around inside the plain curve, but no sample may push it
+// past the wait the plain curve would have taken.
+func TestZaiModelCongestionJitterStaysUnderPlainCurve(t *testing.T) {
+	samples := []float64{0, 0.01, 0.125, 0.25, 0.5, 0.75, 0.9, 0.99, 0.9999, 1 - 1e-9}
+	for _, retry := range []int{1, 2, 3, 5, 8} {
+		plain := zaiBackoffDelay(retry)
+		for _, u := range samples {
+			got := zaiClassRetryDelay(ZaiErrorClassModelCongestion, retry, 0, 0, func() float64 { return u })
+			if got < plain/2 || got > plain {
+				t.Errorf("1312 delay (retry %d, jitter %.9f) = %v, want within [%v, %v]",
+					retry, u, got, plain/2, plain)
+			}
+		}
+	}
+
+	// A sample outside [0,1) -- or a NaN -- falls back to the no-jitter half
+	// point rather than escaping the bound in either direction.
+	for _, u := range []float64{-1, 1, 1.5, math.NaN()} {
+		if got := zaiJitteredBackoff(4*time.Second, func() float64 { return u }); got != 2*time.Second {
+			t.Errorf("jitter sample %v gave %v, want the no-jitter half 2s", u, got)
+		}
+	}
+
+	// The spread is real, not a constant: distinct samples give distinct
+	// waits inside the bound asserted above.
+	if zaiJitteredBackoff(time.Second, func() float64 { return 0 }) ==
+		zaiJitteredBackoff(time.Second, func() float64 { return 0.9 }) {
+		t.Error("jitter samples 0 and 0.9 produced the same wait; the spread is not real")
+	}
+
+	// Two known spots on the curve: sample 0 sits exactly on the half point
+	// and 0.5 exactly three quarters of the way up.
+	if got := zaiJitteredBackoff(time.Second, func() float64 { return 0 }); got != 500*time.Millisecond {
+		t.Errorf("jitter 0 gave %v, want the 500ms half point", got)
+	}
+	if got := zaiJitteredBackoff(time.Second, func() float64 { return 0.5 }); got != 750*time.Millisecond {
+		t.Errorf("jitter 0.5 gave %v, want 750ms", got)
 	}
 }
