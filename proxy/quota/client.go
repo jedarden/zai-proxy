@@ -128,7 +128,16 @@ func NewClient(apiKey, baseURL string, opts ...Option) (*Client, error) {
 		opt(c)
 	}
 	if c.http == nil {
-		c.http = &http.Client{}
+		c.http = &http.Client{
+			// A monitor endpoint has no legitimate reason to redirect, and
+			// Go re-attaches the Authorization header on same-host and
+			// subdomain redirects. Refusing to follow keeps the credential
+			// on the configured origin; handing back the 3xx response lets
+			// Fetch report it as an unexpected status instead.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
 	}
 	return c, nil
 }

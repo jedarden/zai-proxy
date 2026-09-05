@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -136,6 +137,41 @@ func TestFetchOversizeResponse(t *testing.T) {
 	_, err := client.Fetch(context.Background())
 	if !errors.Is(err, ErrResponseTooLarge) {
 		t.Fatalf("Fetch error = %v, want ErrResponseTooLarge", err)
+	}
+}
+
+// TestFetchDoesNotFollowRedirects pins the credential-egress guard: Go
+// re-attaches Authorization on a same-host redirect, so an unguarded client
+// would replay the key to the redirect target. The quota endpoint must never
+// be followed, and the error may only carry the redirect status.
+func TestFetchDoesNotFollowRedirects(t *testing.T) {
+	var targetRequests int32
+	var targetAuth string
+	mux := http.NewServeMux()
+	mux.HandleFunc(QuotaLimitPath, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, QuotaLimitPath+"/elsewhere", http.StatusFound)
+	})
+	mux.HandleFunc(QuotaLimitPath+"/elsewhere", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&targetRequests, 1)
+		targetAuth = r.Header.Get("Authorization")
+		_, _ = w.Write(loadFixture(t, "current_credit_limit.json"))
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	client := newTestClient(t, server.URL)
+	_, err := client.Fetch(context.Background())
+	if err == nil {
+		t.Fatal("Fetch against a redirect should fail")
+	}
+	if !strings.Contains(err.Error(), "302") {
+		t.Errorf("error %q should carry the redirect status", err.Error())
+	}
+	if atomic.LoadInt32(&targetRequests) != 0 {
+		t.Error("Fetch followed the redirect target")
+	}
+	if targetAuth != "" {
+		t.Errorf("the credential reached the redirect target: %q", targetAuth)
 	}
 }
 
