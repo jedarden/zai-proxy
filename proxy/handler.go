@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log"
+	"math"
+	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"sync"
@@ -24,6 +27,7 @@ type ProxyHandler struct {
 	rateLimiter       *AdaptiveRateLimiter
 	client            *http.Client
 	retrySleep        func(time.Duration)
+	retryJitter       func() float64
 	currentRequests   atomic.Int64
 	mu                sync.RWMutex
 }
@@ -56,18 +60,32 @@ func NewProxyHandler(
 				return http.ErrUseLastResponse
 			},
 		},
-		retrySleep: time.Sleep,
+		// retrySleep stays nil in production so retry waits are cancellable;
+		// see waitForRetry. Tests set it to assert the chosen delay.
 	}
 }
 
-// sleepForRetry waits before a retry. retrySleep is injectable so tests can
-// assert the chosen delay without waiting for production-sized backoff.
-func (h *ProxyHandler) sleepForRetry(delay time.Duration) {
+// waitForRetry performs one pre-retry wait, abandoning the request when the
+// caller has gone away: waiting out a retry for a closed connection spends
+// admission and upstream quota on nobody. retrySleep, when set, replaces the
+// wait entirely so tests can assert the chosen delay without waiting it out;
+// production leaves it nil and takes the cancellable path below.
+func (h *ProxyHandler) waitForRetry(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		return ctx.Err() == nil
+	}
 	if h.retrySleep != nil {
 		h.retrySleep(delay)
-		return
+		return ctx.Err() == nil
 	}
-	time.Sleep(delay)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 // updateUtilization updates the worker utilization metric.
@@ -161,13 +179,27 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var validatedBody []byte
 	var streamingPeek []byte
 
+	// retryDelay is the wait to perform before the next upstream attempt. The
+	// path that decides to retry sets it; the top of the loop performs the
+	// wait so every wait is cancellation-safe and every retry is preceded by
+	// exactly one admission.
+	var retryDelay time.Duration
+
 	for attempt := 0; attempt <= h.maxRetries; attempt++ {
 		if attempt > 0 {
-			// Exponential backoff: 1s, 2s, 4s, etc.
-			backoffDuration := time.Duration(1<<uint(attempt-1)) * time.Second
-			log.Printf("Retry attempt %d/%d after %v", attempt, h.maxRetries, backoffDuration)
-			h.sleepForRetry(backoffDuration)
+			log.Printf("Retry attempt %d/%d after %v", attempt, h.maxRetries+1, retryDelay)
+			if !h.waitForRetry(r.Context(), retryDelay) {
+				log.Printf("Client abandoned request during retry wait")
+				return
+			}
+			// A retry is an upstream attempt like any other, so it reacquires
+			// admission: a retry must never bypass the learned ceiling or the
+			// pacing the first attempt was admitted under.
+			h.rateLimiter.waitForClient(h.deploymentVariant, clientBucket)
 			retryAttempts.WithLabelValues("retry", h.deploymentVariant).Inc()
+			if r.Context().Err() != nil {
+				return
+			}
 		}
 
 		upstreamURL := h.targetURL + r.URL.Path
@@ -220,6 +252,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 			// Retry on network errors
 			if attempt < h.maxRetries {
+				retryDelay = zaiBackoffDelay(attempt + 1)
 				retryAttempts.WithLabelValues("network_error", h.deploymentVariant).Inc()
 				continue
 			}
@@ -230,33 +263,85 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Handle 429 Rate Limit
+		// Handle 429 Rate Limit. The status alone does not say what Z.AI ran
+		// out of, so the bounded error body is classified before anything
+		// adapts: the class decides which controller hears about the failure,
+		// whether another attempt is worth making, and how long to wait.
 		if resp.StatusCode == 429 {
+			errBody, _ := io.ReadAll(io.LimitReader(resp.Body, DefaultMaxZaiErrorBodyBytes+1))
 			resp.Body.Close()
+			// The extra byte above the budget only tells ParseZaiError the body
+			// was oversize; it was never classified. Trim it so what the caller
+			// receives is exactly what was classified.
+			if len(errBody) > DefaultMaxZaiErrorBodyBytes {
+				errBody = errBody[:DefaultMaxZaiErrorBodyBytes]
+			}
+			parsed := ParseZaiError(errBody, DefaultMaxZaiErrorBodyBytes)
 			upstreamErrors.WithLabelValues("429", h.deploymentVariant).Inc()
-			h.rateLimiter.Record429()
 
-			// Check Retry-After header
-			retryAfter := resp.Header.Get("Retry-After")
-			if retryAfter != "" {
-				if seconds, err := strconv.Atoi(retryAfter); err == nil {
-					log.Printf("429 Rate Limited, retry after %d seconds", seconds)
-					h.sleepForRetry(time.Duration(seconds) * time.Second)
+			// Retry-After is the provider's own instruction and is honored for
+			// every class that retries.
+			retryAfter := zaiRetryAfterHeader(resp.Header.Get("Retry-After"))
+
+			switch parsed.Class {
+			case ZaiErrorClassQuota:
+				// 1308/1310: the plan window is exhausted. No wait inside the
+				// retry budget outlives a five-hour or weekly reset, so retry
+				// only burns quota; hand the reset to the caller instead. The
+				// requests-per-second ceiling is not walked down for it.
+				log.Printf("429 quota exhausted (code %s): not retrying, returning reset metadata", parsed.Code)
+				h.writeZaiRateLimitedResponse(w, r, resp, errBody, parsed, start)
+				return
+
+			case ZaiErrorClassFrequency:
+				// 1303/1305: short-horizon rate pressure is exactly what the
+				// adaptive requests-per-second controller learns from.
+				h.rateLimiter.Record429()
+
+			case ZaiErrorClassConcurrency:
+				// 1302: the account's concurrent slots are full. Holding
+				// concurrency is the fix, and counting this as a 429 would
+				// walk the learned requests-per-second ceiling down for a
+				// problem that limiter can neither see nor fix.
+
+			case ZaiErrorClassModelCongestion:
+				// 1312: the model is busy, not this account's quota. A
+				// jittered retry spreads callers out without ever waiting
+				// longer than the plain curve.
+
+			default:
+				// Nothing in the body was recognized: a 429 can only be
+				// assumed to be rate pressure, so feed the controller and keep
+				// the pre-classification retry shape, which waits out both the
+				// provider's hint and the exponential curve.
+				h.rateLimiter.Record429()
+			}
+
+			if attempt >= h.maxRetries {
+				// Max retries exceeded: pass the upstream 429 through with its
+				// classification and reset metadata attached.
+				log.Printf("429 %s (code %s), max retries exceeded", parsed.Class, parsed.Code)
+				h.writeZaiRateLimitedResponse(w, r, resp, errBody, parsed, start)
+				return
+			}
+
+			if parsed.Class == ZaiErrorClassUnknown {
+				// Honor Retry-After now, then the exponential curve before the
+				// next attempt -- the two waits the unclassified path has
+				// always taken.
+				if retryAfter > 0 {
+					if !h.waitForRetry(r.Context(), retryAfter) {
+						return
+					}
 				}
+				retryDelay = zaiBackoffDelay(attempt + 1)
+			} else {
+				retryDelay = zaiClassRetryDelay(parsed.Class, attempt+1, retryAfter, parsed.RetryAfter, h.retryJitter)
 			}
-
-			if attempt < h.maxRetries {
-				log.Printf("429 Rate Limited, retrying (attempt %d/%d)", attempt+1, h.maxRetries+1)
-				retryAttempts.WithLabelValues("429", h.deploymentVariant).Inc()
-				continue
-			}
-
-			// Exceeded max retries, return 429 to client
-			log.Printf("429 Rate Limited, max retries exceeded")
-			requestsTotal.WithLabelValues(r.Method, r.URL.Path, "429", h.deploymentVariant).Inc()
-			requestDuration.WithLabelValues(r.Method, r.URL.Path, "429", h.deploymentVariant).Observe(time.Since(start).Seconds())
-			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
-			return
+			log.Printf("429 %s (code %s), retrying (attempt %d/%d) after %v",
+				parsed.Class, parsed.Code, attempt+1, h.maxRetries+1, retryDelay)
+			retryAttempts.WithLabelValues("429", h.deploymentVariant).Inc()
+			continue
 		}
 
 		// Handle 422 Unprocessable Entity — log full bodies for diagnosis,
@@ -301,6 +386,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					log.Printf("Malformed response from upstream (empty=%v, size=%d), retrying (attempt %d/%d)", len(bodyBytes) == 0, len(bodyBytes), attempt+1, h.maxRetries+1)
 					upstreamErrors.WithLabelValues("truncated_response", h.deploymentVariant).Inc()
 					if attempt < h.maxRetries {
+						retryDelay = zaiBackoffDelay(attempt + 1)
 						retryAttempts.WithLabelValues("truncated_response", h.deploymentVariant).Inc()
 						continue
 					}
@@ -320,6 +406,7 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					log.Printf("Empty streaming response from upstream, retrying (attempt %d/%d)", attempt+1, h.maxRetries+1)
 					upstreamErrors.WithLabelValues("empty_streaming", h.deploymentVariant).Inc()
 					if attempt < h.maxRetries {
+						retryDelay = zaiBackoffDelay(attempt + 1)
 						retryAttempts.WithLabelValues("empty_streaming", h.deploymentVariant).Inc()
 						continue
 					}
@@ -537,6 +624,124 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestsTotal.WithLabelValues(r.Method, r.URL.Path, statusCode, h.deploymentVariant).Inc()
 	requestDuration.WithLabelValues(r.Method, r.URL.Path, statusCode, h.deploymentVariant).Observe(duration)
 	responseSize.WithLabelValues(r.Method, r.URL.Path, statusCode, h.deploymentVariant).Observe(float64(bytesWritten))
+}
+
+// zaiBackoffDelay is the plain exponential retry curve -- 1s, 2s, 4s, ... --
+// used wherever a class has not asked for a shaped wait. retry counts the
+// upcoming retry, so the first retry waits one second.
+func zaiBackoffDelay(retry int) time.Duration {
+	const maxShift = 32 // far beyond any configured retry budget
+	if retry <= 0 {
+		return 0
+	}
+	if retry > maxShift {
+		retry = maxShift
+	}
+	return time.Duration(1<<uint(retry-1)) * time.Second
+}
+
+// zaiJitteredBackoff halves-and-jitters a wait: the result lands in
+// [base/2, base), so a population of callers that all hit the same 429 at the
+// same moment spreads out without any of them waiting longer than the plain
+// curve. jitter supplies a uniform sample in [0,1); production uses the
+// package default and tests inject a deterministic source.
+func zaiJitteredBackoff(base time.Duration, jitter func() float64) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	if jitter == nil {
+		jitter = rand.Float64
+	}
+	u := jitter()
+	if !(u >= 0) || u >= 1 { // out of range or NaN: fall back to no jitter
+		u = 0
+	}
+	return base/2 + time.Duration(float64(base/2)*u)
+}
+
+// zaiClassRetryDelay resolves the wait before one classified 429 retry: the
+// largest of the class's own backoff, the provider's Retry-After header, and
+// a retry_after the body advertised. Frequency and model-congestion retries
+// are jittered; a quota window is never retried at all.
+func zaiClassRetryDelay(class ZaiErrorClass, retry int, retryAfterHeader, retryAfterBody time.Duration, jitter func() float64) time.Duration {
+	base := zaiBackoffDelay(retry)
+	switch class {
+	case ZaiErrorClassFrequency, ZaiErrorClassModelCongestion:
+		base = zaiJitteredBackoff(base, jitter)
+	}
+	return max(base, retryAfterHeader, retryAfterBody)
+}
+
+// zaiRetryAfterHeader parses a Retry-After header expressed in seconds. The
+// HTTP-date form is left unparsed, as the unclassified path always did.
+func zaiRetryAfterHeader(header string) time.Duration {
+	if header == "" {
+		return 0
+	}
+	seconds, err := strconv.Atoi(header)
+	if err != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// zaiAdvertisedRetryAfter returns the retry hint a classified 429 carries for
+// the caller: an explicit retry_after when the body advertised one, otherwise
+// how long until the advertised reset. Nothing advertised means zero and no
+// header is invented.
+func zaiAdvertisedRetryAfter(parsed ZaiBusinessError) time.Duration {
+	if parsed.RetryAfter > 0 {
+		return parsed.RetryAfter
+	}
+	if parsed.ResetAt.IsZero() {
+		return 0
+	}
+	if until := time.Until(parsed.ResetAt); until > 0 {
+		return until
+	}
+	return 0
+}
+
+// writeZaiRateLimitedResponse hands a final Z.AI 429 to the caller. The
+// upstream status, headers, and error body are preserved: the provider's
+// error envelope is the caller's best diagnosis of its own request, and no
+// part of it is logged, because provider message text is not guaranteed to be
+// free of account-identifying material. The bounded classification and reset
+// metadata are added as headers so a client can react without parsing the
+// provider envelope.
+func (h *ProxyHandler) writeZaiRateLimitedResponse(w http.ResponseWriter, r *http.Request, resp *http.Response, body []byte, parsed ZaiBusinessError, start time.Time) {
+	headers := w.Header()
+	for key, values := range resp.Header {
+		for _, value := range values {
+			headers.Add(key, value)
+		}
+	}
+	// The body is replayed verbatim but no longer through the upstream
+	// connection, so the claimed length may not hold.
+	headers.Del("Content-Length")
+
+	headers.Set("X-Zai-Error-Class", string(parsed.Class))
+	if parsed.Code != "" {
+		headers.Set("X-Zai-Error-Code", parsed.Code)
+	}
+	if !parsed.ResetAt.IsZero() {
+		headers.Set("X-Zai-Rate-Limit-Reset", parsed.ResetAt.UTC().Format(time.RFC3339))
+	}
+	if headers.Get("Retry-After") == "" {
+		if advertised := zaiAdvertisedRetryAfter(parsed); advertised > 0 {
+			headers.Set("Retry-After", strconv.Itoa(int(math.Ceil(advertised.Seconds()))))
+		}
+	}
+
+	w.WriteHeader(resp.StatusCode)
+	if len(body) > 0 {
+		if _, err := w.Write(body); err != nil {
+			log.Printf("Error writing upstream 429 response: %v", err)
+		}
+	}
+
+	requestsTotal.WithLabelValues(r.Method, r.URL.Path, strconv.Itoa(resp.StatusCode), h.deploymentVariant).Inc()
+	requestDuration.WithLabelValues(r.Method, r.URL.Path, strconv.Itoa(resp.StatusCode), h.deploymentVariant).Observe(time.Since(start).Seconds())
 }
 
 // GetCurrentRate returns the current rate limit for the handler.
