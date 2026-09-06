@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,6 +31,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"git.ardenone.com/jedarden/zai-proxy/proxy/quota"
 )
@@ -50,6 +52,15 @@ const (
 	fixtureFiveHourUsedFraction = 0.37
 	fixtureWeeklyUsedFraction   = 0.5207
 	fixtureLegacyWeeklyFraction = 0.07
+
+	// The window-reset payload: usage back to nearly nothing, and each reset
+	// stamp advanced by its own window length (five hours, one week) past the
+	// exhausted payload's stamps, which is what a rollover looks like.
+	fixtureFiveHourPostResetMillis = int64(1788559838272)
+	fixtureWeeklyPostResetMillis   = int64(1789732884993)
+
+	fixtureFiveHourPostResetFraction = 0.05
+	fixtureWeeklyPostResetFraction   = 0.02
 )
 
 // loadQuotaTelemetryFixture reads one provider payload from the fixture
@@ -216,7 +227,7 @@ func assertQuotaSeries(t *testing.T, family string, want map[string]float64) {
 // could break: neither enforcement gauge may carry a series, the rate limiter
 // must still be at the state it was constructed with, and admission must not
 // have learned to wait.
-func assertNoQuotaEnforcement(t *testing.T, arl *AdaptiveRateLimiter, baseline RateLimitHealth, baselineRate float64) {
+func assertNoQuotaEnforcement(t *testing.T, arl *AdaptiveRateLimiter, variant string, baseline RateLimitHealth, baselineRate float64) {
 	t.Helper()
 	for _, family := range []string{"zai_proxy_quota_rate_cap", "zai_proxy_quota_gate_open"} {
 		if got := renderedQuotaValues(t, family); len(got) != 0 {
@@ -232,7 +243,7 @@ func assertNoQuotaEnforcement(t *testing.T, arl *AdaptiveRateLimiter, baseline R
 	}
 
 	start := time.Now()
-	arl.Wait(quotaTelemetryVariant)
+	arl.Wait(variant)
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Errorf("admission took %s after a quota signal, want it unblocked", elapsed)
 	}
@@ -422,7 +433,7 @@ func TestQuotaTelemetryRendersFixturesOnBothSurfaces(t *testing.T) {
 				t.Error("/health quota.fresh = true past stale-after, want false")
 			}
 
-			assertNoQuotaEnforcement(t, arl, rateLimit, baselineRate)
+			assertNoQuotaEnforcement(t, arl, quotaTelemetryVariant, rateLimit, baselineRate)
 		})
 	}
 }
@@ -474,15 +485,109 @@ func TestQuotaExhaustionIsRecordedButEnforcesNothing(t *testing.T) {
 	if !reflect.DeepEqual(rateLimitBefore, rateLimitAfter) {
 		t.Errorf("/health rate_limit moved from %+v to %+v on an exhausted quota sample", rateLimitBefore, rateLimitAfter)
 	}
-	assertNoQuotaEnforcement(t, arl, rateLimitBefore, baselineRate)
+	assertNoQuotaEnforcement(t, arl, quotaTelemetryVariant, rateLimitBefore, baselineRate)
+}
+
+// quotaRequestPathVariant keeps this test's rate-limiter series separate from
+// every other quota test's.
+const quotaRequestPathVariant = "quota-request-path-fixture-test"
+
+// TestQuotaExhaustionNeverThrottlesOrRejectsRequests pins the observe-only
+// contract where it would actually bite: the request path. The production
+// ProxyHandler -- admission, the upstream call, and the returned body -- runs
+// against a local mock upstream while the quota signal is overdrawn, again
+// while the sample has gone stale, and again after the window resets. Every
+// request must come back exactly as it would with no quota machinery wired at
+// all: a 200 carrying the upstream's own body, with no rejection counted
+// against the variant and no movement in the limiter. The upstream must see
+// exactly one request per request sent, which also proves the quota
+// observation generated no model traffic of its own.
+func TestQuotaExhaustionNeverThrottlesOrRejectsRequests(t *testing.T) {
+	ConfigureTestEnv(t)
+	resetQuotaMetrics()
+
+	clock := newFakeQuotaClock()
+	endpoint := newQuotaFixtureEndpoint(t, http.StatusOK,
+		loadQuotaTelemetryFixture(t, "exhausted_and_overdrawn_windows.json"))
+	poller := newFixtureQuotaPoller(t, endpoint.URL, clock)
+
+	upstream := NewMockUpstream("success")
+	t.Cleanup(upstream.Close)
+
+	handler := NewProxyHandler(
+		fakeCredential,
+		upstream.URL(),
+		1, // maxRetries: a retry would double-count against the upstream
+		100,
+		quotaRequestPathVariant,
+		nil, // token counting disabled by ConfigureTestEnv
+		"glm-4",
+		1000, 1000, 1000, // fixed admission rate: any movement is enforcement
+	)
+	handler.retrySleep = func(time.Duration) {}
+	baselineRate := handler.rateLimiter.GetCurrentRate()
+	baselineHealth := handler.rateLimiter.HealthState()
+
+	// The rejection counter is pre-created at zero for this variant's admission
+	// bucket, so the verdict pins "never moved" for exactly this variant rather
+	// than claiming anything about series other tests create.
+	bucket := rateLimitClientBucket(CreateProxyRequest(http.MethodPost, "/v1/messages", "").RemoteAddr)
+	rejections := rateLimitRejections.WithLabelValues(quotaRequestPathVariant, bucket)
+
+	send := func(stage string) {
+		t.Helper()
+		resp := ExecuteMessagesRequest(t, handler, createNonStreamingRequestBody())
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("%s: reading the proxied response failed: %v", stage, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: a request through the proxy = %d %q, want 200", stage, resp.StatusCode, body)
+		}
+		if !strings.Contains(string(body), "msg_test123") {
+			t.Fatalf("%s: proxied body %q is not the upstream's own response", stage, body)
+		}
+	}
+
+	// Phase 1: the account is overdrawn -- the five-hour window at 137% and
+	// the weekly window exactly at 100%.
+	poller.pollOnce(context.Background())
+	send("overdrawn quota")
+	send("overdrawn quota, second request")
+
+	// Phase 2: the quota endpoint goes away and the retained sample goes stale.
+	clock.Advance(20 * time.Minute)
+	endpoint.reply(http.StatusServiceUnavailable, []byte(`service unavailable`))
+	poller.pollOnce(context.Background())
+	send("stale quota sample")
+
+	// Phase 3: the window resets and usage falls back to nearly nothing.
+	endpoint.reply(http.StatusOK,
+		loadQuotaTelemetryFixture(t, "reset_after_exhaustion_windows.json"))
+	poller.pollOnce(context.Background())
+	send("after the window reset")
+	send("after the window reset, second request")
+
+	const sent = 5
+	if got := upstream.GetRequestCount(); got != sent {
+		t.Fatalf("upstream saw %d requests after %d were sent, want exactly %d: the proxy must neither drop nor duplicate one",
+			got, sent, sent)
+	}
+	if got := testutil.ToFloat64(rejections); got != 0 {
+		t.Errorf("rejected %d requests while quota was overdrawn, stale, and reset, want 0", int64(got))
+	}
+
+	assertNoQuotaEnforcement(t, handler.rateLimiter, quotaRequestPathVariant, baselineHealth, baselineRate)
 }
 
 // TestQuotaSignalPhasesNeverTriggerEnforcement walks one poller through the
-// phases an account actually goes through — healthy, exhausted, outage, and
-// recovery — and pins that no phase, including the exhausted and stale ones
-// where enforcement would be most tempting, produces any admission action.
-// The observation itself must keep working throughout: outcomes counted, the
-// retained sample kept across the outage, and staleness counted once.
+// phases an account actually goes through — healthy, exhausted, the window
+// resetting back to nearly unused, outage, and recovery — and pins that no
+// phase, including the exhausted and stale ones where enforcement would be
+// most tempting, produces any admission action. The observation itself must
+// keep working throughout: outcomes counted, the retained sample kept across
+// the outage, and staleness counted once.
 func TestQuotaSignalPhasesNeverTriggerEnforcement(t *testing.T) {
 	resetQuotaMetrics()
 	arl := NewAdaptiveRateLimiter(50, 5, 100)
@@ -520,6 +625,20 @@ func TestQuotaSignalPhasesNeverTriggerEnforcement(t *testing.T) {
 			resetAt:   time.UnixMilli(fixtureWeeklyResetMillis).UTC(),
 		},
 	}
+	resetWindows := []fixtureWindow{
+		{
+			window:    string(quota.WindowFiveHour),
+			limitType: string(quota.LimitTypeCredit),
+			used:      fixtureFiveHourPostResetFraction,
+			resetAt:   time.UnixMilli(fixtureFiveHourPostResetMillis).UTC(),
+		},
+		{
+			window:    string(quota.WindowWeekly),
+			limitType: string(quota.LimitTypeCredit),
+			used:      fixtureWeeklyPostResetFraction,
+			resetAt:   time.UnixMilli(fixtureWeeklyPostResetMillis).UTC(),
+		},
+	}
 
 	// phaseCheck is one point in the sequence: what the observation reports
 	// and what the poll outcome counters have accumulated.
@@ -549,7 +668,7 @@ func TestQuotaSignalPhasesNeverTriggerEnforcement(t *testing.T) {
 		assertQuotaSeries(t, "zai_proxy_quota_sample_age_seconds", map[string]float64{
 			`variant="` + quotaTelemetryVariant + `"`: check.ageSeconds,
 		})
-		assertNoQuotaEnforcement(t, arl, baselineHealth, baselineRate)
+		assertNoQuotaEnforcement(t, arl, quotaTelemetryVariant, baselineHealth, baselineRate)
 	}
 
 	// Phase 1: a healthy account.
@@ -574,7 +693,25 @@ func TestQuotaSignalPhasesNeverTriggerEnforcement(t *testing.T) {
 		windows:     exhaustedWindows,
 	})
 
-	// Phase 3: the endpoint goes away long enough for the sample to go stale.
+	// Phase 3: the window rolls over. Usage falls from both windows at 100%
+	// back to nearly nothing and both reset stamps advance by their own window
+	// length. This is the transition enforcement logic would most plausibly be
+	// asked to act on — releasing a cap it never set, or re-arming one — and
+	// the observation must simply replace both windows, old stamps included.
+	clock.Advance(5 * time.Hour)
+	endpoint.reply(http.StatusOK, loadQuotaTelemetryFixture(t, "reset_after_exhaustion_windows.json"))
+	poller.pollOnce(context.Background())
+	assertPhase(phaseCheck{
+		name:        "window reset",
+		lastOutcome: quotaPollOutcomeSuccess,
+		fresh:       true,
+		polls: map[string]float64{
+			`result="success",variant="` + quotaTelemetryVariant + `"`: 3,
+		},
+		windows: resetWindows,
+	})
+
+	// Phase 4: the endpoint goes away long enough for the sample to go stale.
 	// The last-known-good windows stay on both surfaces.
 	clock.Advance(20 * time.Minute)
 	endpoint.reply(http.StatusServiceUnavailable, []byte(`service unavailable`))
@@ -585,14 +722,14 @@ func TestQuotaSignalPhasesNeverTriggerEnforcement(t *testing.T) {
 		fresh:       false,
 		ageSeconds:  (20 * time.Minute).Seconds(),
 		polls: map[string]float64{
-			`result="success",variant="` + quotaTelemetryVariant + `"`: 2,
+			`result="success",variant="` + quotaTelemetryVariant + `"`: 3,
 			`result="error",variant="` + quotaTelemetryVariant + `"`:   1,
 			`result="stale",variant="` + quotaTelemetryVariant + `"`:   1,
 		},
-		windows: exhaustedWindows,
+		windows: resetWindows,
 	})
 
-	// Phase 4: the outage continues; the transition into staleness is not
+	// Phase 5: the outage continues; the transition into staleness is not
 	// counted a second time.
 	clock.Advance(time.Minute)
 	poller.pollOnce(context.Background())
@@ -602,14 +739,14 @@ func TestQuotaSignalPhasesNeverTriggerEnforcement(t *testing.T) {
 		fresh:       false,
 		ageSeconds:  (21 * time.Minute).Seconds(),
 		polls: map[string]float64{
-			`result="success",variant="` + quotaTelemetryVariant + `"`: 2,
+			`result="success",variant="` + quotaTelemetryVariant + `"`: 3,
 			`result="error",variant="` + quotaTelemetryVariant + `"`:   2,
 			`result="stale",variant="` + quotaTelemetryVariant + `"`:   1,
 		},
-		windows: exhaustedWindows,
+		windows: resetWindows,
 	})
 
-	// Phase 5: recovery, which is also the observation of a recovered account.
+	// Phase 6: recovery, which is also the observation of a recovered account.
 	clock.Advance(30 * time.Second)
 	endpoint.reply(http.StatusOK, loadQuotaTelemetryFixture(t, "healthy_credit_windows.json"))
 	poller.pollOnce(context.Background())
@@ -618,7 +755,7 @@ func TestQuotaSignalPhasesNeverTriggerEnforcement(t *testing.T) {
 		lastOutcome: quotaPollOutcomeSuccess,
 		fresh:       true,
 		polls: map[string]float64{
-			`result="success",variant="` + quotaTelemetryVariant + `"`: 3,
+			`result="success",variant="` + quotaTelemetryVariant + `"`: 4,
 			`result="error",variant="` + quotaTelemetryVariant + `"`:   2,
 			`result="stale",variant="` + quotaTelemetryVariant + `"`:   1,
 		},
@@ -642,7 +779,9 @@ func TestQuotaEnforcementRecordersHaveNoLiveCallSite(t *testing.T) {
 	}
 
 	// metrics.go is where the recorders are defined; a definition is not a
-	// call site.
+	// call site. Scanning this one directory flat is sufficient: the recorders
+	// live in package main, which Go forbids any other package from importing,
+	// so no subpackage of this module can ever hold a call site.
 	const (
 		rateCapRecorder = "RecordQuotaRateCap"
 		gateRecorder    = "RecordQuotaGateOpen"
