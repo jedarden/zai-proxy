@@ -13,6 +13,82 @@ This document is the operations record for that telemetry: how to check it
 hermetically, how to run the credential-safe live canary, what the canary
 measured, and how to diff the proxy's numbers against ZCode's usage view.
 
+## Reproducing every claim in this document
+
+Run from the repo root. Steps 1–4 are hermetic: no credential, no
+non-loopback traffic. Step 5 is the only one that touches the real origin,
+and it takes the credential by pipe. The sections that follow explain what
+each step pins down; this is the order to run them in.
+
+```bash
+# 1. Module green, quota surface green under race.
+go test -count=1 -skip TestConcurrentLoad ./...
+go test -race -count=2 ./proxy/quota/
+go test -race -count=1 -run Quota ./proxy/
+```
+
+Expected: every package `ok`. `TestConcurrentLoad` is skipped because it is
+the load-bound flake under "Known non-quota failures", not a quota test;
+`TestLiveQuotaObservationCanary` reports `SKIP` here because `QUOTA_CANARY`
+is unset, which is the correct result until step 5.
+
+```bash
+# 2. The failure-injection set behind "failures do not affect inference",
+#    named individually so a renamed or deleted test fails the step.
+go test -count=1 -race -v -run \
+  'TestQuotaPollerKeepsLastKnownGoodAcrossFailures|TestQuotaPollerTimeoutDoesNotBlockAdmission|TestQuotaPollerClassifiesProviderRejectionAndTransportFailure|TestQuotaPollerClassifiesMalformedPayload|TestQuotaPollerNeverLogsCredential|TestQuotaDecisionMetrics|TestQuotaExhaustionIsRecordedButEnforcesNothing|TestQuotaSignalPhasesNeverTriggerEnforcement|TestQuotaEnforcementRecordersHaveNoLiveCallSite' \
+  ./proxy/
+```
+
+Expected: nine `PASS` lines and
+`ok git.ardenone.com/jedarden/zai-proxy/proxy`.
+
+```bash
+# 3. Enforcement still off — checks 1 and 2 of "Verifying enforcement is
+#    off", whose expected outputs are spelled out there. Check 3 needs a
+#    running instance and greps its /metrics.
+grep -rn "RecordQuotaRateCap\|RecordQuotaGateOpen" --include='*.go' . | grep -v '_test.go'
+grep -rn "quotaPoller\|QuotaPoller" proxy/*.go | grep -v '_test.go'
+```
+
+```bash
+# 4. The canary script end to end, hermetically.
+python3 proxy/scripts/quota_canary.py run
+python3 proxy/scripts/quota_canary.py secret-scan --self-test
+```
+
+Expected from the first: `mode=hermetic`, `verdict=agree`, both deltas
+`0.0`, `credential_carried_on_every_poll=True`, and `secret_scan=clean`
+over the script, the fixtures, and the emitted artifact. Expected from the
+second: all four pattern classes detected on planted material, the canary's
+own files clean.
+
+```bash
+# 5. The live canary — the only step that needs a credential, fetched by
+#    pipe into the test process's environment. Never a literal anywhere.
+mkdir -p /tmp/quota-canary && chmod 700 /tmp/quota-canary
+ZAI_API_KEY="$(bao-as rs-manager bao kv get -field=api-key secret/rs-manager/apexalgo-iad/mcp/zai/api-key)" \
+QUOTA_CANARY=true QUOTA_CANARY_OUT=/tmp/quota-canary \
+  go test -count=1 -run TestLiveQuotaObservationCanary -v -timeout 9m ./proxy/
+```
+
+Expected: three phases, every poll `success`, the sample `fresh`
+throughout, `zai_proxy_requests_total` still 0 when it finishes — the test
+fails if any model request was sent — and one normalized report under
+`/tmp/quota-canary/`.
+
+Record what comes out using only the fields listed under "Fields safe to
+record" below.
+
+Re-verified green on 2026-09-06 at commit `84226e5`, the module tests run
+under `go test -overlay` so that unrelated in-flight sibling edits in this
+shared checkout were held out of the compile: steps 1 and 2 exactly as
+printed (all packages `ok`; nine `PASS` lines), step 3's greps 1 and 2
+producing exactly the expected output — its check 3 needs a running instance
+and was not run here — and step 4 with `verdict=agree`, both deltas `0.0`,
+and `secret_scan=clean`. Step 5 was not re-run for this document; its most
+recent run is the recorded evidence in the next two sections.
+
 ## The two surfaces
 
 Both are views of one retained snapshot — the last successful poll. There is
@@ -392,6 +468,71 @@ window 12% → 13%, reset `2026-09-05T22:51:32Z`, plan tier `max`. The
 - The report holds derived numbers only, is written mode 600 outside the repo,
   and is checked for the credential before being written. Delete it when the
   evidence has been recorded.
+
+### Fields safe to record
+
+Evidence copied out of a report into a doc, a bead, or an incident note may
+contain exactly this:
+
+- **Timestamps** — sample times, `last_success_at`, `sample_age_seconds`,
+  `reset_at`, `reset_in` countdowns, phase durations.
+- **Labels that say what a number belongs to** — `plan_tier`, `window`
+  (`five_hour`/`weekly`), `limit_type`, `variant`, `last_outcome`, the poll
+  `result` vocabulary, and the phase names.
+- **Numbers** — `used_fraction` and its percentage rendering, remaining
+  ratio, absolute `used`/`limit`/`remaining` credit amounts where the
+  provider's schema reports them (zero with `has_usage` false under the
+  legacy `TOKENS_LIMIT` schema), per-phase burn rates, burst windows and
+  deltas, reset-stamp drift, and `/health`-vs-`/metrics` divergence.
+- **Process facts** — poll and model-request counts, test names with their
+  results, commit IDs, origin host, and the verdict words (`confirmed`,
+  `unresolved`, `falsified`).
+
+Never record: the credential in any form; a raw provider payload or any of
+its keys (`currentValue`, `nextResetTime`, `percentage`, `remaining`,
+`limits`, `level`, `msg`, `success`); an account identifier; or provider
+error message text.
+
+This restates what the emitters already enforce. The script's artifact is a
+run-time allowlist (`ALLOWED_TOP` / `ALLOWED_SAMPLE` / `ALLOWED_COMPARISON`
+in `proxy/scripts/quota_canary.py` — a field outside it aborts the run
+before anything is written), and the Go canary's report is a fixed field set
+in `proxy/quota_canary_live_test.go` scanned for the credential before it is
+written. Copying fields from either report can only widen the record if a
+hand-rolled format is invented; don't invent one.
+
+### Scanning the documentation itself
+
+```bash
+# The canary scanner over its own scope, and the scanner self-checked.
+python3 proxy/scripts/quota_canary.py secret-scan --self-test
+
+# This file under gitleaks. Expected: no leaks found.
+mkdir -p /tmp/doc-scan && cp docs/notes/zai-proxy-quota-observability.md /tmp/doc-scan/
+gitleaks detect --no-git --source /tmp/doc-scan
+rm -rf /tmp/doc-scan
+```
+
+Recorded 2026-09-06: gitleaks 8.25.1 reports **0 findings** on this file.
+The canary scanner's credential-directed classes (`credential_literal`,
+`bearer_header`) are also clean here, but a raw run of that scanner over
+this file does not exit clean: its two
+encoded-run heuristics (`hex_run`, `base64_run` — any 32/40+ character
+alphanumeric run) fire 25 times, every one on the long Go test identifiers
+this document quotes (`TestQuotaPollerKeepsLastKnownGoodAcrossFailures` and
+the rest — 8 distinct tokens, all named `Test…`). Triage rule for any such
+hit: print the matched token; a CamelCase identifier naming a symbol in this
+repo is benign, anything opaque is not. The scanner is scoped to the
+canary's own files — script and fixtures — where it exits clean without
+triage.
+
+(Out of scope of this file, noted for whoever scans `docs/notes/` as a
+whole: gitleaks reports one pre-existing false positive in
+`TOKENIZER_CONFIGURATION.md`, where the `export TOKENIZER_MODEL=<name>`
+example line trips the `generic-api-key` rule on the "TOKEN" inside the
+variable name. The value is a model name, not a credential — quoting the
+line verbatim here reproduces the same finding, which is why it is
+paraphrased.)
 
 ## Known non-quota failures and limitations
 
