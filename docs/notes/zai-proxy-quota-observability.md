@@ -238,6 +238,30 @@ To reproduce:
 3. Diff against the report's `credit_readings[].windows[]` — `used_percent`
    and `reset_at` are the fields to compare.
 
+`proxy/scripts/quota_canary.py` automates this comparison. Its default
+`hermetic` mode needs no credential and no non-loopback traffic: a local
+synthetic origin serves the committed fixtures in
+`proxy/testdata/quota_canary/` to both surfaces, rotating them across rounds so
+a usage-percentage delta and a reset-stamp delta are observable without a real
+account, and it runs the hermetic Go canaries first so a fixture that has
+drifted from what the proxy actually renders fails before any verdict is built
+on it.
+
+```bash
+python3 proxy/scripts/quota_canary.py run                  # hermetic; no credential
+python3 proxy/scripts/quota_canary.py secret-scan --self-test
+```
+
+In `live` mode (`--proxy-url` plus `ZAI_API_KEY` in the environment) it samples
+a real proxy and the real origin instead; the credential is read only from the
+environment, never argv and never a file in the repo. Both modes emit one
+artifact whose schema is an allowlist enforced at run time — timestamps,
+percentages, and reset measures, plus the structural fields that say what a
+number belongs to — and both the artifact and the summary are scanned for the
+credential and the provider's own payload keys before either is emitted; a run
+that would leak exits without writing. `TestQuotaCanaryScriptHermeticRun` pins
+all of this from Go, restating the allowlist from outside the script.
+
 Agreement within ±1 percentage point is expected: the provider reports the
 five-hour window in whole percentage steps under the legacy `TOKENS_LIMIT`
 schema, so a reading taken across a step boundary differs by exactly one step.
