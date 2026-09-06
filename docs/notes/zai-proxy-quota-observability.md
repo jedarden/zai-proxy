@@ -223,6 +223,109 @@ off"). Behaviourally, the hermetic suite pins that every failure mode retains
 the last-known-good sample, counts one bounded outcome, and leaves admission
 untouched. Production runs neither the poller nor any `QUOTA_*` setting.
 
+## Recorded canary evidence — 2026-09-06
+
+Three live runs and one paired usage-view probe, all against `https://api.z.ai`,
+plan tier `max`, poller interval `1m0s`, stale-after `15m0s`. Every run: all
+polls `success`, sample `fresh` throughout, `/health` vs `/metrics` maximum
+divergence **0**, and **0** model requests. Endpoint calls total 183 across the
+three runs (55 each) plus 18 probe polls — about 5 calls/minute over the 35
+minutes, an order of magnitude below what a 1-minute production poller would
+spend.
+
+Only the five-hour window appeared, legacy `TOKENS_LIMIT` (percentage-only), so
+absolute amounts are zero with `has_usage` false throughout.
+
+### Run 03:30:29–03:32:20 UTC — burst against a visibly burning account
+
+The instrument that decides the claim: the account was burning during the run,
+so the burst has a real control to be compared against.
+
+| Time (UTC) | Phase | five-hour used | reset_at |
+|---|---|---|---|
+| 03:30:29.37 | baseline first | 18% | 2026-09-06T03:51:33Z |
+| 03:31:40.79 | baseline last | 18% | 2026-09-06T03:51:33Z |
+| 03:31:49.11 | burst (40 polls) | 18% | 2026-09-06T03:51:33Z |
+| 03:32:19.93 | post-burst last | **19%** | 2026-09-06T03:51:33Z |
+
+| Quantity | Value |
+|---|---|
+| Baseline burn rate | 0 usage-fraction/second |
+| Post-burst burn rate | 3.26 × 10⁻⁴ usage-fraction/second (18% → 19% in 30.6 s) |
+| Burst window | 7.934 s, 40 polls |
+| Burst usage delta | 0 |
+| Drift the cadence rate predicts for that window | 2.59 × 10⁻³ |
+| Burst excess | −2.59 × 10⁻³ |
+| Reset stamp drift across the whole run | 0 (all 12 samples and all 3 credit readings carry `2026-09-06T03:51:33Z`) |
+
+### Runs 03:57:02 and 04:03:50 UTC — after the 03:51:33Z window reset
+
+Both confirmed, but **degenerate**: the freshly-reset window sat still at 1% for
+the whole of each run, so the cadence phases show 0 drift and the burst
+comparison is 0 against 0. These runs establish that polling does not disturb a
+quiet window and that the reset boundary is crossed cleanly (reset stamp moved
+`03:51:33Z` → `08:51:39Z`, a 5 h + 6 s step, with no intermediate or malformed
+reading); they do not by themselves decide zero-burn, because a burst compared
+against a zero control cannot distinguish "unmetered" from "nothing to measure".
+
+### Paired proxy-vs-ZCode comparison — 04:03:50–04:04:20 UTC overlap
+
+The proxy side is run 04:03:50's normalized telemetry; the ZCode side is the
+raw provider endpoint projected by `quota_canary.py`'s own
+`project_usage_view`, sampled on a 10 s cadence (18 polls, 04:01:30–04:04:20).
+The two timelines overlap for 30 s.
+
+| Time (UTC) | Surface | five-hour used | reset_at |
+|---|---|---|---|
+| 04:03:50.43 | proxy `/health` | 1% | 2026-09-06T08:51:39Z |
+| 04:04:00.06 | ZCode usage view | 1.0% | 2026-09-06T08:51:39.513Z |
+| 04:04:10.06 | ZCode usage view | 1.0% | 2026-09-06T08:51:39.513Z |
+| 04:04:20.06 | ZCode usage view | 1.0% | 2026-09-06T08:51:39.513Z |
+
+| Delta | Value | Note |
+|---|---|---|
+| Percentage | **0.0 pp** | both surfaces read 1% at every overlapping sample |
+| Reset stamp | **0.513 s** | the proxy truncates the provider's millisecond stamp to whole-second RFC3339; the script's own tolerance is 5.0 s |
+
+Both deltas are inside tolerance, and both are the *expected* shape of
+agreement: the provider reports whole percentage steps, and the reset delta is
+exactly the sub-second precision the proxy's RFC3339 rendering discards.
+
+**Zero-burn: confirmed** (run 03:30:29, the non-degenerate instrument). 40
+back-to-back monitor polls in 7.9 s moved the counter by exactly zero while the
+same account burned one full percentage point of the five-hour window during
+the same 111-second run. Runs 03:57:02 and 04:03:50 are consistent but carry no
+control. The reset stamp held at a single value across every sample of all
+three runs while its countdown decayed by the wall clock.
+
+**Failures do not affect inference: re-confirmed** on 2026-09-06 at the same
+commit, by the three structural checks above plus the hermetic failure-injection
+suite run green under `-race`:
+`TestQuotaPollerKeepsLastKnownGoodAcrossFailures`,
+`TestQuotaPollerTimeoutDoesNotBlockAdmission`,
+`TestQuotaPollerClassifiesProviderRejectionAndTransportFailure`,
+`TestQuotaPollerClassifiesMalformedPayload`,
+`TestQuotaPollerNeverLogsCredential`, `TestQuotaDecisionMetrics`,
+`TestQuotaExhaustionIsRecordedButEnforcesNothing`,
+`TestQuotaSignalPhasesNeverTriggerEnforcement`,
+`TestQuotaEnforcementRecordersHaveNoLiveCallSite`, and
+`go test -race -count=2 ./proxy/quota/`. The whole module passes with
+`TestConcurrentLoad` skipped (known load-bound flake, unrelated to quota).
+
+Live mode of `quota_canary.py` was **not** used for the comparison above: it
+needs a reachable proxy serving `/health` with the poller enabled, and neither
+production `zai-proxy` nor `zai-proxy-canary` sets any `QUOTA_*` variable, so
+neither has quota telemetry to compare. That refusal is itself the enforcement
+guardrail holding — but it means the paired measurement has to come from the Go
+live canary plus a direct projection of the provider endpoint.
+
+One reporting defect found, not fixed here: the canary report's
+`analysis.reset_time_deltas_seconds` is named as a delta but holds the *last
+observed countdown* (`ResetInSecond`), overwritten per window — it reads
+1153.27 s on run 03:30:29 and 0 on the degenerate runs, neither of which is a
+drift measure. Reset-stamp drift must be read from `reset_at` constancy across
+`samples[]` and `credit_readings[]`, as done above.
+
 ## Comparing against ZCode's usage view
 
 ZCode's usage view renders the same account endpoint this proxy polls
@@ -270,7 +373,11 @@ sample has gone stale (`fresh: false`, `result="stale"` in
 `zai_proxy_quota_poll_total`).
 
 The 2026-09-05 run's comparison window is 22:29:42–22:31:32 UTC, five-hour
-window 12% → 13%, reset `2026-09-05T22:51:32Z`, plan tier `max`.
+window 12% → 13%, reset `2026-09-05T22:51:32Z`, plan tier `max`. The
+2026-09-06 comparison is the paired measurement recorded above: 04:03:50–
+04:04:20 UTC, five-hour window 1% on both surfaces, reset
+`2026-09-06T08:51:39Z` (proxy) against `2026-09-06T08:51:39.513Z` (raw) —
+0.0 pp and 0.513 s, both inside tolerance.
 
 ## Secret-safety rules for this surface
 
