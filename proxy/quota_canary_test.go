@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -70,10 +71,13 @@ func TestQuotaObserveOnlyCanary(t *testing.T) {
 	t.Setenv("QUOTA_STALE_AFTER", "900ms")
 
 	// Capture the process log so the credential-safety phase can scan every
-	// line the poller, the quota client, and the proxy handler produced.
+	// line the poller, the quota client, and the proxy handler produced. The
+	// previous writer is restored, not stderr assumed, so capturing stays
+	// composable with whatever ran before this test.
 	var capturedLogs syncBuffer
+	previousLogWriter := log.Writer()
 	log.SetOutput(&capturedLogs)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	t.Cleanup(func() { log.SetOutput(previousLogWriter) })
 
 	// ---- Synthetic endpoints ------------------------------------------------
 	fixture := newCanaryQuotaFixture(t, canaryAPIKey)
@@ -88,8 +92,23 @@ func TestQuotaObserveOnlyCanary(t *testing.T) {
 		t.Fatalf("env-configured poller construction failed: %v", err)
 	}
 	pollCtx, cancelPolling := context.WithCancel(context.Background())
-	defer cancelPolling()
-	go func() { _ = poller.Run(pollCtx) }()
+	pollDone := make(chan error, 1)
+	go func() { pollDone <- poller.Run(pollCtx) }()
+	// The poll loop is wound down before the test returns, not merely told to
+	// stop: a poll landing after a later test has reset the quota families
+	// would write a series into that test's metric space, which is exactly the
+	// cross-test interference the observe-only pins rule out.
+	defer func() {
+		cancelPolling()
+		select {
+		case err := <-pollDone:
+			if err != nil && !errors.Is(err, context.Canceled) {
+				t.Errorf("the quota poll loop exited with %v, want context.Canceled", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("the quota poll loop did not exit after cancellation")
+		}
+	}()
 
 	proxyHandler := NewProxyHandler(
 		canaryAPIKey,

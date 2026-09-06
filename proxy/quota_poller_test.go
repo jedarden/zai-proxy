@@ -653,6 +653,9 @@ func TestQuotaPollerTimeoutDoesNotBlockAdmission(t *testing.T) {
 // immediately, keeps the cadence, and stops fetching for good once its
 // context is cancelled.
 func TestQuotaPollerStopsOnContextCancel(t *testing.T) {
+	// Run() records an outcome per poll, so the series this poller writes stay
+	// this test's own and never accumulate across -count repetitions.
+	resetQuotaMetrics()
 	fetcher := newScriptedFetcher(successStep(pollerTestStart))
 	poller := newTestPoller(t, fetcher, newFakeQuotaClock(), 5*time.Millisecond, 15*time.Minute)
 
