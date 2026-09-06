@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -374,7 +378,313 @@ func TestQuotaObserveOnlyCanary(t *testing.T) {
 	canaryLogf(t, "done | captured_log_bytes=%d (scanned, credential-free)", capturedLogs.Len())
 }
 
+// TestQuotaCanaryProxyViewFixtures pins the committed proxy-quota-view
+// fixtures (proxy_quota_view_*.json) to what the production poller actually
+// renders from the matching provider fixture. proxy/scripts/quota_canary.py
+// samples those fixtures as the proxy-side surface of its hermetic run, so a
+// rendering change that outdates them must fail here, in the proxy, and not
+// surface later as a canary that compares a stale view against a live one.
+//
+// Only the deterministic subset of the /health quota section is pinned: the
+// window list and the poller's own state. last_success_at, sample_age_seconds,
+// interval, and stale_after move with the clock and the wiring and are
+// deliberately absent from the fixtures.
+//
+// The case table must stay identical to the script's HERMETIC_ROUNDS rotation,
+// and the rotation cross-check below is what keeps that true: a pair added to
+// one side only is either a proxy view the script serves with no pin to the
+// renderer, or a pin the script never observes.
+func TestQuotaCanaryProxyViewFixtures(t *testing.T) {
+	cases := []struct{ provider, view string }{
+		{"healthy.json", "proxy_quota_view_healthy.json"},
+		{"usage_increased.json", "proxy_quota_view_increased.json"},
+		{"reset_shifted.json", "proxy_quota_view_reset_shifted.json"},
+	}
+
+	rotation := canaryScriptRotationPairs(t)
+	if len(rotation) != len(cases) {
+		t.Fatalf("scripts/quota_canary.py rotates through %d fixture pairs, this test pins %d -- a pair added to one must be added to the other",
+			len(rotation), len(cases))
+	}
+	for i, pair := range rotation {
+		if pair[0] != cases[i].provider || pair[1] != cases[i].view {
+			t.Errorf("script rotation[%d] = (%q, %q), this test pins (%q, %q)",
+				i, pair[0], pair[1], cases[i].provider, cases[i].view)
+		}
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.provider, func(t *testing.T) {
+			resetQuotaMetrics()
+			clock := newFakeQuotaClock()
+			endpoint := newQuotaFixtureEndpoint(t, http.StatusOK, readCanaryFixture(t, tc.provider))
+			poller := newFixtureQuotaPoller(t, endpoint.URL, clock)
+
+			poller.pollOnce(context.Background())
+			health, _ := fetchHealthPayload(t, NewAdaptiveRateLimiter(50, 5, 100), poller)
+
+			var want struct {
+				Enabled     bool                `json:"enabled"`
+				Fresh       bool                `json:"fresh"`
+				LastOutcome string              `json:"last_outcome"`
+				PlanTier    string              `json:"plan_tier"`
+				Windows     []QuotaWindowHealth `json:"windows"`
+			}
+			if err := json.Unmarshal(readCanaryFixture(t, tc.view), &want); err != nil {
+				t.Fatalf("decoding proxy view fixture %s: %v", tc.view, err)
+			}
+
+			if health.Enabled != want.Enabled {
+				t.Errorf("enabled = %v, fixture says %v", health.Enabled, want.Enabled)
+			}
+			if health.Fresh != want.Fresh {
+				t.Errorf("fresh = %v, fixture says %v", health.Fresh, want.Fresh)
+			}
+			if health.LastOutcome != want.LastOutcome {
+				t.Errorf("last_outcome = %q, fixture says %q", health.LastOutcome, want.LastOutcome)
+			}
+			if health.PlanTier != want.PlanTier {
+				t.Errorf("plan_tier = %q, fixture says %q", health.PlanTier, want.PlanTier)
+			}
+			if len(health.Windows) != len(want.Windows) {
+				t.Fatalf("rendered %d windows (%+v), fixture models %d -- unmodelled provider entries must stay absent",
+					len(health.Windows), health.Windows, len(want.Windows))
+			}
+			for i, got := range health.Windows {
+				if got != want.Windows[i] {
+					t.Errorf("window[%d] = %+v, fixture says %+v", i, got, want.Windows[i])
+				}
+			}
+		})
+	}
+}
+
+// TestQuotaCanaryScriptHermeticRun pins proxy/scripts/quota_canary.py end to
+// end. The script is the operations-facing half of the canary pair -- the Go
+// canaries above exercise production wiring, the script re-samples the same
+// committed fixtures the way an operator runs it -- so its two guarantees are
+// pinned here rather than trusted from its own exit code:
+//
+//  1. Schema: the emitted artifact carries only the fields the script's
+//     allowlist permits (timestamps, percentages, reset measures, and the
+//     structural fields that say what a number belongs to), never an absolute
+//     amount, a plan field, or a raw provider payload key. The allowlist is
+//     restated here on purpose: the script enforces it at run time, this
+//     enforces it from outside, so widening the schema requires editing both.
+//  2. Secret safety: the child runs with ZAI_API_KEY removed from its
+//     environment -- the hermetic path must need no credential -- and neither
+//     its output nor its artifact carries the credential it minted, while its
+//     own scanner is proven not-blind by --self-test before its clean bill of
+//     health counts for anything.
+//
+// --no-go-canary keeps this from recursing: the hermetic Go canaries already
+// ran in this binary, and a test that shells out to `go test` would re-enter
+// the package it is running in.
+func TestQuotaCanaryScriptHermeticRun(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 is not on PATH; the script-side canary cannot run here")
+	}
+
+	outDir := t.TempDir()
+	stdout, _ := runQuotaCanaryScript(t, python, "run", "--no-go-canary", "--out", outDir)
+
+	artifactPath := canaryArtifactPath(t, outDir)
+	artifactBytes, err := os.ReadFile(artifactPath)
+	if err != nil {
+		t.Fatalf("reading emitted artifact %s: %v", artifactPath, err)
+	}
+	artifactText := string(artifactBytes)
+
+	var artifact map[string]any
+	if err := json.Unmarshal(artifactBytes, &artifact); err != nil {
+		t.Fatalf("emitted artifact %s is not valid JSON: %v", artifactPath, err)
+	}
+	assertCanarySchemaKeys(t, "artifact", artifact, canaryArtifactTopKeys)
+
+	if got := artifact["schema_version"]; got != float64(1) {
+		t.Errorf("schema_version = %v, want 1", got)
+	}
+	if got := artifact["mode"]; got != "hermetic" {
+		t.Errorf("mode = %v, want hermetic (the pinned run must not need a credential)", got)
+	}
+	if got := artifact["verdict"]; got != "agree" {
+		t.Errorf("verdict = %v, want agree -- the fixtures render the same payload on both surfaces", got)
+	}
+
+	samples, _ := artifact["samples"].([]any)
+	comparisons, _ := artifact["comparisons"].([]any)
+	if len(samples) == 0 || len(comparisons) == 0 {
+		t.Fatalf("artifact carries %d samples and %d comparisons; both must be non-empty",
+			len(samples), len(comparisons))
+	}
+	for i, entry := range samples {
+		sample, ok := entry.(map[string]any)
+		if !ok {
+			t.Fatalf("sample[%d] is not an object: %v", i, entry)
+		}
+		assertCanarySchemaKeys(t, fmt.Sprintf("sample[%d]", i), sample, canarySampleKeys)
+		if sample["surface"] != "proxy" && sample["surface"] != "zcode" {
+			t.Errorf("sample[%d] surface = %v, want proxy or zcode", i, sample["surface"])
+		}
+		if sample["window"] != "five_hour" && sample["window"] != "weekly" {
+			t.Errorf("sample[%d] window = %v, want five_hour or weekly", i, sample["window"])
+		}
+	}
+	for i, entry := range comparisons {
+		comparison, ok := entry.(map[string]any)
+		if !ok {
+			t.Fatalf("comparison[%d] is not an object: %v", i, entry)
+		}
+		assertCanarySchemaKeys(t, fmt.Sprintf("comparison[%d]", i), comparison, canaryComparisonKeys)
+		if comparison["within_tolerance"] != true {
+			t.Errorf("comparison[%d] within_tolerance = %v, want true", i, comparison["within_tolerance"])
+		}
+	}
+
+	// The provider's own field names may stand in for its bytes in a fixture,
+	// but a projection of that payload may not carry them out.
+	for _, key := range canaryRawPayloadKeys {
+		if strings.Contains(artifactText, `"`+key+`"`) {
+			t.Errorf("artifact carries raw provider payload key %q", key)
+		}
+	}
+
+	// The synthetic credential is minted inside the child and must die there:
+	// neither the artifact nor anything the child printed may carry it.
+	credentialShape := regexp.MustCompile(`canary-[0-9a-f]{48}`)
+	for _, surface := range []string{artifactText, stdout} {
+		if loc := credentialShape.FindString(surface); loc != "" {
+			t.Errorf("canary output carries credential-shaped material: %q", loc[:8]+"...")
+		}
+	}
+
+	// A clean bill from a scanner that was never proven to see anything is
+	// worth nothing, so the self-test plants one secret per pattern class and
+	// asserts detection before the same scan reports the canary's own files.
+	selfTestOut, _ := runQuotaCanaryScript(t, python, "secret-scan", "--self-test")
+	if !strings.Contains(selfTestOut, "self-test passed") || !strings.Contains(selfTestOut, "secret_scan=clean") {
+		t.Errorf("secret-scan --self-test did not report detection plus clean files:\n%s", selfTestOut)
+	}
+}
+
+// ---- Canary script plumbing --------------------------------------------------
+
+// canaryArtifactTopKeys, canarySampleKeys, and canaryComparisonKeys restate
+// the script's output-schema allowlist (proxy/scripts/quota_canary.py
+// ALLOWED_TOP / ALLOWED_SAMPLE / ALLOWED_COMPARISON). The script enforces them
+// at run time; this enforces them from the outside.
+var (
+	canaryArtifactTopKeys = []string{
+		"schema_version", "generated_at", "mode", "tolerance_pp",
+		"reset_tolerance_seconds", "samples", "comparisons", "verdict",
+	}
+	canarySampleKeys = []string{
+		"at", "surface", "round", "window", "used_percent",
+		"used_percent_delta_pp", "reset_at", "reset_delta_seconds",
+		"reset_in_seconds",
+	}
+	canaryComparisonKeys = []string{
+		"at", "round", "window", "proxy_used_percent", "zcode_used_percent",
+		"delta_pp", "proxy_reset_at", "zcode_reset_at", "reset_delta_seconds",
+		"within_tolerance",
+	}
+
+	// Raw provider payload keys that may exist in a fixture and may never
+	// reach the artifact the script emits.
+	canaryRawPayloadKeys = []string{
+		"currentValue", "nextResetTime", "percentage", "remaining",
+		"limits", "level", "msg", "success",
+	}
+)
+
+// runQuotaCanaryScript runs one invocation of the script from the proxy
+// package directory -- the working directory of a package test -- with
+// ZAI_API_KEY stripped from the environment, so a hermetic run is never
+// silently riding on a credential the machine happened to have.
+func runQuotaCanaryScript(t *testing.T, python string, args ...string) (string, string) {
+	t.Helper()
+
+	command := exec.Command(python, append([]string{"scripts/quota_canary.py"}, args...)...)
+	command.Env = canaryCredentialFreeEnv()
+	var stdout, stderr bytes.Buffer
+	command.Stdout, command.Stderr = &stdout, &stderr
+	if err := command.Run(); err != nil {
+		t.Fatalf("quota_canary.py %s: %v\nstdout:\n%s\nstderr:\n%s",
+			strings.Join(args, " "), err, stdout.String(), stderr.String())
+	}
+	return stdout.String(), stderr.String()
+}
+
+func canaryCredentialFreeEnv() []string {
+	env := os.Environ()
+	kept := env[:0]
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "ZAI_API_KEY=") {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept
+}
+
+func canaryArtifactPath(t *testing.T, dir string) string {
+	t.Helper()
+
+	matches, err := filepath.Glob(filepath.Join(dir, "zai-quota-canary-*.json"))
+	if err != nil {
+		t.Fatalf("globbing canary artifacts in %s: %v", dir, err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected exactly one emitted canary artifact in %s, found %d", dir, len(matches))
+	}
+	return matches[0]
+}
+
+func assertCanarySchemaKeys(t *testing.T, what string, obj map[string]any, allowed []string) {
+	t.Helper()
+
+	permitted := make(map[string]bool, len(allowed))
+	for _, key := range allowed {
+		permitted[key] = true
+	}
+	for key := range obj {
+		if !permitted[key] {
+			t.Errorf("%s carries field %q outside the canary output schema", what, key)
+		}
+	}
+}
+
 // ---- Canary plumbing ---------------------------------------------------------
+
+// canaryScriptRotationPairs reads the fixture pairs the script's hermetic run
+// rotates through (HERMETIC_ROUNDS in proxy/scripts/quota_canary.py), so
+// TestQuotaCanaryProxyViewFixtures can require its own case table to name
+// exactly those pairs. Reading the table rather than trusting the two
+// restatements to stay in step is the same discipline as the schema allowlist:
+// widening the rotation has to edit both sides, and this fails when only one
+// side changed.
+func canaryScriptRotationPairs(t *testing.T) [][2]string {
+	t.Helper()
+
+	script, err := os.ReadFile(filepath.Join("scripts", "quota_canary.py"))
+	if err != nil {
+		t.Fatalf("reading the canary script: %v", err)
+	}
+	block := regexp.MustCompile(`(?s)HERMETIC_ROUNDS\s*=\s*\[(.*?)\]`).FindSubmatch(script)
+	if block == nil {
+		t.Fatalf("HERMETIC_ROUNDS not found in scripts/quota_canary.py")
+	}
+	var rotation [][2]string
+	pair := regexp.MustCompile(`\("([A-Za-z0-9_.]+\.json)",\s*"([A-Za-z0-9_.]+\.json)"\)`)
+	for _, match := range pair.FindAllSubmatch(block[1], -1) {
+		rotation = append(rotation, [2]string{string(match[1]), string(match[2])})
+	}
+	if len(rotation) == 0 {
+		t.Fatalf("HERMETIC_ROUNDS in scripts/quota_canary.py holds no fixture pairs")
+	}
+	return rotation
+}
 
 func canaryLogf(t *testing.T, format string, args ...any) {
 	t.Logf("%s | %s", time.Now().UTC().Format(time.RFC3339Nano), fmt.Sprintf(format, args...))

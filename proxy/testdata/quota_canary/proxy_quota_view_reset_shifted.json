@@ -1,0 +1,20 @@
+{
+  "enabled": true,
+  "fresh": true,
+  "last_outcome": "success",
+  "plan_tier": "canary",
+  "windows": [
+    {
+      "window": "five_hour",
+      "limit_type": "CREDIT_LIMIT",
+      "used_fraction": 0.41,
+      "reset_at": "2030-03-17T18:46:40Z"
+    },
+    {
+      "window": "weekly",
+      "limit_type": "CREDIT_LIMIT",
+      "used_fraction": 0.52,
+      "reset_at": "2031-10-17T10:40:00Z"
+    }
+  ]
+}
