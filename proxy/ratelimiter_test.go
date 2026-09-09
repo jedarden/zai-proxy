@@ -963,7 +963,7 @@ func TestAdaptiveRateLimiter_BasicState(t *testing.T) {
 			minRate:         10.0,
 			maxRate:         100.0,
 			wantInitialRate: 50.0,
-			wantCeiling:     100.0,
+			wantCeiling:     50.0,
 		},
 		{
 			name:            "initial rate at max",
@@ -979,7 +979,7 @@ func TestAdaptiveRateLimiter_BasicState(t *testing.T) {
 			minRate:         10.0,
 			maxRate:         100.0,
 			wantInitialRate: 10.0,
-			wantCeiling:     100.0,
+			wantCeiling:     10.0,
 		},
 		{
 			name:            "small range",
@@ -987,7 +987,7 @@ func TestAdaptiveRateLimiter_BasicState(t *testing.T) {
 			minRate:         20.0,
 			maxRate:         30.0,
 			wantInitialRate: 25.0,
-			wantCeiling:     30.0,
+			wantCeiling:     25.0,
 		},
 	}
 
@@ -1000,7 +1000,8 @@ func TestAdaptiveRateLimiter_BasicState(t *testing.T) {
 				t.Errorf("GetCurrentRate() = %.2f, want %.2f", got, tt.wantInitialRate)
 			}
 
-			// Test ceiling starts at maxRate
+			// Test ceiling starts at initialRate — seeding it at maxRate made
+			// the first 429 window blend toward maxRate and raise the rate.
 			if got := arl.estimatedCeiling; got != tt.wantCeiling {
 				t.Errorf("estimatedCeiling = %.2f, want %.2f", got, tt.wantCeiling)
 			}
@@ -1509,8 +1510,16 @@ func repeatOps(n int, op operation) []operation {
 
 // TestAdaptiveRateLimiter_EWMAMath verifies the EWMA ceiling calculation matches formula
 func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
-	// EWMA formula: new_ceiling = alpha * current_rate + (1-alpha) * old_ceiling
-	// Default alpha is 0.3, so: new_ceiling = 0.3 * current_rate + 0.7 * old_ceiling
+	// EWMA formula: new_ceiling = alpha * accepted_rate + (1-alpha) * old_ceiling,
+	// where accepted_rate = current_rate * (1 - error_429_rate) — the throughput
+	// upstream actually took, not the rate we attempted. Default alpha is 0.3.
+	//
+	// The observation deliberately is NOT current_rate: current_rate is itself
+	// ceiling*(1-holdMargin), which made the update a fixed 0.6% decay per
+	// window regardless of how hard the window was rejected.
+	//
+	// Each case's 429 count is out of 101 requests, not 100 — the trailing
+	// RecordSuccess that forces the window is itself counted.
 
 	tests := []struct {
 		name           string
@@ -1536,11 +1545,12 @@ func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
 			initialCeiling: 50.0,
 			currentRate:    30.0,
 			percent429:     10.0,
-			// new_ceiling = 0.3 * 30 + 0.7 * 50 = 9 + 35 = 44
-			wantNewCeiling: 44.0,
-			// hold_rate = 44 * (1 - 0.02) = 44 * 0.98 = 43.12
-			wantHoldRate: 43.12,
-			description:  "Standard EWMA: 30% weight to current rate, 70% to old ceiling",
+			// accepted = 30 * (1 - 10/101) = 27.0297
+			// new_ceiling = 0.3 * 27.0297 + 0.7 * 50 = 8.1089 + 35 = 43.1089
+			wantNewCeiling: 43.1089,
+			// hold_rate = 43.1089 * (1 - 0.02) = 42.2467
+			wantHoldRate: 42.2467,
+			description:  "Standard EWMA: 30% weight to accepted rate, 70% to old ceiling",
 		},
 		{
 			name:           "alpha=0.3 severe 429 burst at high rate",
@@ -1552,11 +1562,12 @@ func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
 			initialCeiling: 50.0,
 			currentRate:    48.0,
 			percent429:     20.0,
-			// new_ceiling = 0.3 * 48 + 0.7 * 50 = 14.4 + 35 = 49.4
-			wantNewCeiling: 49.4,
-			// hold_rate = 49.4 * 0.98 = 48.412
-			wantHoldRate: 48.412,
-			description:  "High current rate near ceiling still reduces ceiling slightly",
+			// accepted = 48 * (1 - 20/101) = 38.4951
+			// new_ceiling = 0.3 * 38.4951 + 0.7 * 50 = 11.5485 + 35 = 46.5485
+			wantNewCeiling: 46.5485,
+			// hold_rate = 46.5485 * 0.98 = 45.6175
+			wantHoldRate: 45.6175,
+			description:  "A 20% rejection at a high rate cuts the ceiling by 3.45, not 0.6",
 		},
 		{
 			name:           "alpha=0.3 moderate drop from ceiling",
@@ -1568,11 +1579,12 @@ func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
 			initialCeiling: 50.0,
 			currentRate:    40.0,
 			percent429:     8.0,
-			// new_ceiling = 0.3 * 40 + 0.7 * 50 = 12 + 35 = 47
-			wantNewCeiling: 47.0,
-			// hold_rate = 47 * 0.98 = 46.06
-			wantHoldRate: 46.06,
-			description:  "Current rate 10 below ceiling pulls ceiling down by 3",
+			// accepted = 40 * (1 - 8/101) = 36.8317
+			// new_ceiling = 0.3 * 36.8317 + 0.7 * 50 = 11.0495 + 35 = 46.0495
+			wantNewCeiling: 46.0495,
+			// hold_rate = 46.0495 * 0.98 = 45.1285
+			wantHoldRate: 45.1285,
+			description:  "A mild 8% rejection trims the ceiling gently",
 		},
 		{
 			name:           "alpha=0.5 more reactive smoothing",
@@ -1584,10 +1596,11 @@ func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
 			initialCeiling: 50.0,
 			currentRate:    30.0,
 			percent429:     10.0,
-			// new_ceiling = 0.5 * 30 + 0.5 * 50 = 15 + 25 = 40
-			wantNewCeiling: 40.0,
-			// hold_rate = 40 * 0.98 = 39.2
-			wantHoldRate: 39.2,
+			// accepted = 30 * (1 - 10/101) = 27.0297
+			// new_ceiling = 0.5 * 27.0297 + 0.5 * 50 = 13.5149 + 25 = 38.5149
+			wantNewCeiling: 38.5149,
+			// hold_rate = 38.5149 * 0.98 = 37.7446
+			wantHoldRate: 37.7446,
 			description:  "Higher alpha (0.5) gives more weight to current observation",
 		},
 		{
@@ -1600,10 +1613,11 @@ func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
 			initialCeiling: 50.0,
 			currentRate:    30.0,
 			percent429:     10.0,
-			// new_ceiling = 0.1 * 30 + 0.9 * 50 = 3 + 45 = 48
-			wantNewCeiling: 48.0,
-			// hold_rate = 48 * 0.98 = 47.04
-			wantHoldRate: 47.04,
+			// accepted = 30 * (1 - 10/101) = 27.0297
+			// new_ceiling = 0.1 * 27.0297 + 0.9 * 50 = 2.7030 + 45 = 47.7030
+			wantNewCeiling: 47.703,
+			// hold_rate = 47.703 * 0.98 = 46.7489
+			wantHoldRate: 46.7489,
 			description:  "Lower alpha (0.1) gives more weight to historical ceiling",
 		},
 		{
@@ -1616,12 +1630,13 @@ func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
 			initialCeiling: 50.0,
 			currentRate:    25.0,
 			percent429:     15.0,
-			// First update: new_ceiling = 0.3 * 25 + 0.7 * 50 = 7.5 + 35 = 42.5
-			// But we only do one window here, so ceiling = 42.5
-			wantNewCeiling: 42.5,
-			// hold_rate = 42.5 * 0.98 = 41.65
-			wantHoldRate: 41.65,
-			description:  "First EWMA update from 50 to 42.5",
+			// accepted = 25 * (1 - 15/101) = 21.2871
+			// First update: new_ceiling = 0.3 * 21.2871 + 0.7 * 50 = 6.3861 + 35 = 41.3861
+			// But we only do one window here, so ceiling = 41.3861
+			wantNewCeiling: 41.3861,
+			// hold_rate = 41.3861 * 0.98 = 40.5584
+			wantHoldRate: 40.5584,
+			description:  "First EWMA update from 50 to 41.3861",
 		},
 		{
 			name:           "alpha=0.3 near-minimum rate preserves floor",
@@ -1633,10 +1648,11 @@ func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
 			initialCeiling: 50.0,
 			currentRate:    2.0,
 			percent429:     100.0,
-			// new_ceiling = 0.3 * 2 + 0.7 * 50 = 0.6 + 35 = 35.6
-			wantNewCeiling: 35.6,
-			// hold_rate = 35.6 * 0.98 = 34.888, but min is 1.0, so final rate is clamped
-			wantHoldRate: 34.888,
+			// accepted = 2 * (1 - 100/101) = 0.0198
+			// new_ceiling = 0.3 * 0.0198 + 0.7 * 50 = 0.0059 + 35 = 35.0059
+			wantNewCeiling: 35.0059,
+			// hold_rate = 35.0059 * 0.98 = 34.3058, above the 1.0 floor
+			wantHoldRate: 34.3058,
 			description:  "Even extreme 429s at low rate still produce valid ceiling",
 		},
 		{
@@ -1649,6 +1665,7 @@ func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
 			initialCeiling: 50.0,
 			currentRate:    0.0,
 			percent429:     100.0,
+			// accepted = 0 * anything = 0
 			// new_ceiling = 0.3 * 0 + 0.7 * 50 = 0 + 35 = 35
 			wantNewCeiling: 35.0,
 			// hold_rate = 35 * 0.98 = 34.3
@@ -1695,8 +1712,8 @@ func TestAdaptiveRateLimiter_EWMAMath(t *testing.T) {
 			if gotCeiling < tt.wantNewCeiling-tolerance || gotCeiling > tt.wantNewCeiling+tolerance {
 				t.Errorf("%s: EWMA ceiling = %.4f, want %.4f±%.2f\n%s",
 					tt.name, gotCeiling, tt.wantNewCeiling, tolerance, tt.description)
-				t.Logf("  Formula: new_ceiling = %.2f * %.2f + %.2f * %.2f = %.2f",
-					tt.alpha, tt.currentRate, 1-tt.alpha, tt.initialCeiling, tt.wantNewCeiling)
+				t.Logf("  Formula: new_ceiling = %.2f * (%.2f * (1 - %.4f)) + %.2f * %.2f = %.4f",
+					tt.alpha, tt.currentRate, tt.percent429/101.0, 1-tt.alpha, tt.initialCeiling, tt.wantNewCeiling)
 			}
 
 			// Verify hold position rate (before min clamping)
@@ -2514,12 +2531,20 @@ func TestProbeActivatesAfterCleanWindows(t *testing.T) {
 			arl.holdMargin = tt.holdMargin
 			arl.probeInterval = tt.probeInterval
 
+			// A probe steps to ceiling*(1+holdMargin); anything else leaves the
+			// rate at or below the ceiling. Compare against the probe rate, not
+			// the hold rate: the limiter now seeds estimatedCeiling from
+			// initialRate, so it starts 2% *above* its own hold point and
+			// "rate > holdRate" no longer distinguishes a probe from holding
+			// steady. (It only did while the ceiling was seeded at maxRate,
+			// which left the limiter starting far below its hold point.)
 			holdRate := arl.estimatedCeiling * (1 - tt.holdMargin)
+			probeRate := arl.estimatedCeiling * (1 + tt.holdMargin)
 			initialRate := arl.GetCurrentRate()
 
 			t.Logf(tt.description)
-			t.Logf("  Initial rate: %.2f, hold position: %.2f, interval: %d",
-				initialRate, holdRate, tt.probeInterval)
+			t.Logf("  Initial rate: %.2f, hold position: %.2f, probe position: %.2f, interval: %d",
+				initialRate, holdRate, probeRate, tt.probeInterval)
 
 			// Simulate clean windows (0% 429 rate, well below 1% threshold)
 			for i := 0; i < tt.cleanWindows; i++ {
@@ -2537,19 +2562,19 @@ func TestProbeActivatesAfterCleanWindows(t *testing.T) {
 
 			// Verify probe activation behavior
 			if tt.cleanWindows >= tt.probeInterval {
-				// Probe should activate - rate should exceed hold position
-				if finalRate <= holdRate {
-					t.Errorf("After %d clean windows (interval=%d), rate %.2f should exceed hold position %.2f",
-						tt.cleanWindows, tt.probeInterval, finalRate, holdRate)
+				// Probe should activate - rate should reach the probe position
+				if finalRate < probeRate {
+					t.Errorf("After %d clean windows (interval=%d), rate %.2f should reach probe position %.2f",
+						tt.cleanWindows, tt.probeInterval, finalRate, probeRate)
 				}
-				t.Logf("✓ Probe activated: rate %.2f > hold %.2f", finalRate, holdRate)
+				t.Logf("✓ Probe activated: rate %.2f ≥ probe %.2f", finalRate, probeRate)
 			} else {
-				// Probe should NOT activate - rate should be at or below hold position
-				if finalRate > holdRate {
-					t.Errorf("After only %d clean windows (interval=%d), rate %.2f should not exceed hold position %.2f",
-						tt.cleanWindows, tt.probeInterval, finalRate, holdRate)
+				// Probe should NOT activate - rate should stay below the probe position
+				if finalRate >= probeRate {
+					t.Errorf("After only %d clean windows (interval=%d), rate %.2f should not reach probe position %.2f",
+						tt.cleanWindows, tt.probeInterval, finalRate, probeRate)
 				}
-				t.Logf("✓ No probe (before interval): rate %.2f ≤ hold %.2f", finalRate, holdRate)
+				t.Logf("✓ No probe (before interval): rate %.2f < probe %.2f", finalRate, probeRate)
 			}
 
 			// Verify cleanWindows counter state
@@ -3113,16 +3138,19 @@ func TestCleanWindowCounterAccumulation(t *testing.T) {
 					tt.cleanWindows, arl.cleanWindows, tt.cleanWindows)
 			}
 
-			// Verify rate is at or below hold position (no probe yet)
-			holdRate := arl.estimatedCeiling * (1 - tt.holdMargin)
+			// Verify no probe fired. Compare against the probe position, not the
+			// hold position: the limiter seeds estimatedCeiling from initialRate,
+			// so it starts at the ceiling itself — 2% above its own hold point —
+			// and holding steady there is not a probe.
+			probeRate := arl.estimatedCeiling * (1 + tt.holdMargin)
 			currentRate := arl.GetCurrentRate()
-			if currentRate > holdRate+0.01 {
-				t.Errorf("After %d clean windows (below probe interval), rate %.2f should not exceed hold %.2f",
-					tt.cleanWindows, currentRate, holdRate)
+			if currentRate >= probeRate-0.01 {
+				t.Errorf("After %d clean windows (below probe interval), rate %.2f should not reach probe position %.2f",
+					tt.cleanWindows, currentRate, probeRate)
 			}
 
-			t.Logf("✓ Counter accumulation verified: cleanWindows=%d, rate=%.2f (hold=%.2f)",
-				arl.cleanWindows, currentRate, holdRate)
+			t.Logf("✓ Counter accumulation verified: cleanWindows=%d, rate=%.2f (probe=%.2f)",
+				arl.cleanWindows, currentRate, probeRate)
 		})
 	}
 }
@@ -3276,8 +3304,11 @@ func TestCleanWindowRateConvergence(t *testing.T) {
 			description:      "When starting at or above hold position, clean windows should not increase rate",
 		},
 		{
-			name:             "rate converges stepwise toward hold",
-			initialRate:      10.0,
+			name: "rate converges stepwise toward hold",
+			// initialRate seeds estimatedCeiling, so it must sit above
+			// startRate for there to be a gap to converge across. This case
+			// previously relied on the ceiling being seeded at maxRate.
+			initialRate:      50.0,
 			minRate:          1.0,
 			maxRate:          50.0,
 			holdMargin:       0.02,

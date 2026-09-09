@@ -234,7 +234,7 @@ func TestRestoreFromStateFileFreshStateResumesAtStoredCeiling(t *testing.T) {
 }
 
 // TestRestoreFromStateFileStaleStateIgnored verifies a stale snapshot is
-// ignored and the limiter keeps the pre-restart assumption of RATE_LIMIT_MAX.
+// ignored and the limiter keeps the constructor's RATE_LIMIT_INITIAL seed.
 func TestRestoreFromStateFileStaleStateIgnored(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ceiling.json")
 	writeStateFile(t, path, RateLimitState{
@@ -252,17 +252,25 @@ func TestRestoreFromStateFileStaleStateIgnored(t *testing.T) {
 	gotCeiling, restored := arl.estimatedCeiling, arl.restoredFromState
 	arl.mu.RUnlock()
 
-	if gotCeiling != 40.0 {
-		t.Errorf("Ceiling after ignoring stale state = %.2f, want the RATE_LIMIT_MAX 40.00", gotCeiling)
+	if gotCeiling != 8.0 {
+		t.Errorf("Ceiling after ignoring stale state = %.2f, want the RATE_LIMIT_INITIAL 8.00", gotCeiling)
 	}
 	if restored {
 		t.Error("restoredFromState = true after ignoring stale state, want false")
 	}
 }
 
-// TestRestoreFromStateFileMissingStateStartsFromMax verifies the no-file case
-// behaves exactly like the pre-persistence behaviour.
-func TestRestoreFromStateFileMissingStateStartsFromMax(t *testing.T) {
+// TestRestoreFromStateFileMissingStateStartsFromInitial verifies the no-file
+// case falls back to the constructor's seed, RATE_LIMIT_INITIAL.
+//
+// It used to fall back to RATE_LIMIT_MAX, which is the restart spike this
+// persistence work exists to avoid: the first 429 window blends toward the
+// seed, so a maxRate seed *raised* the rate well above RATE_LIMIT_INITIAL
+// before any learning had happened. Persistence hides that only when a fresh
+// snapshot exists; seeding from initialRate also covers the cold starts it
+// cannot help with — first deploy, a stale snapshot, or downtime past the max
+// age.
+func TestRestoreFromStateFileMissingStateStartsFromInitial(t *testing.T) {
 	arl := NewAdaptiveRateLimiterWithWindow(8.0, 0.5, 40.0, 30*time.Second)
 	if arl.RestoreFromStateFile(filepath.Join(t.TempDir(), "ceiling.json"), config.DefaultRateLimitStateMaxAge) {
 		t.Error("RestoreFromStateFile() = true with no state file, want false")
@@ -272,8 +280,8 @@ func TestRestoreFromStateFileMissingStateStartsFromMax(t *testing.T) {
 	gotCeiling := arl.estimatedCeiling
 	arl.mu.RUnlock()
 
-	if gotCeiling != 40.0 {
-		t.Errorf("Ceiling with no state file = %.2f, want RATE_LIMIT_MAX 40.00", gotCeiling)
+	if gotCeiling != 8.0 {
+		t.Errorf("Ceiling with no state file = %.2f, want RATE_LIMIT_INITIAL 8.00", gotCeiling)
 	}
 }
 
@@ -482,8 +490,8 @@ func TestHealthStateWithoutCeilingUpdate(t *testing.T) {
 	arl := NewAdaptiveRateLimiterWithWindow(8.0, 0.5, 40.0, 30*time.Second)
 
 	health := arl.HealthState()
-	if health.Ceiling != 40.0 {
-		t.Errorf("HealthState() ceiling = %.2f, want the RATE_LIMIT_MAX 40.00", health.Ceiling)
+	if health.Ceiling != 8.0 {
+		t.Errorf("HealthState() ceiling = %.2f, want the RATE_LIMIT_INITIAL 8.00", health.Ceiling)
 	}
 	if health.CeilingUpdatedAt != "" {
 		t.Errorf("HealthState() ceiling_updated_at = %q before any learning, want empty", health.CeilingUpdatedAt)
@@ -519,8 +527,8 @@ func TestHealthHandler(t *testing.T) {
 	if payload.Status != "ok" {
 		t.Errorf("/health status field = %q, want \"ok\"", payload.Status)
 	}
-	if payload.RateLimit.Ceiling != 40.0 {
-		t.Errorf("/health rate_limit.ceiling = %.2f, want 40.00", payload.RateLimit.Ceiling)
+	if payload.RateLimit.Ceiling != 8.0 {
+		t.Errorf("/health rate_limit.ceiling = %.2f, want 8.00", payload.RateLimit.Ceiling)
 	}
 	if payload.RateLimit.StateFile != config.DefaultRateLimitStateFile {
 		t.Errorf("/health rate_limit.state_file = %q, want %q", payload.RateLimit.StateFile, config.DefaultRateLimitStateFile)

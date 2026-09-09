@@ -83,15 +83,22 @@ func NewAdaptiveRateLimiter(initialRate, minRate, maxRate float64) *AdaptiveRate
 // Use this for tests to inject shorter durations (e.g., 1ms or 100ms) for fast execution without sleeping.
 func NewAdaptiveRateLimiterWithWindow(initialRate, minRate, maxRate float64, windowDuration time.Duration) *AdaptiveRateLimiter {
 	arl := &AdaptiveRateLimiter{
-		limiter:            rate.NewLimiter(rate.Limit(initialRate), limiterBurst(initialRate)),
-		rateChanged:        make(chan struct{}),
-		currentRate:        initialRate,
-		minRate:            minRate,
-		maxRate:            maxRate,
-		estimatedCeiling:   maxRate, // Assume max until we learn otherwise
-		ceilingSmoothAlpha: 0.3,     // 30% new observation, 70% history
-		holdMargin:         0.02,    // Hold 2% below estimated ceiling
-		probeInterval:      10,      // Probe every 10 clean windows (5 min at 30s windows)
+		limiter:     rate.NewLimiter(rate.Limit(initialRate), limiterBurst(initialRate)),
+		rateChanged: make(chan struct{}),
+		currentRate: initialRate,
+		minRate:     minRate,
+		maxRate:     maxRate,
+		// Seed from initialRate, not maxRate. The first 429 window feeds the
+		// EWMA below, which blends toward the seed: seeding at maxRate made
+		// that first window *raise* the rate far above initialRate (observed
+		// in production 2026-09-08: launched at 8 req/s, the first 429 window
+		// logged "Ceiling updated 40.00 -> 30.40" and the limiter jumped to
+		// 29.79 req/s, then needed two hours to crawl back). Reset() already
+		// seeds from its own initialRate; this makes startup agree with it.
+		estimatedCeiling:   initialRate,
+		ceilingSmoothAlpha: 0.3,  // 30% new observation, 70% history
+		holdMargin:         0.02, // Hold 2% below estimated ceiling
+		probeInterval:      10,   // Probe every 10 clean windows (5 min at 30s windows)
 		cleanWindows:       0,
 		lastAdjustment:     time.Now(),
 		adjustmentWindow:   windowDuration,
@@ -275,9 +282,31 @@ func (arl *AdaptiveRateLimiter) tryAdjustRate() {
 	ceilingUpdated := false
 
 	if error429Rate > 0.05 {
-		// 429s detected — update ceiling estimate via EWMA
+		// 429s detected — update ceiling estimate via EWMA.
+		//
+		// The observation fed to the EWMA is the rate upstream actually
+		// *accepted*, not the rate we attempted. Feeding it currentRate makes
+		// the loop self-referential: currentRate is itself ceiling*(1-margin),
+		// so the update collapses to ceiling' = ceiling*(1 - alpha*margin) — a
+		// fixed 0.6% decay per window at the default alpha=0.3, margin=0.02,
+		// no matter whether the window saw 6% 429s or 95%. Production ran at a
+		// sustained 70-90% 429 rate for days while the estimate crept down
+		// 0.6% per 30s window (2026-09-08); reaching a sustainable rate that
+		// way takes hours, and ten clean windows re-probe upward before it
+		// arrives. Observing the accepted rate makes the backoff proportional
+		// to how badly the window was rejected, which is the signal we have.
 		oldCeiling := arl.estimatedCeiling
-		arl.estimatedCeiling = arl.ceilingSmoothAlpha*arl.currentRate + (1-arl.ceilingSmoothAlpha)*arl.estimatedCeiling
+		acceptedRate := arl.currentRate * (1 - error429Rate)
+		arl.estimatedCeiling = arl.ceilingSmoothAlpha*acceptedRate + (1-arl.ceilingSmoothAlpha)*arl.estimatedCeiling
+
+		// Floor the estimate itself, not just the rate derived from it. A
+		// stretch of near-total rejection drives the EWMA toward zero, and a
+		// zero estimate is unrecoverable: both the hold point and the probe
+		// rate are multiples of the ceiling, so the loop would have nothing
+		// to climb from once upstream recovered.
+		if arl.estimatedCeiling < arl.minRate {
+			arl.estimatedCeiling = arl.minRate
+		}
 		arl.cleanWindows = 0
 		arl.lastCeilingUpdate = time.Now()
 		ceilingUpdated = true
@@ -293,6 +322,22 @@ func (arl *AdaptiveRateLimiter) tryAdjustRate() {
 
 	} else if error429Rate < 0.01 {
 		arl.cleanWindows++
+
+		// A clean window at a rate above the estimate is direct evidence the
+		// ceiling is at least that high. Record it, otherwise the probe below
+		// is a no-op loop: it steps to ceiling*(1+margin), the window comes
+		// back clean, nothing updates the estimate, and the next probe re-tests
+		// the exact same rate forever. The estimate could only ever move down,
+		// so a single bad burst pinned the limiter low permanently.
+		if arl.currentRate > arl.estimatedCeiling {
+			oldCeiling := arl.estimatedCeiling
+			arl.estimatedCeiling = arl.currentRate
+			arl.lastCeilingUpdate = time.Now()
+			ceilingUpdated = true
+			log.Printf("Rate limit: Ceiling raised %.2f → %.2f req/s (clean window sustained at %.2f req/s)",
+				oldCeiling, arl.estimatedCeiling, arl.currentRate)
+		}
+
 		targetRate := arl.estimatedCeiling * (1 - arl.holdMargin)
 
 		if arl.probeInterval > 0 && arl.cleanWindows >= arl.probeInterval && arl.currentRate < arl.maxRate {

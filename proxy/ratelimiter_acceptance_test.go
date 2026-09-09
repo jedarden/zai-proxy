@@ -20,6 +20,10 @@ func TestRatelimiterAcceptance_ProbeBehavior(t *testing.T) {
 
 		initialRate := arl.GetCurrentRate()
 		holdRate := arl.estimatedCeiling * (1 - arl.holdMargin)
+		// The limiter seeds estimatedCeiling from initialRate, so it starts at
+		// the ceiling — 2% above its own hold point. "Above hold" therefore no
+		// longer means "probed"; the probe position does.
+		probePosition := arl.estimatedCeiling * (1 + arl.holdMargin)
 
 		// Record 4 clean windows (below probe interval of 5)
 		for i := 0; i < 4; i++ {
@@ -33,9 +37,9 @@ func TestRatelimiterAcceptance_ProbeBehavior(t *testing.T) {
 		}
 
 		rateBeforeProbe := arl.GetCurrentRate()
-		if rateBeforeProbe > holdRate {
-			t.Errorf("Rate should not exceed hold before probe interval: got %.2f, hold %.2f",
-				rateBeforeProbe, holdRate)
+		if rateBeforeProbe >= probePosition {
+			t.Errorf("Rate should not reach the probe position before the probe interval: got %.2f, probe %.2f",
+				rateBeforeProbe, probePosition)
 		}
 
 		// Record one more clean window to reach probe interval
@@ -49,10 +53,10 @@ func TestRatelimiterAcceptance_ProbeBehavior(t *testing.T) {
 
 		finalRate := arl.GetCurrentRate()
 
-		// After probe interval, rate should be above hold
-		if finalRate <= holdRate {
-			t.Errorf("After probe interval, rate should exceed hold: got %.2f, hold %.2f",
-				finalRate, holdRate)
+		// After probe interval, rate should reach the probe position
+		if finalRate < probePosition {
+			t.Errorf("After probe interval, rate should reach the probe position: got %.2f, probe %.2f",
+				finalRate, probePosition)
 		}
 
 		// Rate should probe above ceiling (ceiling * (1 + holdMargin))
@@ -1046,11 +1050,11 @@ func TestEnvVarOverridesConfig(t *testing.T) {
 	}()
 
 	tests := []struct {
-		name              string
-		setEnv            map[string]string
-		wantValues        map[string]float64
-		wantIntValues     map[string]int
-		validationMsg     string
+		name          string
+		setEnv        map[string]string
+		wantValues    map[string]float64
+		wantIntValues map[string]int
+		validationMsg string
 	}{
 		{
 			name: "rate_limit_initial_env_overrides_default",
@@ -1115,11 +1119,11 @@ func TestEnvVarOverridesConfig(t *testing.T) {
 		{
 			name: "multiple_env_vars_override_together",
 			setEnv: map[string]string{
-				"RATE_LIMIT_INITIAL":       "20.0",
-				"RATE_LIMIT_MIN":           "2.0",
-				"RATE_LIMIT_MAX":           "80.0",
-				"RATE_LIMIT_CEILING_ALPHA": "0.6",
-				"RATE_LIMIT_HOLD_MARGIN":   "0.04",
+				"RATE_LIMIT_INITIAL":        "20.0",
+				"RATE_LIMIT_MIN":            "2.0",
+				"RATE_LIMIT_MAX":            "80.0",
+				"RATE_LIMIT_CEILING_ALPHA":  "0.6",
+				"RATE_LIMIT_HOLD_MARGIN":    "0.04",
 				"RATE_LIMIT_PROBE_INTERVAL": "12",
 			},
 			wantValues: map[string]float64{
@@ -1541,7 +1545,6 @@ func TestOverridePriority(t *testing.T) {
 	})
 }
 
-
 // TestAdaptiveRateLimiter_NonCleanWindowDetection validates that windows with 429-rate >= 1% are correctly identified as non-clean
 // Note: Due to floating point precision, 1/100 may be calculated as slightly less than 0.01
 func TestAdaptiveRateLimiter_NonCleanWindowDetection(t *testing.T) {
@@ -1858,10 +1861,10 @@ func TestAdaptiveRateLimiter_NonCleanWindowBoundaryTests(t *testing.T) {
 
 	t.Run("range_between_1_and_5_percent_all_non_clean", func(t *testing.T) {
 		testCases := []struct {
-			percent         float64
-			total           int
-			expectedClean   bool
-			shouldReset     bool
+			percent       float64
+			total         int
+			expectedClean bool
+			shouldReset   bool
 		}{
 			{1.5, 200, false, false},
 			{2.0, 200, false, false},

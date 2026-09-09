@@ -61,7 +61,6 @@ func TestAdaptiveRateLimiterProbeCanBeDisabled(t *testing.T) {
 
 func TestAdaptiveRateLimiterProbeRepeatsAfterCooldown(t *testing.T) {
 	arl := newProbeEdgeLimiter(2)
-	probeRate := arl.estimatedCeiling * (1 + arl.holdMargin)
 
 	for cycle := 1; cycle <= 3; cycle++ {
 		// This is the cooldown window after the previous probe (or before the
@@ -70,6 +69,14 @@ func TestAdaptiveRateLimiterProbeRepeatsAfterCooldown(t *testing.T) {
 		if got, want := arl.cleanWindows, 1; got != want {
 			t.Fatalf("cycle %d cooldown: cleanWindows = %d, want %d", cycle, got, want)
 		}
+
+		// Read the expected probe rate after the cooldown window, not before:
+		// that window is where a probe the previous cycle sustained gets
+		// recorded, raising the estimate to the rate it proved. Each cycle
+		// therefore probes from a higher base. Pinning one value for all three
+		// would assert the old behaviour, where a clean probe was discarded and
+		// every cycle re-tested the identical rate forever.
+		probeRate := arl.estimatedCeiling * (1 + arl.holdMargin)
 
 		// The next clean window completes the interval and activates a new probe.
 		recordWindow(t, arl, 0, 1)
