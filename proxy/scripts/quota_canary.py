@@ -149,16 +149,20 @@ VERDICTS = ("agree", "divergent")
 # ---- Secret scanner ----------------------------------------------------------
 #
 # Patterns cover the shapes a credential actually takes in this workflow: a
-# key or token assigned as a literal, a long hex or base64 run, and a bearer
-# header. They are deliberately conservative about prose -- a scanner that
-# cries wolf gets skipped -- and there is no suppression mechanism, so a
-# finding is always actionable: remove the material.
+# key or token assigned as a literal or written as a JSON field -- the shape
+# it must take to hide in a fixture, which is all JSON -- a long hex or base64
+# run, and a bearer header. They are deliberately conservative about prose --
+# a scanner that cries wolf gets skipped -- and there is no suppression
+# mechanism, so a finding is always actionable: remove the material.
 
 SECRET_PATTERNS = [
     (
+        # The optional quote after the key name is what lets this see
+        # "api_key": "..." -- without it the JSON closing quote sits between
+        # the key and the colon and the whole fixture-shaped class goes dark.
         "credential_literal",
         re.compile(
-            r"(?i)\b(api[_-]?key|apikey|token|secret|password|passwd)\b\s*[:=]\s*"
+            r"(?i)\b(api[_-]?key|apikey|token|secret|password|passwd)\b[\"']?\s*[:=]\s*"
             r"[\"']?([A-Za-z0-9+/_-]{16,})[\"']?"
         ),
     ),
@@ -686,11 +690,17 @@ def planted_secrets() -> dict[str, str]:
     shape the encoded-run heuristics deliberately skip (see PATH_TOKEN). It
     must still be found, by the keyed-literal pattern that reads the whole
     text, or the path scoping has silently become an allowlist.
+
+    ``credential_json_field`` plants the same keyed literal as a JSON field,
+    with the key quoted on both sides: the closing quote before the colon is
+    exactly what the pattern must tolerate, or the fixtures -- all JSON --
+    become the one place a 16+ character key value can hide.
     """
     quote = chr(34)
     value = "".join(["AbCdEf", "123456GhIjKl", "67890MnOpQr"])
     return {
         "credential_literal": "api_key = " + quote + value + quote,
+        "credential_json_field": "{" + quote + "api_key" + quote + ": " + quote + value + quote + "}",
         "credential_in_path": "token=/run/agent/" + value,
         "hex_run": "deadbeef" * 8,
         "base64_run": "ABCDEFGHIJKLMNOPQRSTUVWXYZ" + "abcdefghijklmnop",

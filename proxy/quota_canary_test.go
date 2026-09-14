@@ -412,7 +412,10 @@ func TestQuotaObserveOnlyCanary(t *testing.T) {
 // The case table must stay identical to the script's HERMETIC_ROUNDS rotation,
 // and the rotation cross-check below is what keeps that true: a pair added to
 // one side only is either a proxy view the script serves with no pin to the
-// renderer, or a pin the script never observes.
+// renderer, or a pin the script never observes. The pair set has a third copy
+// in the committed directory, so the same cross-check pins the directory to
+// the pairs in both directions: a fixture pair with no entry on either side,
+// and a pinned pair whose files were never committed, both fail here.
 func TestQuotaCanaryProxyViewFixtures(t *testing.T) {
 	cases := []struct{ provider, view string }{
 		{"healthy.json", "proxy_quota_view_healthy.json"},
@@ -429,6 +432,28 @@ func TestQuotaCanaryProxyViewFixtures(t *testing.T) {
 		if pair[0] != cases[i].provider || pair[1] != cases[i].view {
 			t.Errorf("script rotation[%d] = (%q, %q), this test pins (%q, %q)",
 				i, pair[0], pair[1], cases[i].provider, cases[i].view)
+		}
+	}
+
+	// The pair set lives in one more place: the committed directory. A pair
+	// dropped into testdata/quota_canary with no entry on either side above
+	// would be a scenario the hermetic run silently never observes, so the
+	// directory must hold exactly the pinned pairs -- no fixture without a
+	// pair, no pair without its files.
+	onDisk := canaryFixtureNames(t)
+	pinned := make(map[string]bool, len(cases)*2)
+	for _, tc := range cases {
+		pinned[tc.provider] = true
+		pinned[tc.view] = true
+	}
+	for name := range onDisk {
+		if !pinned[name] {
+			t.Errorf("testdata/quota_canary/%s belongs to no pinned pair -- add it to HERMETIC_ROUNDS and this case table, or remove it", name)
+		}
+	}
+	for name := range pinned {
+		if !onDisk[name] {
+			t.Errorf("the pinned pairs name testdata/quota_canary/%s, which is not committed", name)
 		}
 	}
 
@@ -703,6 +728,26 @@ func canaryScriptRotationPairs(t *testing.T) [][2]string {
 		t.Fatalf("HERMETIC_ROUNDS in scripts/quota_canary.py holds no fixture pairs")
 	}
 	return rotation
+}
+
+// canaryFixtureNames lists the fixture files committed under
+// testdata/quota_canary by name, so the pair pin can require the directory to
+// hold exactly the pinned pairs and nothing else.
+func canaryFixtureNames(t *testing.T) map[string]bool {
+	t.Helper()
+
+	matches, err := filepath.Glob(filepath.Join("testdata", "quota_canary", "*.json"))
+	if err != nil {
+		t.Fatalf("globbing testdata/quota_canary: %v", err)
+	}
+	names := make(map[string]bool, len(matches))
+	for _, path := range matches {
+		names[filepath.Base(path)] = true
+	}
+	if len(names) == 0 {
+		t.Fatal("testdata/quota_canary holds no fixture files")
+	}
+	return names
 }
 
 func canaryLogf(t *testing.T, format string, args ...any) {
