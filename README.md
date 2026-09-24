@@ -114,7 +114,7 @@ The proxy exposes standard Prometheus metrics at `/metrics`:
 
 ## License
 
-See [LICENSE](LICENSE) if present, or contact the maintainer.
+MIT — see [LICENSE](LICENSE).
 
 ---
 
