@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -71,6 +72,7 @@ func TestRecordUsageRecordsEstimatedCost(t *testing.T) {
 func TestRecordInputTokens(t *testing.T) {
 	// Reset metrics before test
 	tokensTotal.Reset()
+	tier := GetPricingTier()
 
 	tests := []struct {
 		name     string
@@ -112,13 +114,13 @@ func TestRecordInputTokens(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Get initial count
-			initialCount := testutil.ToFloat64(tokensTotal.WithLabelValues("input", tt.model, tt.version, "off_peak"))
+			initialCount := testutil.ToFloat64(tokensTotal.WithLabelValues("input", tt.model, tt.version, tier))
 
 			// Record tokens
 			RecordInputTokens(tt.model, tt.version, tt.count)
 
 			// Get final count
-			finalCount := testutil.ToFloat64(tokensTotal.WithLabelValues("input", tt.model, tt.version, "off_peak"))
+			finalCount := testutil.ToFloat64(tokensTotal.WithLabelValues("input", tt.model, tt.version, tier))
 
 			if tt.wantZero {
 				// Should not have changed
@@ -139,6 +141,7 @@ func TestRecordInputTokens(t *testing.T) {
 func TestRecordOutputTokens(t *testing.T) {
 	// Reset metrics before test
 	tokensTotal.Reset()
+	tier := GetPricingTier()
 
 	tests := []struct {
 		name     string
@@ -173,13 +176,13 @@ func TestRecordOutputTokens(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Get initial count
-			initialCount := testutil.ToFloat64(tokensTotal.WithLabelValues("output", tt.model, tt.version, "off_peak"))
+			initialCount := testutil.ToFloat64(tokensTotal.WithLabelValues("output", tt.model, tt.version, tier))
 
 			// Record tokens
 			RecordOutputTokens(tt.model, tt.version, tt.count)
 
 			// Get final count
-			finalCount := testutil.ToFloat64(tokensTotal.WithLabelValues("output", tt.model, tt.version, "off_peak"))
+			finalCount := testutil.ToFloat64(tokensTotal.WithLabelValues("output", tt.model, tt.version, tier))
 
 			if tt.wantZero {
 				// Should not have changed
@@ -312,6 +315,7 @@ func TestMetricLabels(t *testing.T) {
 	tokensTotal.Reset()
 	tokenRateSeconds.Reset()
 	tokenRate.Reset()
+	tier := GetPricingTier()
 
 	// Record metrics with different label combinations
 	RecordInputTokens("glm-4", "stable", 100)
@@ -338,7 +342,7 @@ func TestMetricLabels(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			count := testutil.ToFloat64(tokensTotal.WithLabelValues(tt.direction, tt.model, tt.version, "off_peak"))
+			count := testutil.ToFloat64(tokensTotal.WithLabelValues(tt.direction, tt.model, tt.version, tier))
 			if count != tt.wantCount {
 				t.Errorf("Token count mismatch for %s: got=%v, want=%v", tt.name, count, tt.wantCount)
 			}
@@ -354,6 +358,7 @@ func TestMetricNoLeaks(t *testing.T) {
 	tokensTotal.Reset()
 	tokenRateSeconds.Reset()
 	tokenRate.Reset()
+	tier := GetPricingTier()
 
 	// Record metrics multiple times with same labels
 	for i := 0; i < 1000; i++ {
@@ -364,12 +369,12 @@ func TestMetricNoLeaks(t *testing.T) {
 	}
 
 	// Verify counts accumulated correctly (should be 1000)
-	inputCount := testutil.ToFloat64(tokensTotal.WithLabelValues("input", "glm-4", "stable", "off_peak"))
+	inputCount := testutil.ToFloat64(tokensTotal.WithLabelValues("input", "glm-4", "stable", tier))
 	if inputCount != 1000 {
 		t.Errorf("Input token count incorrect after 1000 iterations: got=%v, want=1000", inputCount)
 	}
 
-	outputCount := testutil.ToFloat64(tokensTotal.WithLabelValues("output", "glm-4", "stable", "off_peak"))
+	outputCount := testutil.ToFloat64(tokensTotal.WithLabelValues("output", "glm-4", "stable", tier))
 	if outputCount != 1000 {
 		t.Errorf("Output token count incorrect after 1000 iterations: got=%v, want=1000", outputCount)
 	}
@@ -383,6 +388,7 @@ func TestMetricNoConflicts(t *testing.T) {
 
 	// Reset metrics
 	tokensTotal.Reset()
+	tier := GetPricingTier()
 
 	// Record different combinations
 	RecordInputTokens("glm-4", "stable", 100)
@@ -391,16 +397,16 @@ func TestMetricNoConflicts(t *testing.T) {
 	RecordOutputTokens("glm-4", "canary", 400)
 
 	// Verify each is independent
-	if got := testutil.ToFloat64(tokensTotal.WithLabelValues("input", "glm-4", "stable", "off_peak")); got != 100 {
+	if got := testutil.ToFloat64(tokensTotal.WithLabelValues("input", "glm-4", "stable", tier)); got != 100 {
 		t.Errorf("Input stable tokens incorrect: got=%v, want=100", got)
 	}
-	if got := testutil.ToFloat64(tokensTotal.WithLabelValues("input", "glm-4", "canary", "off_peak")); got != 200 {
+	if got := testutil.ToFloat64(tokensTotal.WithLabelValues("input", "glm-4", "canary", tier)); got != 200 {
 		t.Errorf("Input canary tokens incorrect: got=%v, want=200", got)
 	}
-	if got := testutil.ToFloat64(tokensTotal.WithLabelValues("output", "glm-4", "stable", "off_peak")); got != 300 {
+	if got := testutil.ToFloat64(tokensTotal.WithLabelValues("output", "glm-4", "stable", tier)); got != 300 {
 		t.Errorf("Output stable tokens incorrect: got=%v, want=300", got)
 	}
-	if got := testutil.ToFloat64(tokensTotal.WithLabelValues("output", "glm-4", "canary", "off_peak")); got != 400 {
+	if got := testutil.ToFloat64(tokensTotal.WithLabelValues("output", "glm-4", "canary", tier)); got != 400 {
 		t.Errorf("Output canary tokens incorrect: got=%v, want=400", got)
 	}
 }
@@ -410,6 +416,7 @@ func TestMetricsExportFormat(t *testing.T) {
 	tokensTotal.Reset()
 	tokenRateSeconds.Reset()
 	tokenRate.Reset()
+	tier := GetPricingTier()
 
 	// Record some metrics
 	RecordInputTokens("glm-4", "stable", 100)
@@ -421,8 +428,8 @@ func TestMetricsExportFormat(t *testing.T) {
 		# HELP zai_proxy_tokens_total Total number of tokens processed by direction (input/output), model, deployment variant, and pricing tier
 		# TYPE zai_proxy_tokens_total counter
 	`
-	expectedInputLine := `zai_proxy_tokens_total{direction="input",model="glm-4",pricing_tier="off_peak",variant="stable"} 100`
-	expectedOutputLine := `zai_proxy_tokens_total{direction="output",model="glm-4",pricing_tier="off_peak",variant="stable"} 200`
+	expectedInputLine := fmt.Sprintf(`zai_proxy_tokens_total{direction="input",model="glm-4",pricing_tier="%s",variant="stable"} 100`, tier)
+	expectedOutputLine := fmt.Sprintf(`zai_proxy_tokens_total{direction="output",model="glm-4",pricing_tier="%s",variant="stable"} 200`, tier)
 
 	// Verify metric can be collected
 	if err := testutil.CollectAndCompare(tokensTotal, strings.NewReader(metadata+expectedInputLine+"\n"+expectedOutputLine+"\n")); err != nil {
