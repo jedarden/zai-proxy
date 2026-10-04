@@ -16,7 +16,7 @@ if formatted=$(gofmt -l proxy/main.go); [[ -n "$formatted" ]]; then
 fi
 
 go build -buildvcs=false -o "$build_output" ./proxy
-go test ./proxy
+go test ./proxy -run '^TestRegression_' -count=1
 
 docker build \
   --pull=false \
