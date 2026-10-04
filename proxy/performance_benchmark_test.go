@@ -474,6 +474,10 @@ func TestTokenCountingOverhead(t *testing.T) {
 
 // TestConcurrentLoad tests the system under concurrent load
 func TestConcurrentLoad(t *testing.T) {
+	if testing.Short() {
+		t.Skip("concurrent latency benchmark requires a non-short test run")
+	}
+
 	counter, err := NewTikTokenCounter()
 	if err != nil {
 		t.Skipf("Failed to initialize tokenizer: %v", err)
