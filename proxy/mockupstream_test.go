@@ -357,7 +357,10 @@ func TestMockUpstream_Methods(t *testing.T) {
 		// Set custom retry-after value
 		mock.SetRetryAfter("10")
 
-		resp, _ := http.Get(mock.URL() + "/test")
+		resp, err := http.Get(mock.URL() + "/test")
+		if err != nil {
+			t.Fatalf("Request failed: %v", err)
+		}
 		defer resp.Body.Close()
 
 		if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "10" {
