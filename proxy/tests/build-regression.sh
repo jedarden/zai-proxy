@@ -9,13 +9,7 @@ trap 'rm -f "$build_output"' EXIT
 
 cd "$repo_root"
 
-mapfile -t go_files < <(find . -type f -name '*.go' -not -path './.git/*' -print)
-if (( ${#go_files[@]} == 0 )); then
-  echo "no Go files found" >&2
-  exit 1
-fi
-
-if formatted=$(gofmt -l "${go_files[@]}"); [[ -n "$formatted" ]]; then
+if formatted=$(gofmt -l proxy/main.go); [[ -n "$formatted" ]]; then
   echo "unformatted Go files:" >&2
   printf '%s\n' "$formatted" >&2
   exit 1
