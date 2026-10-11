@@ -36,14 +36,22 @@ func clampRate(v, lo, hi float64) float64 {
 
 // saveRateLimitState atomically writes s to path: a temp file in the same
 // directory followed by a rename, so a reader never sees a half-written
-// snapshot even if the process dies mid-write.
+// snapshot even if the process dies mid-write. The parent directory is
+// created on demand: the Docker image ships no /var/lib/zai-proxy and the
+// proxy runs as non-root, so a bare-container start (or any custom
+// RATE_LIMIT_STATE_FILE under a fresh path) would otherwise fail every
+// persist until someone mkdirs it by hand.
 func saveRateLimitState(path string, s *RateLimitState) error {
 	data, err := json.Marshal(s)
 	if err != nil {
 		return err
 	}
 
-	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}

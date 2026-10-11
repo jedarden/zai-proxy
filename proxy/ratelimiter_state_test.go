@@ -501,6 +501,107 @@ func TestHealthStateWithoutCeilingUpdate(t *testing.T) {
 	}
 }
 
+// TestSaveRateLimitStateCreatesMissingDirectory verifies the state directory
+// is created on demand. The image ships no /var/lib/zai-proxy and the proxy
+// runs as non-root, so without this the very first persist of a bare-container
+// run fails and every restart re-learns the ceiling.
+func TestSaveRateLimitStateCreatesMissingDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "var", "lib", "zai-proxy", "ceiling.json")
+
+	if err := saveRateLimitState(path, &RateLimitState{Ceiling: 30.4, Hold: 29.79, Ts: time.Now()}); err != nil {
+		t.Fatalf("saveRateLimitState() to a missing directory failed: %v", err)
+	}
+
+	got := readStateFile(t, path)
+	if got.Ceiling != 30.4 || got.Hold != 29.79 {
+		t.Errorf("State written through a created directory = %+v, want ceiling=30.4 hold=29.79", got)
+	}
+}
+
+// TestLoadRateLimitStateMaxAgeBoundary brackets the documented boundary: a
+// snapshot within RATE_LIMIT_STATE_MAX_AGE is used, one beyond it is ignored.
+// loadRateLimitState rejects only when age is strictly past maxAge, so the
+// two probes sit just inside and just outside it.
+func TestLoadRateLimitStateMaxAgeBoundary(t *testing.T) {
+	const maxAge = time.Hour
+
+	path := filepath.Join(t.TempDir(), "ceiling.json")
+	writeStateFile(t, path, RateLimitState{Ceiling: 30.4, Hold: 29.79, Ts: time.Now().Add(-maxAge + 10*time.Second)})
+	if _, err := loadRateLimitState(path, maxAge); err != nil {
+		t.Errorf("Snapshot just inside max age rejected: %v", err)
+	}
+
+	writeStateFile(t, path, RateLimitState{Ceiling: 30.4, Hold: 29.79, Ts: time.Now().Add(-maxAge - 10*time.Second)})
+	if _, err := loadRateLimitState(path, maxAge); err == nil {
+		t.Error("Snapshot just past max age accepted, want a stale error")
+	}
+}
+
+// TestRestoreFromStateFileCorruptStateIgnored verifies a startup against a
+// damaged state file — truncated mid-write, empty, or a body that parses but
+// is not a snapshot — falls back to RATE_LIMIT_INITIAL instead of failing the
+// start or applying garbage.
+func TestRestoreFromStateFileCorruptStateIgnored(t *testing.T) {
+	cases := map[string]string{
+		"truncated mid-write":   `{"ceiling":30.4,"hol`,
+		"empty file":            "",
+		"json array not object": `[1,2,3]`,
+		"json null":             `null`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "ceiling.json")
+			if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+				t.Fatalf("Failed to write damaged state: %v", err)
+			}
+
+			arl := NewAdaptiveRateLimiterWithWindow(8.0, 0.5, 40.0, 30*time.Second)
+			if arl.RestoreFromStateFile(path, config.DefaultRateLimitStateMaxAge) {
+				t.Error("RestoreFromStateFile() = true for damaged state, want false")
+			}
+
+			arl.mu.RLock()
+			gotCeiling, restored := arl.estimatedCeiling, arl.restoredFromState
+			arl.mu.RUnlock()
+
+			if gotCeiling != 8.0 {
+				t.Errorf("Ceiling after damaged state = %.2f, want RATE_LIMIT_INITIAL 8.00", gotCeiling)
+			}
+			if restored {
+				t.Error("restoredFromState = true after damaged state, want false")
+			}
+		})
+	}
+}
+
+// TestSaveRateLimitStateFailureLeavesNoPartialState pins the crash-safety
+// half of the temp-then-rename write: when the rename cannot land, the save
+// reports an error and leaves neither partial content at the target nor a
+// temp file behind.
+func TestSaveRateLimitStateFailureLeavesNoPartialState(t *testing.T) {
+	dir := t.TempDir()
+	// A directory at the target path makes the final rename fail for certain
+	// (rename file-over-directory is EISDIR), whatever user the test runs as.
+	path := filepath.Join(dir, "ceiling.json")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("Failed to create blocking directory: %v", err)
+	}
+
+	if err := saveRateLimitState(path, &RateLimitState{Ceiling: 30.4, Hold: 29.79, Ts: time.Now()}); err == nil {
+		t.Fatal("saveRateLimitState() onto a directory returned nil error, want failure")
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("Failed to read state dir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp-") {
+			t.Errorf("Failed save left temp file %q behind", e.Name())
+		}
+	}
+}
+
 // TestHealthHandler exercises the real /health handler: probes read the
 // status code, callers read the JSON body.
 func TestHealthHandler(t *testing.T) {
