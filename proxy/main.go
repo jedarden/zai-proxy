@@ -585,30 +585,43 @@ func main() {
 	// handler, so the configured EWMA parameters remain the outer fairness bound.
 	proxyHandler.rateLimiter = rateLimiter
 
+	// Proxy handler with adaptive rate limiting
+	mux := http.NewServeMux()
+	registerHTTPHandlers(mux, proxyHandler, rateLimiter, quotaPoller, initialRate)
+	log.Println("Z.AI proxy listening on :8080")
+	log.Println("Metrics available at :8080/metrics")
+	log.Fatal(http.ListenAndServe(":8080", mux))
+}
+
+// registerHTTPHandlers installs the documented proxy endpoints alongside the
+// proxy and administrative handlers. Keeping route registration in one
+// function lets contract tests exercise the same mux used by main.
+func registerHTTPHandlers(mux *http.ServeMux, proxyHandler *ProxyHandler, rateLimiter *AdaptiveRateLimiter, quotaPoller *QuotaPoller, initialRate float64) {
 	// Metrics endpoint
-	http.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/metrics", promhttp.Handler())
 
 	// Health endpoint: status code is what the probes read; the body carries
 	// the live rate-limit state plus the observe-only quota sample, mirroring
 	// the persisted ceiling snapshot and the last-known-good quota poll.
-	http.Handle("/health", newHealthHandler(rateLimiter, quotaPoller))
+	mux.Handle("/health", newHealthHandler(rateLimiter, quotaPoller))
+
+	if proxyHandler == nil {
+		return
+	}
 
 	// Admin: reset rate limiter
-	http.HandleFunc("/admin/reset-rate-limit", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/admin/reset-rate-limit", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		proxyHandler.ResetRateLimit(initialRate)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":       "reset",
 			"current_rate": proxyHandler.GetCurrentRate(),
 		})
 	})
 
 	// Proxy handler with adaptive rate limiting
-	http.Handle("/", proxyHandler)
-	log.Println("Z.AI proxy listening on :8080")
-	log.Println("Metrics available at :8080/metrics")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	mux.Handle("/", proxyHandler)
 }
