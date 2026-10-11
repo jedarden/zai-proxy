@@ -142,9 +142,11 @@ grep -rn "quotaPoller\|QuotaPoller" proxy/*.go | grep -v '_test.go'
 curl -s http://127.0.0.1:8080/metrics | grep -E '^zai_proxy_quota_(rate_cap|gate_open)'
 ```
 
-Production additionally does not run the poller at all: the `zai-proxy`
-Deployment in `declarative-config` sets no `QUOTA_*` variable, and
-`QUOTA_POLL_ENABLED` defaults to false (`proxy/config/config.go`).
+As of 2026-10-11, the apexalgo-iad `zai-proxy` Deployment runs the observe-only
+poller (`QUOTA_POLL_ENABLED=true`, interval `1m`, timeout `5s`, stale-after
+`15m`). This enables the production `/health` and `/metrics` observations;
+the poller still has no enforcement call site. The default remains disabled
+when `QUOTA_POLL_ENABLED` is unset (`proxy/config/config.go`).
 
 ## Hermetic checks
 
@@ -395,12 +397,111 @@ neither has quota telemetry to compare. That refusal is itself the enforcement
 guardrail holding — but it means the paired measurement has to come from the Go
 live canary plus a direct projection of the provider endpoint.
 
+That production configuration and refusal describe **2026-09-06 only**. The
+observe-only poller was enabled in the apexalgo-iad production Deployment by
+2026-10-11; the live script comparison recorded below then ran successfully.
+
 One reporting defect found, not fixed here: the canary report's
 `analysis.reset_time_deltas_seconds` is named as a delta but holds the *last
 observed countdown* (`ResetInSecond`), overwritten per window — it reads
 1153.27 s on run 03:30:29 and 0 on the degenerate runs, neither of which is a
 drift measure. Reset-stamp drift must be read from `reset_at` constancy across
 `samples[]` and `credit_readings[]`, as done above.
+
+## Recorded canary evidence — 2026-10-11 campaign window
+
+Evidence was produced from a clean `git archive` of `40d99173d12c` and
+recorded on execution bead `zaiproxy-ff63d353`; the independent verdict is on
+`zaiproxy-e11bde4e`. The mode-600 artifacts are
+`/home/coding/.needle/artifacts/zaiproxy-ff63d353/zai-quota-canary-1791756204.json`
+(hermetic) and `zai-quota-canary-1791756632.json` (live, in the same directory).
+The commands below retain the executed script arguments and credential
+retrieval path; set `A` to a private output directory before running them from
+a clean checkout. The live run needs the internal CA certificate installed on
+the host at the path shown. The credential is captured only into the canary
+process's environment, never supplied as a literal argument or written to a
+file.
+
+```bash
+A=/home/coding/.needle/artifacts/zaiproxy-ff63d353
+mkdir -p "$A" && chmod 700 "$A"
+python3 proxy/scripts/quota_canary.py run --out "$A"
+
+B="$A/canary-ca-bundle.pem"
+cat /etc/ssl/certs/ca-certificates.crt \
+  /home/coding/.config/native-ads-scan/ardenone-cluster-ca.crt > "$B"
+chmod 600 "$B"
+SSL_CERT_FILE="$B" \
+ZAI_API_KEY="$(bao-as rs-manager bao kv get -field=api-key secret/rs-manager/apexalgo-iad/mcp/zai/api-key)" \
+  python3 proxy/scripts/quota_canary.py run \
+    --proxy-url https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444 \
+    --rounds 6 --interval 15 --out "$A"
+rm "$B"
+python3 proxy/scripts/quota_canary.py secret-scan --self-test
+```
+
+The original session assembled the same CA bundle from the system CAs and the
+on-host internal CA, verified the served leaf with `openssl verify`, and
+deleted the bundle afterward. Its hermetic process ran 22:03:16–22:03:24 UTC:
+`mode=hermetic`, `verdict=agree`, 3 rounds, 12 samples, 6 comparisons,
+maximum percentage delta **0.0 pp**, maximum proxy/ZCode reset-stamp delta
+**0.0 s**. Fixture rotation itself moved usage by 4.0 pp and a reset stamp by
+3600 s, so agreement was checked across changing inputs. The script's Go
+production-wiring canaries passed first.
+
+The live process ran 22:09:08–22:10:32 UTC (samples 22:09:10–22:10:31):
+`mode=live`, `verdict=agree`, 6 rounds at 15-second intervals, 12 samples, 6
+comparisons. Only the five-hour `TOKENS_LIMIT` window appeared. Both surfaces
+read **10.0%** at every round; maximum percentage delta was **0.0 pp** and
+maximum reset-stamp delta **0.084 s**, constant across rounds and explained by
+the proxy's whole-second rendering of the provider's millisecond stamp.
+`reset_at` stayed at `2026-10-12T00:56:13Z` on the proxy surface throughout.
+The default tolerances were 1.0 pp and 5.0 s, respectively.
+
+| Time (UTC) | Evidence | Five-hour used | Reset stamp |
+|---|---|---:|---|
+| ~22:00 | Production `/health` read before the run | 9% | 2026-10-12T00:56:13Z |
+| 22:09:10–22:10:31 | Paired live canary, all six rounds | 10% on both surfaces | 2026-10-12T00:56:13Z proxy; 0.084 s later at the provider |
+| 22:33:47 | Production `/health` read after the run | 12% | 2026-10-12T00:56:13Z |
+
+**Zero-burn for this campaign window: unresolved.** Usage rose one percentage
+point before the 81-second canary interval and two points after it, but moved
+**0.0 pp during** the interval. Its roughly 7–8 provider polls included no
+40-poll burst. Adjacent campaign drift predicts about 0.15 pp within 81
+seconds, below the provider's one-point reporting step. This window therefore
+cannot independently distinguish an unmetered monitor endpoint from a cost
+below reporting granularity. The standing **zero-burn: confirmed** verdict
+from the 2026-09-05 and 2026-09-06 burning-control, 40-poll burst runs above
+is not contradicted. A fresh campaign-window confirmation would require at
+least 40 back-to-back monitor polls while the five-hour usage moves at least
+one percentage point during the same observation window, then compare burst
+delta with adjacent cadence drift. These conclusions and the 9%→10%→12%
+timeline are recorded on verdict bead `zaiproxy-e11bde4e`.
+
+**No enforcement: confirmed.** At commit `40d99173d12c`, the enforcement
+recorders had no non-test call site and the poller's only consumer was the
+`/health` renderer. The nine failure-injection tests passed under `-race` in a
+clean extraction. A read-only production `/metrics` check at about 22:38 UTC
+exported no `zai_proxy_quota_rate_cap` or `zai_proxy_quota_gate_open` series;
+read-only inspection of the apexalgo-iad Deployment found only observe-only
+`QUOTA_POLL_*` settings. The pre-existing adaptive request limiter remains
+driven by upstream signals, not quota telemetry.
+
+**Failures do not affect inference: confirmed.** The same nine tests pin
+failure isolation and admission behavior. Production counters at the verdict
+check were 45,926 successful quota polls, 84 errors, and 1 stale outcome,
+while the instance had served 253,657 successful `POST /v1/messages`
+requests. These are cumulative observations, not a claim that every request
+overlapped a failed poll; structural isolation and the tests establish that
+claim. See `zaiproxy-e11bde4e` for the read-only checks and timestamps.
+
+Both artifacts passed the script's run-time field allowlist and its
+`secret-scan --self-test`/artifact scan; the organization scanner also found
+zero secrets. The published artifacts contain only timestamps, percentages,
+reset measures, verdict/tolerance values, and structural `mode`, `surface`,
+`round`, and `window` fields. The production poll and request counts above
+come from read-only metrics, not from the script artifacts; no credential,
+account identifier, raw payload, or absolute credit amount was published.
 
 ## Comparing against ZCode's usage view
 
@@ -453,7 +554,9 @@ window 12% → 13%, reset `2026-09-05T22:51:32Z`, plan tier `max`. The
 2026-09-06 comparison is the paired measurement recorded above: 04:03:50–
 04:04:20 UTC, five-hour window 1% on both surfaces, reset
 `2026-09-06T08:51:39Z` (proxy) against `2026-09-06T08:51:39.513Z` (raw) —
-0.0 pp and 0.513 s, both inside tolerance.
+0.0 pp and 0.513 s, both inside tolerance. The 2026-10-11 live script
+comparison above supplies six more overlapping proxy/ZCode readings, all
+10.0%, with 0.0 pp and 0.084 s maximum deltas.
 
 ## Secret-safety rules for this surface
 
@@ -499,7 +602,10 @@ in `proxy/scripts/quota_canary.py` — a field outside it aborts the run
 before anything is written), and the Go canary's report is a fixed field set
 in `proxy/quota_canary_live_test.go` scanned for the credential before it is
 written. Copying fields from either report can only widen the record if a
-hand-rolled format is invented; don't invent one.
+hand-rolled format is invented; don't invent one. In particular, the script's
+allowlist excludes plan tier, poll counts, request counts, absolute credit
+amounts, and raw provider fields. The 2026-10-11 production counts above were
+recorded separately from read-only `/metrics` output.
 
 ### Scanning the documentation itself
 
