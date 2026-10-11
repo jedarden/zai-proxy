@@ -119,17 +119,19 @@ const (
 	CategoryMapKey FailureCategory = "map_key_error"
 
 	// CategoryChannel indicates channel operation errors (send on closed channel, etc.)
-	// Priority: 50 (concurrency-specific channel errors)
+	// Priority: 56 (concurrency-specific channel errors; resolved above map_key_error at 55)
 	// Confidence: 1.0 (explicit channel operation messages)
 	CategoryChannel FailureCategory = "channel_error"
 
 	// CategoryGoroutinePanic indicates goroutine panic (leaked goroutines, etc.)
-	// Priority: 24 (checked before general panics for goroutine-specific issues)
+	// Priority: 55 (tied with map_key_error; the stable tie-break resolves
+	// map_key_error first, so goroutine_panic wins only when map-key patterns
+	// did not also match)
 	// Confidence: 0.9 (goroutine stack trace patterns)
 	CategoryGoroutinePanic FailureCategory = "goroutine_panic"
 
 	// CategoryDeadlock indicates potential deadlock detected
-	// Priority: 90 (critical concurrency issue,仅次于 data races)
+	// Priority: 90 (critical concurrency issue, second only to data races)
 	// Confidence: 1.0 (explicit deadlock detection)
 	CategoryDeadlock FailureCategory = "deadlock"
 
@@ -601,9 +603,13 @@ var categorizationRules = []CategorizationRule{
 		},
 	},
 
-	// DECISION TREE STEP 6: Map key errors (Priority: 55)
+	// DECISION TREE STEP 7: Map key errors (Priority: 55)
 	// Rationale: Map errors are specific but key-related phrasing can vary
-	// Checked as a separate category for better debugging of map-related issues
+	// Checked as a separate category for better debugging of map-related issues.
+	// Declared before goroutine_panic (same priority 55) so the stable
+	// priority-sort tie-break resolves map_key_error first, per
+	// docs/categorization-rules.md. Declaration order never changes the check
+	// order otherwise: rules are sorted by Priority before matching.
 	{
 		Category:       CategoryMapKey,
 		Pattern:        regexp.MustCompile(`(?i)map key.*not found|zero map key|key not found`),
@@ -617,7 +623,9 @@ var categorizationRules = []CategorizationRule{
 
 	// DECISION TREE STEP 8: Goroutine panic detection (Priority: 55)
 	// Rationale: Goroutine panics have distinct patterns ("goroutine [running]")
-	// Checked before general panics to provide specific categorization
+	// Checked before general panics to provide specific categorization.
+	// Tied with map_key_error; declared after it so the stable tie-break
+	// resolves map_key_error first.
 	{
 		Category:       CategoryGoroutinePanic,
 		Pattern:        regexp.MustCompile(`(?i)goroutine \d+ \[running\]|leaked goroutine|goroutines? created`),
@@ -629,9 +637,11 @@ var categorizationRules = []CategorizationRule{
 		},
 	},
 
-	// DECISION TREE STEP 7: Channel errors (Priority: 56)
+	// DECISION TREE STEP 6: Channel errors (Priority: 56)
 	// Rationale: Channel errors have explicit, unambiguous messages
-	// Checked before type errors to catch concurrency-specific issues
+	// Checked before type errors to catch concurrency-specific issues.
+	// Priority 56 resolves above map_key_error/goroutine_panic (55) after the
+	// priority sort, even though it is declared after them here.
 	{
 		Category:       CategoryChannel,
 		Pattern:        regexp.MustCompile(`(?i)send on closed channel|close of closed channel|channel.*closed|receive on closed channel`),

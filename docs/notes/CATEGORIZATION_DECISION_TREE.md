@@ -8,6 +8,41 @@ The categorization system uses a priority-based pattern matching approach to cla
 
 ## Decision Tree Logic
 
+The steps below are listed in **priority order** — the same descending sequence
+used by `docs/categorization-rules.md` (the contract) and by
+`CategorizeFailure` itself:
+
+1. `data_race` (100)
+2. `deadlock` (90)
+3. `timeout` (70)
+4. `nil_pointer_dereference` (65)
+5. `index_out_of_range` (60)
+6. `channel_error` (56)
+7. `map_key_error` (55)
+8. `goroutine_panic` (55)
+9. `panic` (50)
+10. `type_mismatch` (45)
+11. `http_error` (40)
+12. `io_error` (35)
+13. `assertion_error` (10)
+14. `unknown` (0)
+
+**Messages matching multiple categories:** the classifier evaluates *every*
+rule against the combined error message and stack trace before choosing, then
+selects the highest-priority match. The winner is never "the first step in
+this document whose order you happen to implement" and never depends on where
+the text occurs in the message — a message matching both `channel_error`
+(priority 56) and `map_key_error` (priority 55) classifies as
+`channel_error`, even though a naive top-to-bottom reading of an older
+revision of this document checked map keys first. Two rules share priority 55
+(`map_key_error`, `goroutine_panic`); their tie is broken stably by
+declaration order: map-key error first, then goroutine failure. One
+documented exception reorders the numeric result: when a nil-pointer match is
+accompanied by an explicit `panic:` marker, `panic` becomes the primary
+category. Every match — including non-primary ones — is retained in the
+result's reasoning, and competing matches reduce confidence; results below
+0.70 are flagged `uncertain` for review.
+
 ### Step 1: Data Race Detection (Priority: 100)
 **First check:** Does the error contain race detector output?
 
@@ -25,9 +60,9 @@ The categorization system uses a priority-based pattern matching approach to cla
 - **Reasoning:** Deadlock detection is specific and unambiguous
 
 ### Step 3: Timeout Detection (Priority: 70)
-**Fourth check:** Did the operation exceed a time limit?
+**Third check:** Did the operation exceed a time limit, or was a context cancelled?
 
-- **Pattern:** `context deadline exceeded`, `timeout.*exceeded`, `timed out`, `timeout waiting for`, `test timed out`, `exceeded.*timeout`
+- **Pattern:** `context deadline exceeded`, `context canceled`, `timeout.*exceeded`, `timed out`, `timeout waiting for`, `timeout occurred`, `test timed out`, `exceeded.*timeout`
 - **Category:** `CategoryTimeout`
 - **Confidence:** 0.95 (95%)
 - **Reasoning:** Timeouts have clear terminology but can sometimes appear in error messages
@@ -35,7 +70,7 @@ The categorization system uses a priority-based pattern matching approach to cla
 ### Step 4: Nil Pointer Detection (Priority: 65)
 **Fourth check:** Is this a nil/null pointer dereference?
 
-- **Pattern:** `null pointer`, `nil pointer dereference`, `panic on nil pointer`
+- **Pattern:** `null pointer`, `nil pointer dereference`, `panic on nil pointer`, `assignment to entry in nil map`
 - **Category:** `CategoryNilPointer`
 - **Confidence:** 1.0 (100%)
 - **Reasoning:** Nil pointer errors have explicit, unambiguous messages
@@ -48,34 +83,34 @@ The categorization system uses a priority-based pattern matching approach to cla
 - **Confidence:** 1.0 (100%)
 - **Reasoning:** Index errors have explicit messages
 
-### Step 6: Map Key Errors (Priority: 55)
-**Sixth check:** Is this a map key access issue?
-
-- **Pattern:** `map key.*not found`, `zero map key`, `key not found`
-- **Category:** `CategoryMapKey`
-- **Confidence:** 0.95 (95%)
-- **Reasoning:** Map errors are specific but key-related phrasing can vary
-
-### Step 7: Channel Errors (Priority: 56)
-**Seventh check:** Is this a channel operation error?
+### Step 6: Channel Errors (Priority: 56)
+**Sixth check:** Is this a channel operation error?
 
 - **Pattern:** `send on closed channel`, `close of closed channel`, `channel.*closed`, `receive on closed channel`
 - **Category:** `CategoryChannel`
 - **Confidence:** 1.0 (100%)
-- **Reasoning:** Channel errors have explicit, unambiguous messages
+- **Reasoning:** Channel errors have explicit, unambiguous messages, and a concrete illegal channel operation outranks a map-key match when both appear (priority 56 > 55)
+
+### Step 7: Map Key Errors (Priority: 55)
+**Seventh check:** Is this a map key access issue?
+
+- **Pattern:** `map key.*not found`, `zero map key`, `key not found`
+- **Category:** `CategoryMapKey`
+- **Confidence:** 0.95 (95%)
+- **Reasoning:** Map errors are specific but key-related phrasing can vary. `goroutine_panic` shares priority 55; the stable tie-break resolves map-key errors first (see Step 8)
 
 ### Step 8: Goroutine Panic Detection (Priority: 55)
 **Eighth check:** Does the error involve goroutine issues?
 
-- **Pattern:** `goroutine [running]:`, `leaked goroutine`, `goroutines? created`
+- **Pattern:** `goroutine <number> [running]` (`goroutine \d+ \[running\]`), `leaked goroutine`, `goroutines? created`
 - **Category:** `CategoryGoroutinePanic`
 - **Confidence:** 0.9 (90%)
-- **Reasoning:** Goroutine-specific failures are distinct from general panics
+- **Reasoning:** Goroutine-specific failures are distinct from general panics. Tied with `map_key_error` at priority 55; the stable tie-break resolves map-key errors first, so this category wins only when map-key patterns did not also match
 
 ### Step 9: Panic Detection (Priority: 50)
 **Ninth check:** Is this a general runtime panic?
 
-- **Pattern:** `panic:`, `runtime panic`, `panic()`
+- **Pattern:** `panic:`, `runtime panic`, `panic()`, `panic in`, `runtime error`
 - **Category:** `CategoryPanic`
 - **Subcategory:** `runtime_panic`
 - **Confidence:** 1.0 (100%)
@@ -101,7 +136,7 @@ The categorization system uses a priority-based pattern matching approach to cla
 ### Step 12: I/O Errors (Priority: 35)
 **Twelfth check:** Is this a general I/O operation error?
 
-- **Pattern:** `no such file`, `directory.*not found`, `file not found`, `permission denied`, `i/o error`, `read.*failed`, `write.*failed`
+- **Pattern:** `no such file`, `directory.*not found`, `file not found`, `permission denied`, `i/o error`, `read.*failed`, `write.*failed`, `broken pipe`
 - **Category:** `CategoryIOError`
 - **Confidence:** 0.9 (90%)
 - **Reasoning:** I/O errors are specific but can vary by operation type
@@ -109,7 +144,7 @@ The categorization system uses a priority-based pattern matching approach to cla
 ### Step 13: Assertion Errors (Priority: 10)
 **Thirteenth check:** Does this appear to be an assertion/expectation failure?
 
-- **Pattern:** `assertion.*failed`, `expected.*but.*got`, `not equal`, `should.*be`, `want.*got`, `expected.*got`, `assert`
+- **Pattern:** `assertion.*failed`, `expected ... (but ... got|got|non-nil|to exist|value at|element at|type)`, `not equal`, `should.*be`, `want.*got`, `assert`
 - **Category:** `CategoryAssertionError`
 - **Confidence:** 0.7 (70%)
 - **Reasoning:** Assertion-like patterns can appear in various contexts, so this is checked last as a fallback
@@ -122,6 +157,12 @@ The categorization system uses a priority-based pattern matching approach to cla
 - **Reasoning:** No recognizable pattern - requires manual review
 
 ## Handling Ambiguous Cases
+
+When a message matches more than one category, the classifier still scans all
+rules, retains every match in the reasoning, and resolves the primary category
+by **priority order** (see the ordered list at the top of Decision Tree
+Logic) — not by this document's step order and not by the position of the
+matching text in the message. The examples below all follow that rule:
 
 The priority system resolves ambiguity by checking specific patterns before general ones:
 
@@ -150,6 +191,16 @@ If an error contains both "dial tcp" and "connection refused":
 - **Result:** `CategoryHTTPError` (priority 40) wins over `CategoryIOError` (priority 35)
 - **Rationale:** Network/HTTP errors are more specific than general I/O errors
 
+### Example 6: Channel Error vs. Map Key Error
+If an error contains both "key not found" and "send on closed channel":
+- **Result:** `CategoryChannel` (priority 56) wins over `CategoryMapKey` (priority 55)
+- **Rationale:** The concrete illegal channel operation is the runtime event; a
+  priority-ordered implementation resolves `channel_error` first. An
+  implementation that followed this document's pre-2026-10 step order (map key
+  at Step 6 before channel at Step 7) would have produced the lower-priority
+  `map_key_error` — that ordering was wrong and is fixed here; the classifier
+  has always resolved by priority
+
 ## Category Definitions and Examples
 
 ### 1. AssertionError (assertion_error)
@@ -176,7 +227,9 @@ If an error contains both "dial tcp" and "connection refused":
 - `operation exceeded 30s timeout`
 
 **Edge cases:**
-- Connection timeouts categorized as HTTP errors (priority 40) not general timeouts
+- A connection timeout stays `timeout` in the base classifier (priority 70);
+  `ResolveAmbiguity` may reclassify a `dial tcp` timeout as an HTTP error
+  (priority 40) with subcategory `timeout`
 - High confidence (0.95) due to explicit timeout terminology
 
 ### 3. Panic (panic)
@@ -221,7 +274,9 @@ Read at 0x... by main goroutine:
 - `panic on nil pointer`
 
 **Edge cases:**
-- Higher priority (65) than general panic (25) to ensure specificity
+- Higher priority (65) than general panic (50) to ensure specificity, except
+  that an explicit `panic:` marker accompanying the nil-pointer message makes
+  `panic` the primary category
 - Confidence 1.0 due to explicit nil pointer messages
 
 ### 6. TypeMismatch (type_mismatch)
@@ -257,7 +312,9 @@ Read at 0x... by main goroutine:
 
 **Edge cases:**
 - Confidence 0.95 due to specific but varied key-related phrasing
-- Priority 55
+- Priority 55; resolves below `channel_error` (56) when both match, and ties
+  with `goroutine_panic` (55), which the stable tie-break resolves after
+  map-key errors
 
 ### 9. Channel (channel_error)
 **Definition:** Channel operation errors.
@@ -269,7 +326,7 @@ Read at 0x... by main goroutine:
 
 **Edge cases:**
 - High confidence (1.0) due to explicit channel operation messages
-- Priority 50
+- Priority 56 — above map-key errors (55)
 
 ### 10. GoroutinePanic (goroutine_panic)
 **Definition:** Goroutine-specific failures or leaks.
@@ -281,7 +338,8 @@ Read at 0x... by main goroutine:
 
 **Edge cases:**
 - Confidence 0.9 due to goroutine-specific stack trace patterns
-- Priority 24, checked before general panic
+- Priority 55, checked before general panic (50); ties with
+  `map_key_error`, resolved after it
 
 ### 11. Deadlock (deadlock)
 **Definition:** Potential deadlock conditions.
@@ -292,7 +350,7 @@ Read at 0x... by main goroutine:
 
 **Edge cases:**
 - High confidence (1.0) due to explicit deadlock detection
-- Priority 90,仅次于 data races
+- Priority 90, second only to data races
 
 ### 12. IOError (io_error)
 **Definition:** General I/O operation failures.
