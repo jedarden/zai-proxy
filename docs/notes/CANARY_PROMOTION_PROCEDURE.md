@@ -10,6 +10,16 @@ The zai-proxy deployment uses a dual-deployment strategy:
 
 After a canary version has been validated, it can be promoted to production using this procedure.
 
+(As of 2026-10-11 no canary manifest is checked in — a canary run starts by
+adding its manifest under `k8s/apexalgo-iad/mcp/` in declarative-config.)
+
+**Everything on the cluster is ArgoCD-managed.** The only documented change
+path is declarative-config → commit to `main` → push → ArgoCD sync. There is
+no kubectl mutation path: `kubectl set image`, `edit`, `scale`, `patch`,
+`rollout undo/restart` are prohibited org-wide, mechanically blocked by the
+org-rule-guard hook, and ArgoCD `selfHeal` would revert them anyway. Rollback
+is a `git revert` in declarative-config (see below).
+
 ## Prerequisites
 
 Before promoting canary to production, ensure:
@@ -19,6 +29,8 @@ Before promoting canary to production, ensure:
 3. **Metrics validated**: Token counting, rate limiting, and error rates are acceptable
 4. **Workers tested**: At least one worker has successfully used the canary endpoint
 5. **Version ready**: Canary image tag is known and available
+6. **declarative-config checkout clean**: you will be committing to
+   `/home/coding/declarative-config` on `main`
 
 ## Architecture Reference
 
@@ -32,97 +44,86 @@ Before promoting canary to production, ensure:
                     ┌─────────────────────────────────────┐
                     │    Production (zai-proxy)           │
                     │    Image: X.Y.Z (no -canary)        │
+                    └──────────────┬──────────────────────┘
+                                   │ declared by
+                                   ▼
+                    ┌─────────────────────────────────────┐
+                    │ jedarden/declarative-config         │
+                    │ k8s/apexalgo-iad/mcp/zai-proxy.yml  │
+                    │  → ArgoCD app mcp-ns-apexalgo-iad   │
                     └─────────────────────────────────────┘
+```
+
+Read-only cluster access from codinghome (no kubeconfig, no token):
+
+```bash
+kubectl --server=http://traefik-apexalgo-iad:8001 ...   # get/describe/logs/rollout status|history
+```
+
+The proxy identity cannot `exec`, `port-forward`, or read Secrets — and no
+runbook step needs to, because nothing here writes to the cluster.
+
+Production is directly reachable over the tailnet (self-signed VPN cert, use `-k`):
+
+```bash
+curl -sk https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444/health
 ```
 
 ## Procedure
 
-### Step 1: Update Production Deployment Image Tag
-
-The production deployment image tag needs to be updated to match the canary version (without `-canary` suffix if applicable).
+### Step 1: Update the Production Manifest (the only change path)
 
 **Example: Promoting 1.2.1-canary to 1.2.1**
 
 ```bash
-# Using kubectl set image (fastest method)
-kubectl set image deployment/zai-proxy \
-  proxy=ronaldraygun/zai-proxy:1.2.1 \
-  -n mcp
-```
-
-**Alternative: Edit deployment manifest**
-
-```bash
-# Edit the deployment directly
-kubectl edit deployment/zai-proxy -n mcp
-
-# Change: image: ronaldraygun/zai-proxy:1.2.0
-# To:    image: ronaldraygun/zai-proxy:1.2.1
-```
-
-**For GitOps (ArgoCD):**
-
-1. Update the manifest in Git:
-```bash
 cd /home/coding/declarative-config
-```
 
-2. Edit `zai-proxy.yml`:
-```yaml
-# Change from:
-image: ronaldraygun/zai-proxy:1.2.0
+# Edit k8s/apexalgo-iad/mcp/zai-proxy.yml — change BOTH the image tag and the
+# pod-template version label so they stay in step:
+#   image: ronaldraygun/zai-proxy:1.2.1        (was 1.2.0)
+#   labels:
+#     version: "1.2.1"                          (was "1.2.0")
+$EDITOR k8s/apexalgo-iad/mcp/zai-proxy.yml
 
-# To:
-image: ronaldraygun/zai-proxy:1.2.1
-```
-
-3. Commit and push:
-```bash
-git add zai-proxy.yml
+git add k8s/apexalgo-iad/mcp/zai-proxy.yml
 git commit -m "chore: promote zai-proxy to v1.2.1"
 git push origin main
 ```
 
-4. ArgoCD will automatically sync the change
+Push goes to Forgejo `origin`; the server-side push mirror carries the commit
+to GitHub (`github.com/jedarden/declarative-config`), which is the repo the
+ArgoCD Application tracks. ArgoCD then syncs automatically
+(app `mcp-ns-apexalgo-iad`: automated sync, `selfHeal`, `prune`).
 
-### Step 2: Choose Rollout Strategy
-
-#### Option A: Rolling Update (Default)
-
-Kubernetes performs a rolling update automatically when the image changes:
+If the sync lags, hurry it **from the repo** — `argocd app sync
+mcp-ns-apexalgo-iad` (or the Sync button in the ArgoCD UI) applies Git; it
+does not bypass it:
 
 ```bash
-# Monitor the rollout
-kubectl rollout status deployment/zai-proxy -n mcp
+kubectl --server=http://traefik-ardenone-manager:8001 get application mcp-ns-apexalgo-iad -n argocd
+# SYNC STATUS should return to Synced and health to Healthy
+```
+
+### Step 2: Watch the Rollout
+
+The manifest itself defines the rollout strategy (RollingUpdate,
+`maxUnavailable: 1`, `maxSurge: 0`, anti-affinity spread across nodes) —
+Kubernetes performs it automatically once ArgoCD applies the new template.
+
+```bash
+# Monitor the rollout (read-only)
+kubectl --server=http://traefik-apexalgo-iad:8001 rollout status deployment/zai-proxy -n mcp
 
 # Watch pods being replaced
-kubectl get pods -n mcp -l app=zai-proxy,variant=production -w
+kubectl --server=http://traefik-apexalgo-iad:8001 get pods -n mcp -l app=zai-proxy,variant=production -w
 ```
 
-**Characteristics:**
-- Gradual replacement of pods
-- Zero downtime (old pods serve traffic until new pods are ready)
-- Automatic rollback if failure: `kubectl rollout undo deployment/zai-proxy -n mcp`
-
-#### Option B: Blue-Green Switch
-
-For an instant cutover (requires manual scaling):
-
-```bash
-# Step 1: Scale production to 0 (cut off traffic)
-kubectl scale deployment/zai-proxy -n mcp --replicas=0
-
-# Step 2: Scale canary to production replica count
-kubectl scale deployment/zai-proxy -n mcp --replicas=1
-
-# Step 3: Update production image (with no traffic)
-kubectl set image deployment/zai-proxy proxy=ronaldraygun/zai-proxy:1.2.1 -n mcp
-
-# Step 4: Scale production back up
-kubectl scale deployment/zai-proxy -n mcp --replicas=1
-```
-
-**Note:** This approach is not recommended for zai-proxy as it causes brief downtime.
+Characteristics of the declared strategy:
+- Gradual replacement of pods (one at a time — `maxUnavailable: 1`,
+  `maxSurge: 0`; the fleet has no retry budget for zero endpoints)
+- Old pods serve traffic until new pods are ready
+- Rollback is a Git revert (see "Rollback Procedure") — there is no
+  `kubectl rollout undo` path
 
 ### Step 3: Monitor Production Metrics During Rollout
 
@@ -150,17 +151,22 @@ histogram_quantile(0.95,
 sum by (variant) (rate(zai_proxy_tokens_total{variant="production"}[5m]))
 ```
 
+Runnable via the Prometheus HTTP API (tailnet, `-k` for the VPN cert):
+`https://prometheus-apexalgo-iad-ts.ardenone.com:8444/api/v1/query`.
+Note: as of 2026-10-11 no ServiceMonitor for zai-proxy is wired up, so these
+return empty until one lands — the direct /metrics endpoint works today.
+
 **Real-time monitoring:**
 
 ```bash
 # Watch pod status
-kubectl get pods -n mcp -l app=zai-proxy,variant=production -w
+kubectl --server=http://traefik-apexalgo-iad:8001 get pods -n mcp -l app=zai-proxy,variant=production -w
 
 # Stream production logs
-kubectl logs -f -n mcp deployment/zai-proxy --tail=100
+kubectl --server=http://traefik-apexalgo-iad:8001 logs -f -n mcp deployment/zai-proxy --tail=100
 
-# Check metrics endpoint directly
-curl -s http://zai-proxy.devpod.svc.cluster.local:8080/metrics | grep zai_proxy
+# Check metrics endpoint directly (this is the URL fleet workers use)
+curl -sk https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444/metrics | grep zai_proxy
 ```
 
 ### Step 4: Verify Workers Successfully Use New Version
@@ -170,8 +176,7 @@ After rollout completes, verify workers are using the new version:
 **1. Check pod versions:**
 
 ```bash
-# Get current version label
-kubectl get pods -n mcp \
+kubectl --server=http://traefik-apexalgo-iad:8001 get pods -n mcp \
   -l app=zai-proxy,variant=production \
   -o custom-columns=NAME:.metadata.name,VERSION:.metadata.labels.version
 
@@ -183,8 +188,7 @@ kubectl get pods -n mcp \
 **2. Verify worker connectivity:**
 
 ```bash
-# Check which pods workers are connecting to
-kubectl logs -n mcp deployment/zai-proxy --tail=100 | grep "Token usage"
+kubectl --server=http://traefik-apexalgo-iad:8001 logs -n mcp deployment/zai-proxy --tail=100 | grep "Token usage"
 
 # The logs should show activity from workers
 # Expected: Token usage: input=X, output=Y
@@ -193,9 +197,7 @@ kubectl logs -n mcp deployment/zai-proxy --tail=100 | grep "Token usage"
 **3. Check worker token counting metrics:**
 
 ```bash
-# Query Prometheus for token usage by workers
-# This verifies workers are successfully using the new version
-curl -s http://zai-proxy.devpod.svc.cluster.local:8080/metrics | \
+curl -sk https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444/metrics | \
   grep zai_proxy_tokens_total | \
   grep 'variant="production"'
 ```
@@ -203,7 +205,7 @@ curl -s http://zai-proxy.devpod.svc.cluster.local:8080/metrics | \
 **4. Verify image tag in deployment:**
 
 ```bash
-kubectl get deployment/zai-proxy -n mcp \
+kubectl --server=http://traefik-apexalgo-iad:8001 get deployment/zai-proxy -n mcp \
   -o jsonpath='{.spec.template.spec.containers[0].image}'
 
 # Expected output: ronaldraygun/zai-proxy:1.2.1
@@ -269,7 +271,7 @@ git show v1.2.1
 Use this checklist during the promotion process:
 
 ### Pre-Promotion
-- [ ] Canary deployment is healthy (`kubectl get pods -n mcp -l variant=test`)
+- [ ] Canary deployment is healthy (`kubectl --server=http://traefik-apexalgo-iad:8001 get pods -n mcp -l variant=test`)
 - [ ] No Prometheus alerts firing for canary
 - [ ] Functional tests pass on canary endpoint
 - [ ] Token counting verified on canary
@@ -277,8 +279,9 @@ Use this checklist during the promotion process:
 - [ ] Canary image tag is confirmed (e.g., `1.2.1-canary`)
 
 ### Promotion
-- [ ] Production deployment image updated to new version
-- [ ] Rollout initiated (`kubectl set image` or manifest update)
+- [ ] Production manifest updated in declarative-config (image + `version:` label)
+- [ ] Commit pushed to `main` (origin)
+- [ ] ArgoCD app `mcp-ns-apexalgo-iad` back to `Synced`
 - [ ] Rollout status monitored (`kubectl rollout status`)
 
 ### During Rollout
@@ -300,149 +303,114 @@ Use this checklist during the promotion process:
 - [ ] Git commit created for VERSION change
 - [ ] Git tag created for release (e.g., `v1.2.1`)
 - [ ] Tag pushed to remote repository
-- [ ] Canary deployment can be scaled down (optional)
+- [ ] Canary stood down via its manifest (optional)
 
 ### Cleanup (Optional)
-- [ ] Scale down canary deployment if no longer needed: `kubectl scale deployment/zai-proxy-test -n mcp --replicas=0`
-- [ ] Update canary manifest to next development version
+- [ ] Stand down the canary if no longer needed: set `replicas: 0` (or remove
+  the manifest) in `k8s/apexalgo-iad/mcp/zai-proxy-test.yml` and push
+- [ ] Update canary manifest to next development version (same GitOps path)
 
 ## Rollback Procedure
 
-If issues are detected after promotion, use this rollback procedure:
+If issues are detected after promotion, roll back **through Git**:
 
-### Immediate Rollback (kubectl)
-
-```bash
-# Rollback to previous version
-kubectl rollout undo deployment/zai-proxy -n mcp
-
-# Monitor rollback
-kubectl rollout status deployment/zai-proxy -n mcp
-
-# Verify rollback completed
-kubectl get pods -n mcp -l app=zai-proxy,variant=production
-```
-
-### Rollback to Specific Version
+### Rollback (GitOps — the only path)
 
 ```bash
-# View rollout history
-kubectl rollout history deployment/zai-proxy -n mcp
-
-# Rollback to specific revision
-kubectl rollout undo deployment/zai-proxy -n mcp --to-revision=2
-```
-
-### GitOps Rollback (ArgoCD)
-
-```bash
-# Revert the commit that changed the image tag
+# 1. Revert the promotion commit
 cd /home/coding/declarative-config
-git revert HEAD
+git log --oneline -5                     # identify the promotion commit
+git revert <promotion-commit-sha>
 git push origin main
 
-# ArgoCD will automatically sync the revert
+# 2. Hurry a lagging sync from the repo (applies Git; does not bypass it)
+argocd app sync mcp-ns-apexalgo-iad      # or the ArgoCD UI Sync button
+
+# 3. Monitor the rollback (read-only)
+kubectl --server=http://traefik-apexalgo-iad:8001 rollout status deployment/zai-proxy -n mcp
+kubectl --server=http://traefik-apexalgo-iad:8001 get pods -n mcp -l app=zai-proxy,variant=production -w
+
+# 4. Verify rollback completed
+kubectl --server=http://traefik-apexalgo-iad:8001 get pods -n mcp -l app=zai-proxy,variant=production
 ```
 
-## kubectl Commands Reference
+### Rollback to a Specific Older Version
 
-### Image Management
+`kubectl rollout undo --to-revision` is not available (and would be reverted).
+Instead, edit the manifest to the exact known-good tag and push:
 
 ```bash
-# Update production image
-kubectl set image deployment/zai-proxy proxy=ronaldraygun/zai-proxy:X.Y.Z -n mcp
-
-# Update canary image
-kubectl set image deployment/zai-proxy-test proxy=ronaldraygun/zai-proxy:X.Y.Z-canary -n mcp
-
-# View current image
-kubectl get deployment/zai-proxy -n mcp -o jsonpath='{.spec.template.spec.containers[0].image}'
+cd /home/coding/declarative-config
+$EDITOR k8s/apexalgo-iad/mcp/zai-proxy.yml   # image + version label -> known-good tag
+git add k8s/apexalgo-iad/mcp/zai-proxy.yml
+git commit -m "fix: roll zai-proxy back to vKNOWN_GOOD"
+git push origin main
 ```
 
-### Rollout Management
+For reference, `kubectl rollout history` still works read-only to see what
+revisions ran:
+```bash
+kubectl --server=http://traefik-apexalgo-iad:8001 rollout history deployment/zai-proxy -n mcp
+```
+
+## Read-Only kubectl Reference
+
+Every command below works through the credential-free proxy. Anything that
+mutates the deployment does not — make the change in declarative-config.
+
+### Inspection
+
+```bash
+# View current image
+kubectl --server=http://traefik-apexalgo-iad:8001 get deployment/zai-proxy -n mcp \
+  -o jsonpath='{.spec.template.spec.containers[0].image}'
+
+# List production pods
+kubectl --server=http://traefik-apexalgo-iad:8001 get pods -n mcp -l app=zai-proxy,variant=production
+
+# List canary pods
+kubectl --server=http://traefik-apexalgo-iad:8001 get pods -n mcp -l app=zai-proxy,variant=test
+
+# Watch pod changes
+kubectl --server=http://traefik-apexalgo-iad:8001 get pods -n mcp -l app=zai-proxy -w
+
+# Get deployment details
+kubectl --server=http://traefik-apexalgo-iad:8001 describe deployment/zai-proxy -n mcp
+```
+
+### Rollouts (read-only verbs only)
 
 ```bash
 # Check rollout status
-kubectl rollout status deployment/zai-proxy -n mcp
+kubectl --server=http://traefik-apexalgo-iad:8001 rollout status deployment/zai-proxy -n mcp
 
 # View rollout history
-kubectl rollout history deployment/zai-proxy -n mcp
-
-# Pause rollout
-kubectl rollout pause deployment/zai-proxy -n mcp
-
-# Resume rollout
-kubectl rollout resume deployment/zai-proxy -n mcp
-
-# Undo last rollout
-kubectl rollout undo deployment/zai-proxy -n mcp
-
-# Undo to specific revision
-kubectl rollout undo deployment/zai-proxy -n mcp --to-revision=2
+kubectl --server=http://traefik-apexalgo-iad:8001 rollout history deployment/zai-proxy -n mcp
 ```
 
-### Pod Management
+(`rollout pause/resume/undo/restart` are mutations — not available, not
+needed: the declared strategy in the manifest governs the rollout, and
+rollback is `git revert`.)
+
+### Logs
 
 ```bash
-# List production pods
-kubectl get pods -n mcp -l app=zai-proxy,variant=production
-
-# List canary pods
-kubectl get pods -n mcp -l app=zai-proxy,variant=test
-
-# Watch pod changes
-kubectl get pods -n mcp -l app=zai-proxy -w
-
-# Delete specific pod (forces restart)
-kubectl delete pod <pod-name> -n mcp
-
-# Restart all pods in deployment
-kubectl rollout restart deployment/zai-proxy -n mcp
-```
-
-### Scaling
-
-```bash
-# Scale production
-kubectl scale deployment/zai-proxy -n mcp --replicas=1
-
-# Scale canary
-kubectl scale deployment/zai-proxy-test -n mcp --replicas=1
-
-# View replica status
-kubectl get deployment/zai-proxy -n mcp
-```
-
-### Verification
-
-```bash
-# Get deployment details
-kubectl describe deployment/zai-proxy -n mcp
-
-# View pod logs
-kubectl logs -n mcp deployment/zai-proxy --tail=100
-kubectl logs -f -n mcp deployment/zai-proxy
-
-# Check pod versions
-kubectl get pods -n mcp -l app=zai-proxy,variant=production \
-  -o custom-columns=NAME:.metadata.name,VERSION:.metadata.labels.version
-
-# Get pod resource usage
-kubectl top pods -n mcp -l app=zai-proxy
+kubectl --server=http://traefik-apexalgo-iad:8001 logs -n mcp deployment/zai-proxy --tail=100
+kubectl --server=http://traefik-apexalgo-iad:8001 logs -f -n mcp deployment/zai-proxy
 ```
 
 ### Metrics and Health
 
 ```bash
 # Check service endpoints
-kubectl get endpoints -n mcp | grep zai-proxy
+kubectl --server=http://traefik-apexalgo-iad:8001 get endpoints -n mcp | grep zai-proxy
 
-# Test health endpoint
-kubectl exec -n mcp deployment/zai-proxy -- curl -s http://localhost:8080/health
+# Health / metrics over the tailnet (what workers use; -k for the VPN cert)
+curl -sk https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444/health
+curl -sk https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444/metrics
 
-# Port-forward for local testing
-kubectl port-forward -n mcp deployment/zai-proxy 8080:8080
-curl http://localhost:8080/metrics
+# ArgoCD sync state for the mcp namespace
+kubectl --server=http://traefik-ardenone-manager:8001 get application mcp-ns-apexalgo-iad -n argocd
 ```
 
 ## Troubleshooting
@@ -450,29 +418,32 @@ curl http://localhost:8080/metrics
 ### Rollout Stuck
 
 ```bash
-# Check rollout status
-kubectl rollout status deployment/zai-proxy -n mcp
+# Check rollout status (read-only)
+kubectl --server=http://traefik-apexalgo-iad:8001 rollout status deployment/zai-proxy -n mcp
 
-# If stuck, pause and inspect
-kubectl rollout pause deployment/zai-proxy -n mcp
-kubectl describe deployment/zai-proxy -n mcp
+# Inspect what ArgoCD thinks
+kubectl --server=http://traefik-ardenone-manager:8001 get application mcp-ns-apexalgo-iad -n argocd
 
-# Resume when ready
-kubectl rollout resume deployment/zai-proxy -n mcp
+# Inspect the deployment and its pods
+kubectl --server=http://traefik-apexalgo-iad:8001 describe deployment/zai-proxy -n mcp
+kubectl --server=http://traefik-apexalgo-iad:8001 describe pod <pod-name> -n mcp
+
+# If the new version is bad, roll back through Git (see Rollback Procedure) —
+# there is no pause/resume lever, by policy.
 ```
 
 ### Pods Not Ready
 
 ```bash
 # Describe pod to see events
-kubectl describe pod <pod-name> -n mcp
+kubectl --server=http://traefik-apexalgo-iad:8001 describe pod <pod-name> -n mcp
 
 # Check pod logs
-kubectl logs <pod-name> -n mcp
+kubectl --server=http://traefik-apexalgo-iad:8001 logs <pod-name> -n mcp
 
 # Common issues:
-# - Image pull errors: Check image name and registry secrets
-# - Resource limits: Check pod resource requests/limits
+# - Image pull errors: Check image name and registry secrets (both in declarative-config)
+# - Resource limits: Check pod resource requests/limits (in the manifest)
 # - Health check failures: Check /health endpoint
 ```
 
@@ -480,13 +451,16 @@ kubectl logs <pod-name> -n mcp
 
 ```bash
 # Check service is accessible
-kubectl get svc -n mcp | grep zai-proxy
+kubectl --server=http://traefik-apexalgo-iad:8001 get svc -n mcp | grep zai-proxy
 
-# Test from devpod
-curl -s http://zai-proxy.devpod.svc.cluster.local:8080/health
+# Test the endpoint workers actually use (tailnet URL)
+curl -sk https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444/health
 
-# Check worker logs
-tail -f ~/.beads-workers/*.log
+# Check which endpoint workers are configured with
+grep -n "ANTHROPIC_BASE_URL" ~/.config/needle/adapters/*.yaml | head
+
+# Watch the worker's tmux session output (worker sessions are tmux sessions)
+tmux capture-pane -p -t <worker-session-name> | tail -50
 ```
 
 ## Related Documentation

@@ -2,29 +2,43 @@
 
 This guide covers common failure scenarios when testing canary deployments and how to diagnose and resolve them.
 
+## How This Guide Works
+
+- **Observing** the cluster is read-only and needs no kubeconfig:
+  `kubectl --server=http://traefik-apexalgo-iad:8001 ...` (no `exec`, no
+  `port-forward`, no Secret reads from this identity).
+- **Fixing** anything is a Git operation: edit the manifest in
+  `jedarden/declarative-config` (`k8s/apexalgo-iad/mcp/`), commit to `main`,
+  push, let ArgoCD sync. `kubectl edit/set/scale/patch/rollout restart` are
+  prohibited org-wide and mechanically blocked — a fix that tries to go
+  through kubectl fails at the moment you need it.
+- Production is directly reachable over the tailnet (self-signed VPN cert,
+  use `-k`): `https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444`. The
+  canary has no VPN route today — observe it through logs and Prometheus, or
+  declare an IngressRoute for it in declarative-config.
+
 ## Quick Diagnosis Checklist
 
 When canary issues occur, run these commands first:
 
 ```bash
-export KUBECONFIG=/home/coder/.kube/apexalgo-iad.kubeconfig
+S=http://traefik-apexalgo-iad:8001
 
 # 1. Check canary pod status
-kubectl get pods -n mcp -l app=zai-proxy,variant=test
+kubectl --server=$S get pods -n mcp -l app=zai-proxy,variant=test
 
 # 2. Check recent canary events
-kubectl get events -n mcp --field-selector involvedObject.name=zai-proxy-test --sort-by='.lastTimestamp'
+kubectl --server=$S get events -n mcp --field-selector involvedObject.name=zai-proxy-test --sort-by='.lastTimestamp'
 
 # 3. Stream canary logs
-kubectl logs -f -n mcp deployment/zai-proxy-test
+kubectl --server=$S logs -f -n mcp deployment/zai-proxy-test
 
-# 4. Check canary metrics
-kubectl exec -n mcp deployment/zai-proxy-test -- \
-  curl -s http://localhost:8080/metrics | grep -E "zai_proxy_(requests|errors|tokens)"
+# 4. Check canary metrics (from its logs — no exec from this identity;
+#    status codes and token counters appear in log lines)
+kubectl --server=$S logs -n mcp deployment/zai-proxy-test --tail=200 | grep -E "zai_proxy|error|Token usage"
 
-# 5. Test canary health endpoint
-kubectl exec -n mcp deployment/zai-proxy-test -- \
-  curl -s http://localhost:8080/health
+# 5. Confirm production is unaffected (tailnet URL)
+curl -sk https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444/health
 ```
 
 ## Failure Scenarios
@@ -38,18 +52,20 @@ kubectl exec -n mcp deployment/zai-proxy-test -- \
 
 **Diagnosis:**
 ```bash
+S=http://traefik-apexalgo-iad:8001
+
 # Check pod status and restart count
-kubectl get pods -n mcp -l app=zai-proxy,variant=test \
+kubectl --server=$S get pods -n mcp -l app=zai-proxy,variant=test \
   -o custom-columns=NAME:.metadata.name,RESTARTS:.status.containerStatuses[0].restartCount,STATUS:.status.phase
 
 # Describe pod to see events
-kubectl describe pod -n mcp -l app=zai-proxy,variant=test
+kubectl --server=$S describe pod -n mcp -l app=zai-proxy,variant=test
 
 # Check previous container logs (if crash occurred)
-kubectl logs -n mcp deployment/zai-proxy-test --previous
+kubectl --server=$S logs -n mcp deployment/zai-proxy-test --previous
 
 # Check termination reason
-kubectl get pods -n mcp -l app=zai-proxy,variant=test \
+kubectl --server=$S get pods -n mcp -l app=zai-proxy,variant=test \
   -o jsonpath='{.items[0].status.containerStatuses[0].lastState.terminated.reason}'
 ```
 
@@ -57,38 +73,42 @@ kubectl get pods -n mcp -l app=zai-proxy,variant=test \
 
 | Cause | Fix |
 |-------|-----|
-| Missing environment variable | Add missing env var to deployment manifest |
-| Invalid API key | Update `zai-api-key` secret with valid key |
-| Port conflict | Verify containerPort matches application port |
-| Out of memory (OOMKilled) | Increase memory limits in deployment |
+| Missing environment variable | Add missing env var to the canary manifest in declarative-config |
+| Invalid API key | Update the OpenBao value behind the `zai-api-key` ExternalSecret (see Scenario 3) |
+| Port conflict | Verify containerPort matches application port (manifest) |
+| Out of memory (OOMKilled) | Increase memory limits in the manifest |
 | Application panic/error | Fix code issue and rebuild image |
 
 **Example Fix - Missing Environment Variable:**
 ```bash
 # Check what's missing
-kubectl describe pod -n mcp -l app=zai-proxy,variant=test | grep -A 10 "Environment"
+kubectl --server=$S describe pod -n mcp -l app=zai-proxy,variant=test | grep -A 10 "Environment"
 
-# Edit deployment to add missing env var
-kubectl edit deployment/zai-proxy-test -n mcp
-
-# Add the missing variable to env: section
-# Then rollout restart
-kubectl rollout restart deployment/zai-proxy-test -n mcp
+# Add the missing variable to the canary manifest and push
+cd /home/coding/declarative-config
+$EDITOR k8s/apexalgo-iad/mcp/zai-proxy-test.yml   # add to env: section
+git add k8s/apexalgo-iad/mcp/zai-proxy-test.yml
+git commit -m "fix: add missing env var to zai-proxy canary"
+git push origin main
+# ArgoCD applies it and the pod rolls — no rollout restart needed
 ```
 
 **Example Fix - OOMKilled:**
 ```bash
 # Check if OOMKilled
-kubectl get pods -n mcp -l app=zai-proxy,variant=test \
+kubectl --server=$S get pods -n mcp -l app=zai-proxy,variant=test \
   -o jsonpath='{.items[0].status.containerStatuses[0].lastState.terminated.reason}'
 # If output is "OOMKilled", increase memory limit
 
-# Edit deployment
-kubectl edit deployment/zai-proxy-test -n mcp
-
-# Change resources:
-#   limits:
-#     memory: "128Mi"  # Increased from 64Mi
+# Raise the limit in the manifest
+cd /home/coding/declarative-config
+$EDITOR k8s/apexalgo-iad/mcp/zai-proxy-test.yml
+#   resources:
+#     limits:
+#       memory: "128Mi"  # Increased from 64Mi
+git add k8s/apexalgo-iad/mcp/zai-proxy-test.yml
+git commit -m "fix: raise zai-proxy canary memory limit"
+git push origin main
 ```
 
 ---
@@ -102,20 +122,18 @@ kubectl edit deployment/zai-proxy-test -n mcp
 
 **Diagnosis:**
 ```bash
+S=http://traefik-apexalgo-iad:8001
+
 # Check readiness probe status
-kubectl get pods -n mcp -l app=zai-proxy,variant=test \
+kubectl --server=$S get pods -n mcp -l app=zai-proxy,variant=test \
   -o custom-columns=NAME:.metadata.name,READY:.status.containerStatuses[0].ready
 
 # Describe pod to see probe details
-kubectl describe pod -n mcp -l app=zai-proxy,variant=test | grep -A 5 "Readiness"
+kubectl --server=$S describe pod -n mcp -l app=zai-proxy,variant=test | grep -A 5 "Readiness"
 
-# Check if health endpoint responds
-kubectl exec -n mcp deployment/zai-proxy-test -- \
-  curl -s http://localhost:8080/health
-
-# Check if application is listening on port
-kubectl exec -n mcp deployment/zai-proxy-test -- \
-  netstat -tlnp | grep 8080
+# Readiness probes hit /health — a NotReady pod is failing /health;
+# check its logs for the reason (no exec from this identity)
+kubectl --server=$S logs -n mcp deployment/zai-proxy-test --tail=50
 ```
 
 **Common Causes & Fixes:**
@@ -123,14 +141,14 @@ kubectl exec -n mcp deployment/zai-proxy-test -- \
 | Cause | Fix |
 |-------|-----|
 | Health endpoint not responding | Fix /health endpoint in code |
-| Port mismatch | Fix containerPort or application port |
-| Slow startup (not ready before probe) | Increase initialDelaySeconds |
+| Port mismatch | Fix containerPort or application port (manifest) |
+| Slow startup (not ready before probe) | Increase initialDelaySeconds (manifest) |
 | Dependency not available | Fix external service connectivity |
 
 **Example Fix - Slow Startup:**
 ```bash
-# Edit deployment
-kubectl edit deployment/zai-proxy-test -n mcp
+cd /home/coding/declarative-config
+$EDITOR k8s/apexalgo-iad/mcp/zai-proxy-test.yml
 
 # Adjust readiness probe:
 #   readinessProbe:
@@ -139,20 +157,25 @@ kubectl edit deployment/zai-proxy-test -n mcp
 #       port: 8080
 #     initialDelaySeconds: 10  # Increased from 3
 #     periodSeconds: 5
+git add k8s/apexalgo-iad/mcp/zai-proxy-test.yml
+git commit -m "fix: give zai-proxy canary more startup time"
+git push origin main
 ```
 
 **Example Fix - Port Mismatch:**
 ```bash
-# Check what port app is listening on
-kubectl exec -n mcp deployment/zai-proxy-test -- \
-  netstat -tlnp
+# Logs or events will show the probe failing; confirm which port the app
+# listens on from its startup logs
+kubectl --server=$S logs -n mcp deployment/zai-proxy-test --tail=50
 
-# If listening on 8081 but probe checking 8080:
-kubectl edit deployment/zai-proxy-test -n mcp
-
-# Change containerPort to match actual port:
+# If listening on 8081 but probe checking 8080, correct the manifest:
+cd /home/coding/declarative-config
+$EDITOR k8s/apexalgo-iad/mcp/zai-proxy-test.yml
 #   ports:
 #   - containerPort: 8081  # Corrected from 8080
+git add k8s/apexalgo-iad/mcp/zai-proxy-test.yml
+git commit -m "fix: correct zai-proxy canary container port"
+git push origin main
 ```
 
 ---
@@ -166,41 +189,32 @@ kubectl edit deployment/zai-proxy-test -n mcp
 
 **Diagnosis:**
 ```bash
-# Check error rate from metrics
-kubectl exec -n mcp deployment/zai-proxy-test -- \
-  curl -s http://localhost:8080/metrics | \
-  grep -E "zai_proxy_requests_total.*status=\"5" | sort -t'"' -k5
+S=http://traefik-apexalgo-iad:8001
+
+# Check error rate from canary logs (status codes appear per request)
+kubectl --server=$S logs -n mcp deployment/zai-proxy-test --tail=200 | grep -iE "error|5[0-9][0-9]"
 
 # Stream logs for errors
-kubectl logs -f -n mcp deployment/zai-proxy-test | grep -i error
+kubectl --server=$S logs -f -n mcp deployment/zai-proxy-test | grep -i error
 
 # Check for rate limiting (429 errors)
-kubectl logs -n mcp deployment/zai-proxy-test --tail=100 | grep "429\|rate limit"
-
-# Check z.ai API connectivity
-kubectl exec -n mcp deployment/zai-proxy-test -- \
-  curl -s -w "\n%{http_code}\n" -H "Authorization: Bearer $ZAI_API_KEY" \
-  https://api.z.ai/v1/chat/completions -d '{"model":"glm-4.7","messages":[],"max_tokens":1}'
+kubectl --server=$S logs -n mcp deployment/zai-proxy-test --tail=100 | grep "429\|rate limit"
 ```
 
 **Common Causes & Fixes:**
 
 | Cause | Fix |
 |-------|-----|
-| Rate limiting from z.ai | Reduce RATE_LIMIT_INITIAL/MAX values |
-| Invalid API key | Update zai-api-key secret |
+| Rate limiting from z.ai | Reduce RATE_LIMIT_INITIAL/MAX values (manifest) |
+| Invalid API key | Update the OpenBao value behind the ExternalSecret (below) |
 | Upstream API changes | Check z.ai API status/docs |
 | Token counting errors | Fix tokenizer logic |
-| Request timeout errors | Increase client timeout settings |
+| Request timeout errors | Increase client timeout settings (manifest) |
 
 **Example Fix - Rate Limiting:**
 ```bash
-# Check current rate limit settings
-kubectl exec -n mcp deployment/zai-proxy-test -- \
-  curl -s http://localhost:8080/metrics | grep rate_limit
-
-# Edit deployment to reduce rate limits
-kubectl edit deployment/zai-proxy-test -n mcp
+cd /home/coding/declarative-config
+$EDITOR k8s/apexalgo-iad/mcp/zai-proxy-test.yml
 
 # Adjust rate limit env vars:
 #   env:
@@ -209,24 +223,34 @@ kubectl edit deployment/zai-proxy-test -n mcp
 #   - name: RATE_LIMIT_MAX
 #     value: "3"  # Reduced from 5
 
-# Rollout restart to apply
-kubectl rollout restart deployment/zai-proxy-test -n mcp
+git add k8s/apexalgo-iad/mcp/zai-proxy-test.yml
+git commit -m "fix: reduce zai-proxy canary rate limits"
+git push origin main
+# ArgoCD applies it and rolls the pod — no rollout restart needed
 ```
 
 **Example Fix - Invalid API Key:**
+
+`mcp/zai-api-key` is not a hand-made Secret: it is an ExternalSecret
+(`k8s/apexalgo-iad/mcp/zai-api-key-externalsecret.yml`) syncing from
+rs-manager's OpenBao at
+`secret/rs-manager/apexalgo-iad/mcp/zai/api-key`, refreshed hourly. The
+deployment carries `reloader.stakater.com/auto: "true"`, so pods roll
+automatically when the Secret changes. Fix the value at its source:
+
 ```bash
-# Test if API key works
-kubectl exec -n mcp deployment/zai-proxy-test -- \
-  curl -s https://api.z.ai/v1/models -H "Authorization: Bearer $ZAI_API_KEY"
+# Write the new key to OpenBao — value via stdin, never as an argument
+# (provisioning identity cannot read it back; verify by metadata version):
+echo 'NEW_API_KEY' | bao-as rs-manager-provision bao kv put -cas=<current-version> \
+  secret/rs-manager/apexalgo-iad/mcp/zai/api-key api_key=-
 
-# If returns 401, update the secret
-kubectl create secret generic zai-api-key -n mcp \
-  --from-literal=api-key='NEW_API_KEY_HERE' \
-  --dry-run=client -o yaml | kubectl apply -f -
-
-# Rollout restart to pick up new key
-kubectl rollout restart deployment/zai-proxy-test -n mcp
+# Then wait for the ExternalSecret refresh (refreshInterval: 1h) — Reloader
+# rolls the deployment when the Secret updates. Confirm recovery:
+kubectl --server=http://traefik-apexalgo-iad:8001 logs -n mcp deployment/zai-proxy-test --tail=50
 ```
+
+Do NOT `kubectl create secret ... | kubectl apply` — the ExternalSecret owns
+that Secret and would overwrite the hand-made value on the next refresh.
 
 ---
 
@@ -239,42 +263,38 @@ kubectl rollout restart deployment/zai-proxy-test -n mcp
 
 **Diagnosis:**
 ```bash
-# Check for token metrics
-kubectl exec -n mcp deployment/zai-proxy-test -- \
-  curl -s http://localhost:8080/metrics | grep zai_proxy_tokens
+S=http://traefik-apexalgo-iad:8001
 
 # Check logs for token errors
-kubectl logs -n mcp deployment/zai-proxy-test --tail=100 | grep -i "token"
+kubectl --server=$S logs -n mcp deployment/zai-proxy-test --tail=100 | grep -i "token"
 
-# Check if DEPLOYMENT_VARIANT is set
-kubectl exec -n mcp deployment/zai-proxy-test -- \
-  printenv DEPLOYMENT_VARIANT
+# Check DEPLOYMENT_VARIANT is what the manifest declares
+kubectl --server=$S get deployment/zai-proxy-test -n mcp -o yaml | grep -A1 DEPLOYMENT_VARIANT
 
-# Verify tokenizer is working
-kubectl exec -n mcp deployment/zai-proxy-test -- \
-  curl -s http://localhost:8080/metrics | grep token_count_duration
+# Verify token activity (production, direct /metrics over the tailnet)
+curl -sk https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444/metrics | grep zai_proxy_tokens
 ```
 
 **Common Causes & Fixes:**
 
 | Cause | Fix |
 |-------|-----|
-| DEPLOYMENT_VARIANT not set | Add DEPLOYMENT_VARIANT=canary to env |
+| DEPLOYMENT_VARIANT not set | Add DEPLOYMENT_VARIANT to the manifest env |
 | Tokenizer initialization failed | Fix tokenizer code and rebuild |
-| Tokenizer config invalid | Update tokenizer configuration |
-| Memory pressure (tokenizer OOM) | Increase memory limits |
+| Tokenizer config invalid | Update tokenizer configuration (manifest) |
+| Memory pressure (tokenizer OOM) | Increase memory limits (manifest) |
 
 **Example Fix - Missing DEPLOYMENT_VARIANT:**
 ```bash
-# Check if env var is set
-kubectl exec -n mcp deployment/zai-proxy-test -- printenv DEPLOYMENT_VARIANT
-
-# If not set, edit deployment
-kubectl edit deployment/zai-proxy-test -n mcp
+cd /home/coding/declarative-config
+$EDITOR k8s/apexalgo-iad/mcp/zai-proxy-test.yml
 
 # Add to env section:
 #   - name: DEPLOYMENT_VARIANT
-#     value: "canary"
+#     value: "test"
+git add k8s/apexalgo-iad/mcp/zai-proxy-test.yml
+git commit -m "fix: set DEPLOYMENT_VARIANT on zai-proxy canary"
+git push origin main
 ```
 
 ---
@@ -288,46 +308,47 @@ kubectl edit deployment/zai-proxy-test -n mcp
 
 **Diagnosis:**
 ```bash
-# Check request duration metrics
-kubectl exec -n mcp deployment/zai-proxy-test -- \
-  curl -s http://localhost:8080/metrics | \
-  grep zai_proxy_request_duration_seconds | grep -v "0\." | sort -t'"' -k5
+S=http://traefik-apexalgo-iad:8001
 
-# Check token counting duration
-kubectl exec -n mcp deployment/zai-proxy-test -- \
-  curl -s http://localhost:8080/metrics | \
-  grep token_count_duration_seconds | sort -t'"' -k5
+# Check for slow-request log lines on the canary
+kubectl --server=$S logs -n mcp deployment/zai-proxy-test --tail=200 | grep -iE "slow|duration|latency"
+
+# Production comparison — direct /metrics (histograms + token count duration):
+curl -sk https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444/metrics | \
+  grep -E "zai_proxy_request_duration_seconds|zai_proxy_token_count_duration_seconds" | head -20
 
 # Check resource usage
-kubectl top pods -n mcp -l app=zai-proxy,variant=test
+kubectl --server=$S top pods -n mcp -l app=zai-proxy,variant=test
 
-# Check for high CPU throttling
-kubectl describe pod -n mcp -l app=zai-proxy,variant=test | grep -A 3 "Limits"
+# Check declared limits
+kubectl --server=$S get deployment/zai-proxy-test -n mcp -o yaml | grep -A 6 "resources:"
 ```
 
 **Common Causes & Fixes:**
 
 | Cause | Fix |
 |-------|-----|
-| CPU throttling | Increase CPU limits |
+| CPU throttling | Increase CPU limits (manifest) |
 | Token counting slow | Optimize tokenizer or increase resources |
 | Upstream API slow | Check z.ai API status |
 | Network latency | Check cluster network issues |
-| Memory pressure (GC) | Increase memory limits |
+| Memory pressure (GC) | Increase memory limits (manifest) |
 
 **Example Fix - CPU Throttling:**
 ```bash
-# Check current CPU limits
-kubectl get deployment/zai-proxy-test -n mcp \
+# Check current CPU limits (read-only)
+kubectl --server=$S get deployment/zai-proxy-test -n mcp \
   -o jsonpath='{.spec.template.spec.containers[0].resources.limits.cpu}'
 
-# If low (e.g., 100m), increase it
-kubectl edit deployment/zai-proxy-test -n mcp
-
-# Change:
+# If low (e.g., 100m), raise it in the manifest
+cd /home/coding/declarative-config
+$EDITOR k8s/apexalgo-iad/mcp/zai-proxy-test.yml
 #   resources:
 #     limits:
 #       cpu: "200m"  # Increased from 100m
+git add k8s/apexalgo-iad/mcp/zai-proxy-test.yml
+git commit -m "fix: raise zai-proxy canary CPU limit"
+git push origin main
 ```
 
 ---
@@ -340,28 +361,32 @@ kubectl edit deployment/zai-proxy-test -n mcp
 
 **Diagnosis:**
 ```bash
+S=http://traefik-apexalgo-iad:8001
+
 # Check pod events for pull errors
-kubectl describe pod -n mcp -l app=zai-proxy,variant=test | grep -A 5 "Events:"
+kubectl --server=$S describe pod -n mcp -l app=zai-proxy,variant=test | grep -A 5 "Events:"
 
 # Check what image is being pulled
-kubectl get deployment/zai-proxy-test -n mcp \
+kubectl --server=$S get deployment/zai-proxy-test -n mcp \
   -o jsonpath='{.spec.template.spec.containers[0].image}' && echo
 
-# Verify image exists (from devpod)
+# Verify image exists (from codinghome)
 curl -s https://hub.docker.com/v2/repositories/ronaldraygun/zai-proxy/tags/ | \
   jq '.results[].name' | grep VERSION
 
-# Check if image pull secret exists
-kubectl get secret docker-hub-registry -n mcp
+# Confirm the pull secret is declared where the deployment expects it
+# (imagePullSecrets: docker-hub-registry — a SealedSecret in declarative-config;
+# the read-only identity cannot read Secrets directly)
+grep -rn "docker-hub-registry" /home/coding/declarative-config/k8s/apexalgo-iad/kubernetes-reflector/docker-hub-registry-sealedsecret.yml | head -3
 ```
 
 **Common Causes & Fixes:**
 
 | Cause | Fix |
 |-------|-----|
-| Image tag doesn't exist | Build and push image with correct tag |
-| Wrong registry/username | Fix image name in deployment |
-| Expired registry credentials | Update docker-hub-registry secret |
+| Image tag doesn't exist | Build and push image with correct tag, then bump the manifest |
+| Wrong registry/username | Fix image name in the manifest |
+| Expired registry credentials | Re-seal `docker-hub-registry` and commit (below) |
 | Registry rate limiting | Wait or use authenticated pulls |
 | Network issue | Check cluster egress to Docker Hub |
 
@@ -376,24 +401,22 @@ cd /home/coding/zai-proxy
 docker build -t ronaldraygun/zai-proxy:VERSION .
 docker push ronaldraygun/zai-proxy:VERSION
 
-# Or update deployment to use existing tag
-kubectl set image deployment/zai-proxy-test \
-  proxy=ronaldraygun/zai-proxy:EXISTING_TAG -n mcp
+# Then point the manifest at it and push
+cd /home/coding/declarative-config
+$EDITOR k8s/apexalgo-iad/mcp/zai-proxy-test.yml   # image: ronaldraygun/zai-proxy:VERSION
+git add k8s/apexalgo-iad/mcp/zai-proxy-test.yml
+git commit -m "fix: point zai-proxy canary at VERSION image"
+git push origin main
 ```
 
-**Example Fix - Update Credentials:**
-```bash
-# Create new docker-registry secret
-kubectl create secret docker-registry docker-hub-registry -n mcp \
-  --docker-server=https://index.docker.io/v1/ \
-  --docker-username=USERNAME \
-  --docker-password=PASSWORD \
-  --docker-email=EMAIL \
-  --dry-run=client -o yaml | kubectl apply -f -
+**Example Fix - Update Registry Credentials:**
 
-# Rollout restart to use new secret
-kubectl rollout restart deployment/zai-proxy-test -n mcp
-```
+`docker-hub-registry` is a SealedSecret in declarative-config
+(`k8s/apexalgo-iad/kubernetes-reflector/docker-hub-registry-sealedsecret.yml`).
+Re-seal the new credentials with kubeseal and commit the updated
+SealedSecret — the same GitOps path as every other change. Do NOT
+`kubectl create secret docker-registry ... | kubectl apply`: ArgoCD owns the
+object and `selfHeal` will restore the sealed version.
 
 ---
 
@@ -406,50 +429,49 @@ kubectl rollout restart deployment/zai-proxy-test -n mcp
 
 **Diagnosis:**
 ```bash
+S=http://traefik-apexalgo-iad:8001
+
 # Check canary service exists
-kubectl get svc zai-proxy-test -n mcp
+kubectl --server=$S get svc zai-proxy-test -n mcp
 
 # Check service endpoints
-kubectl get endpoints zai-proxy-test -n mcp
-
-# Test from devpod
-curl -s http://zai-proxy-test.devpod.svc.cluster.local:8080/health
+kubectl --server=$S get endpoints zai-proxy-test -n mcp
 
 # Check service selector matches pods
-kubectl get svc zai-proxy-test -n mcp \
+kubectl --server=$S get svc zai-proxy-test -n mcp \
   -o jsonpath='{.spec.selector}' && echo
 
 # Check pod labels
-kubectl get pods -n mcp -l app=zai-proxy,variant=test \
+kubectl --server=$S get pods -n mcp -l app=zai-proxy,variant=test \
   -o jsonpath='{.items[0].metadata.labels}' && echo
+
+# Check which endpoint workers are configured with (needle adapters)
+grep -n "ANTHROPIC_BASE_URL" ~/.config/needle/adapters/*.yaml | head
 ```
 
 **Common Causes & Fixes:**
 
 | Cause | Fix |
 |-------|-----|
-| Service doesn't exist | Create service |
-| Selector mismatch | Fix service selector or pod labels |
+| Service doesn't exist | Declare it in declarative-config |
+| Selector mismatch | Fix service selector or pod labels (manifest) |
 | No ready pods | Fix pod issues first |
-| Network policy blocking | Update network policies |
+| Network policy blocking | Update network policies (manifest) |
 | DNS not resolving | Check CoreDNS |
+| Workers pointed at the wrong URL | Update the needle adapter config |
 
 **Example Fix - Selector Mismatch:**
 ```bash
-# Check service selector
-kubectl get svc zai-proxy-test -n mcp -o jsonpath='{.spec.selector}'
+cd /home/coding/declarative-config
+$EDITOR k8s/apexalgo-iad/mcp/zai-proxy-test.yml
 
-# Check pod labels
-kubectl get pods -n mcp -l app=zai-proxy,variant=test \
-  -o jsonpath='{.items[0].metadata.labels}'
-
-# If mismatch, edit service
-kubectl edit svc zai-proxy-test -n mcp
-
-# Fix selector to match pod labels:
+# Fix the Service selector to match pod labels:
 #   selector:
 #     app: zai-proxy
 #     variant: test  # Ensure this matches pod labels
+git add k8s/apexalgo-iad/mcp/zai-proxy-test.yml
+git commit -m "fix: correct zai-proxy canary service selector"
+git push origin main
 ```
 
 ---
@@ -463,21 +485,18 @@ kubectl edit svc zai-proxy-test -n mcp
 
 **Diagnosis:**
 ```bash
-# Check current alert values
-kubectl exec -n mcp deployment/zai-proxy-test -- \
-  curl -s http://localhost:8080/metrics | \
+S=http://traefik-apexalgo-iad:8001
+
+# Compare canary and production error behavior
+kubectl --server=$S logs -n mcp deployment/zai-proxy-test --tail=200 | grep -iE "error|5[0-9][0-9]"
+kubectl --server=$S logs -n mcp deployment/zai-proxy --tail=200 | grep -iE "error|5[0-9][0-9]"
+
+# Production metrics directly (tailnet URL)
+curl -sk https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444/metrics | \
   grep -E "(zai_proxy_requests_total|zai_proxy_errors)"
 
-# Compare with production
-kubectl exec -n mcp deployment/zai-proxy -- \
-  curl -s http://localhost:8080/metrics | \
-  grep -E "(zai_proxy_requests_total|zai_proxy_errors)"
-
-# Check alert rules
-kubectl get prometheusrule -n mcp zai-proxy-canary -o yaml
-
-# Check alert status in Prometheus
-# (Access Prometheus UI and check alerts)
+# Check alert status in the Prometheus UI / AlertManager (tailnet VPN):
+# https://prometheus-apexalgo-iad-ts.ardenone.com:8444
 ```
 
 **Common Alerts & Fixes:**
@@ -485,25 +504,24 @@ kubectl get prometheusrule -n mcp zai-proxy-canary -o yaml
 | Alert | Meaning | Fix |
 |-------|---------|-----|
 | ZaiProxyCanaryDeploymentDown | Canary pods not ready | Fix pod health issues |
-| ZaiProxyCanaryErrorRateHigherThanProduction | Canary error rate > production | Fix canary errors or rollback |
+| ZaiProxyCanaryErrorRateHigherThanProduction | Canary error rate > production | Fix canary errors or stand it down |
 | ZaiProxyCanaryHighErrorRate | Error rate >5% | Fix upstream issues |
-| ZaiProxyCanaryLatencyDegraded | P95 latency >2x baseline | Optimize or increase resources |
+| ZaiProxyCanaryLatencyDegraded | P95 latency >2x baseline | Optimize or increase resources (manifest) |
 
 **Example Fix - Error Rate Higher Than Production:**
 ```bash
-# Check canary error rate
-kubectl exec -n mcp deployment/zai-proxy-test -- \
-  curl -s http://localhost:8080/metrics | grep error
-
-# Check production error rate
-kubectl exec -n mcp deployment/zai-proxy -- \
-  curl -s http://localhost:8080/metrics | grep error
+S=http://traefik-apexalgo-iad:8001
 
 # If canary significantly worse, investigate logs
-kubectl logs -n mcp deployment/zai-proxy-test --tail=500 | grep -i error
+kubectl --server=$S logs -n mcp deployment/zai-proxy-test --tail=500 | grep -i error
 
-# If canary issue, rollback to production
-kubectl scale deployment/zai-proxy-test -n mcp --replicas=0
+# If canary issue, stand it down via its manifest — the sanctioned "emergency
+# stop" is a Git commit, not kubectl scale:
+cd /home/coding/declarative-config
+$EDITOR k8s/apexalgo-iad/mcp/zai-proxy-test.yml   # replicas: 0
+git add k8s/apexalgo-iad/mcp/zai-proxy-test.yml
+git commit -m "chore: stand down zai-proxy canary (error rate)"
+git push origin main
 ```
 
 ---
@@ -514,9 +532,9 @@ kubectl scale deployment/zai-proxy-test -n mcp --replicas=0
 
 ```bash
 #!/bin/bash
-# canary-health-check.sh - Comprehensive canary health check
+# canary-health-check.sh - Comprehensive canary health check (read-only)
 
-export KUBECONFIG=/home/coder/.kube/apexalgo-iad.kubeconfig
+S=http://traefik-apexalgo-iad:8001
 NAMESPACE="mcp"
 DEPLOYMENT="zai-proxy-test"
 
@@ -525,50 +543,39 @@ echo
 
 # 1. Pod Status
 echo "1. Pod Status:"
-kubectl get pods -n $NAMESPACE -l app=zai-proxy,variant=test
+kubectl --server=$S get pods -n $NAMESPACE -l app=zai-proxy,variant=test
 echo
 
 # 2. Recent Events
 echo "2. Recent Events (last 5):"
-kubectl get events -n $NAMESPACE --field-selector involvedObject.name=$DEPLOYMENT \
+kubectl --server=$S get events -n $NAMESPACE --field-selector involvedObject.name=$DEPLOYMENT \
   --sort-by='.lastTimestamp' | tail -5
 echo
 
-# 3. Error Rate
-echo "3. Error Rate (last 5 min):"
-ERROR_RATE=$(kubectl exec -n $NAMESPACE deployment/$DEPLOYMENT -- \
-  curl -s http://localhost:8080/metrics | \
-  grep 'zai_proxy_requests_total.*status="5"' | awk '{sum+=$2} END {print sum+0}')
-TOTAL_RATE=$(kubectl exec -n $NAMESPACE deployment/$DEPLOYMENT -- \
-  curl -s http://localhost:8080/metrics | \
-  grep 'zai_proxy_requests_total' | awk '{sum+=$2} END {print sum+0}')
-if [ "$TOTAL_RATE" -gt 0 ]; then
-  echo "Error rate: $(echo "scale=2; $ERROR_RATE * 100 / $TOTAL_RATE" | bc)%"
-else
-  echo "No requests recorded"
-fi
+# 3. Error Rate (from logs; no exec available)
+echo "3. Errors in recent logs:"
+kubectl --server=$S logs -n $NAMESPACE deployment/$DEPLOYMENT --tail=200 | grep -ciE "error|5[0-9][0-9]" || echo "0"
 echo
 
 # 4. Token Counting
-echo "4. Token Counting:"
-TOKEN_METRICS=$(kubectl exec -n $NAMESPACE deployment/$DEPLOYMENT -- \
-  curl -s http://localhost:8080/metrics | grep zai_proxy_tokens_total)
-if [ -n "$TOKEN_METRICS" ]; then
-  echo "$TOKEN_METRICS"
-else
-  echo "WARNING: No token metrics found"
-fi
+echo "4. Token Counting (log evidence):"
+kubectl --server=$S logs -n $NAMESPACE deployment/$DEPLOYMENT --tail=100 | grep "Token usage" | tail -5
 echo
 
 # 5. Recent Errors in Logs
-echo "5. Recent Errors (last 10):"
-kubectl logs -n $NAMESPACE deployment/$DEPLOYMENT --tail=100 | grep -i error | tail -5
+echo "5. Recent Errors (last 5):"
+kubectl --server=$S logs -n $NAMESPACE deployment/$DEPLOYMENT --tail=100 | grep -i error | tail -5
 echo
 
 # 6. Resource Usage
 echo "6. Resource Usage:"
-kubectl top pods -n $NAMESPACE -l app=zai-proxy,variant=test
+kubectl --server=$S top pods -n $NAMESPACE -l app=zai-proxy,variant=test
 echo
+
+# 7. Production comparison (tailnet URL)
+echo "7. Production health:"
+curl -sk --max-time 10 https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444/health | head -c 300
+echo; echo
 
 echo "=== Health Check Complete ==="
 ```
@@ -577,42 +584,29 @@ echo "=== Health Check Complete ==="
 
 ```bash
 #!/bin/bash
-# compare-variants.sh - Compare canary vs production metrics
+# compare-variants.sh - Compare canary vs production (read-only)
 
-export KUBECONFIG=/home/coder/.kube/apexalgo-iad.kubeconfig
+S=http://traefik-apexalgo-iad:8001
 NAMESPACE="mcp"
 
 echo "=== Canary vs Production Comparison ==="
 echo
 
-# Get metrics from both
-CANARY_METRICS=$(kubectl exec -n $NAMESPACE deployment/zai-proxy-test -- \
-  curl -s http://localhost:8080/metrics)
-PROD_METRICS=$(kubectl exec -n $NAMESPACE deployment/zai-proxy -- \
-  curl -s http://localhost:8080/metrics)
-
-# Compare error rates
-echo "Error Rates:"
-CANARY_ERR=$(echo "$CANARY_METRICS" | grep 'zai_proxy_requests_total.*status="5"' | awk '{sum+=$2} END {print sum+0}')
-PROD_ERR=$(echo "$PROD_METRICS" | grep 'zai_proxy_requests_total.*status="5"' | awk '{sum+=$2} END {print sum+0}')
-echo "  Canary:   $CANARY_ERR errors"
-echo "  Production: $PROD_ERR errors"
+# Production: direct /metrics over the tailnet
+echo "Production (direct /metrics):"
+curl -sk --max-time 10 https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444/metrics | \
+  grep -E "^zai_proxy_(requests|tokens)_total" | head -10
 echo
 
-# Compare P95 latency
-echo "P95 Latency:"
-CANARY_P95=$(echo "$CANARY_METRICS" | grep 'quantile="0.95"' | grep request_duration | awk '{print $2}')
-PROD_P95=$(echo "$PROD_METRICS" | grep 'quantile="0.95"' | grep request_duration | awk '{print $2}')
-echo "  Canary:   ${CANARY_P95}s"
-echo "  Production: ${PROD_P95}s"
+# Canary: no VPN route — logs carry the same counters
+echo "Canary (from logs):"
+kubectl --server=$S logs -n $NAMESPACE deployment/zai-proxy-test --tail=200 | \
+  grep -E "Token usage|zai_proxy" | tail -10
 echo
 
-# Compare token counting
-echo "Token Counting:"
-CANARY_TOK=$(echo "$CANARY_METRICS" | grep 'zai_proxy_tokens_total' | awk '{sum+=$2} END {print sum+0}')
-PROD_TOK=$(echo "$PROD_METRICS" | grep 'zai_proxy_tokens_total' | awk '{sum+=$2} END {print sum+0}')
-echo "  Canary:   $CANARY_TOK tokens"
-echo "  Production: $PROD_TOK tokens"
+# Pod-level comparison
+echo "Pods:"
+kubectl --server=$S get pods -n $NAMESPACE -l app=zai-proxy -o wide
 echo
 
 echo "=== Comparison Complete ==="
@@ -625,19 +619,23 @@ echo "=== Comparison Complete ==="
 │                    CANARY TROUBLESHOOTING                       │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                  │
-│  STATUS          CHECK                    FIX                    │
+│  STATUS          CHECK                     FIX (GitOps only)    │
 │  ─────────────────────────────────────────────────────────────  │
 │  CrashLoop      kubectl logs --previous   Fix app / rebuild     │
 │  NotReady       kubectl describe pod      Fix probes / port     │
-│  ImagePullBack  kubectl get secret        Push image / fix auth │
-│  5xx Errors     kubectl logs | grep error  Fix rate limit / key │
-│  High Latency   kubectl top pods          Increase CPU/mem      │
-│  No Metrics     kubectl exec -- curl /m   Fix DEPLOYMENT_VARIANT│
+│  ImagePullBack  docker hub tags list      Push image / fix auth │
+│  5xx Errors     kubectl logs | grep err   Fix rate limit / key  │
+│  High Latency   kubectl top pods          Raise limits (Git)    │
+│  No Metrics     logs / prod /metrics      Fix DEPLOYMENT_VARIANT│
 │  No Conn        kubectl get endpoints     Fix service selector  │
 │                                                                  │
+│  Every fix = edit manifest in declarative-config, commit, push. │
+│  kubectl set/scale/edit/patch/rollout are blocked by policy.    │
+│                                                                  │
 ├─────────────────────────────────────────────────────────────────┤
-│  EMERGENCY ROLLBACK:                                            │
-│  kubectl scale deployment/zai-proxy-test -n mcp --replicas=0    │
+│  EMERGENCY CANARY STAND-DOWN:                                   │
+│  k8s/apexalgo-iad/mcp/zai-proxy-test.yml -> replicas: 0         │
+│  git commit + git push origin main (ArgoCD does the rest)       │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -648,6 +646,7 @@ echo "=== Comparison Complete ==="
 - [CANARY_PROMOTION_PROCEDURE.md](CANARY_PROMOTION_PROCEDURE.md) - Promotion procedure
 - [CANARY_PROMOTION_CHECKLIST.md](CANARY_PROMOTION_CHECKLIST.md) - Promotion checklist
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) - General troubleshooting
+- [MONITORING_SETUP.md](MONITORING_SETUP.md) - Metrics and alerting setup
 
 ## Getting Help
 
@@ -655,6 +654,11 @@ If issues persist after troubleshooting:
 
 1. Check Grafana dashboard: `grafana-dashboard-zai-proxy-canary-comparison`
 2. Review Prometheus alerts in AlertManager
-3. Check recent deployment changes: `kubectl rollout history deployment/zai-proxy-test -n mcp`
+3. Check recent deployment changes: `kubectl --server=http://traefik-apexalgo-iad:8001 rollout history deployment/zai-proxy-test -n mcp`
 4. Contact on-call for zai-proxy service
-5. Create issue in repository with diagnostic output
+5. Create a bead in this repository with diagnostic output:
+   ```bash
+   cd /home/coding/zai-proxy
+   bead create --issue-type bug --priority 1 --label canary \
+     --title "Canary issue: <one-line summary>"
+   ```
