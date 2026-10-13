@@ -45,6 +45,8 @@ func NewProxyHandler(
 	minRate float64,
 	maxRate float64,
 ) *ProxyHandler {
+	// Publish zero immediately, including on a replica with no rejected requests.
+	upstreamConcurrencyRejections.WithLabelValues(deploymentVariant).Add(0)
 	return &ProxyHandler{
 		apiKey:            apiKey,
 		targetURL:         targetURL,
@@ -277,6 +279,9 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				errBody = errBody[:DefaultMaxZaiErrorBodyBytes]
 			}
 			parsed := ParseZaiError(errBody, DefaultMaxZaiErrorBodyBytes)
+			if parsed.Class == ZaiErrorClassConcurrency && parsed.Code == "1302" {
+				upstreamConcurrencyRejections.WithLabelValues(h.deploymentVariant).Inc()
+			}
 			upstreamErrors.WithLabelValues("429", h.deploymentVariant).Inc()
 
 			// Retry-After is the provider's own instruction and is honored for
