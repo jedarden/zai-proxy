@@ -46,6 +46,17 @@ curl -sk https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444/health
 curl -sk https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444/metrics
 ```
 
+The canary is directly reachable too (since 2026-10-24, bead
+zaiproxy-70046ba4): the `/zai-canary` path prefix on the same Traefik vpn
+entrypoint, stripped before the request reaches the proxy (self-signed
+tailnet cert, hence `-k` — route:
+`k8s/apexalgo-iad/mcp/zai-proxy-test-vpn-ingressroute.yml`):
+
+```bash
+curl -sk https://traefik-apexalgo-iad.tail1b1987.ts.net:8444/zai-canary/health
+curl -sk https://traefik-apexalgo-iad.tail1b1987.ts.net:8444/zai-canary/metrics
+```
+
 ## Quick Reference Commands
 
 ```bash
@@ -90,12 +101,17 @@ git push origin main
   # - ZaiProxyCanaryLatencyDegraded
   ```
 
-- [ ] Canary is receiving traffic (if using split traffic)
+- [ ] Canary is receiving traffic (opt-in by URL — production is never split)
   ```bash
-  # The canary is deliberately unrouted (no VPN IngressRoute — see the
-  # troubleshooting guide for the decision and the bring-up recipe). Check
-  # traffic via Prometheus (variant="test" series live since the
-  # 2026-10-23 ServiceMonitor):
+  # Traffic story (2026-10-24, bead zaiproxy-70046ba4): the canary is NEVER
+  # split into production's serving path — production's Service selects
+  # variant=production, the canary's selects variant=test, and no weighted
+  # route exists on purpose (a weighted mix would serve an unvalidated image
+  # to workers that never opted in, and would blur the variant="test" vs
+  # variant="production" series the four canary alerts compare). Traffic
+  # reaches the canary only from consumers pointed at
+  #   https://traefik-apexalgo-iad.tail1b1987.ts.net:8444/zai-canary
+  # so this gate is met when an opted-in worker is actually sending traffic:
   curl -sk --get 'https://prometheus-apexalgo-iad-ts.ardenone.com:8444/api/v1/query' \
     --data-urlencode 'query=sum by (variant) (rate(zai_proxy_requests_total{variant="test"}[5m]))'
   # or via its logs:
@@ -105,8 +121,9 @@ git push origin main
 ### Functional Testing
 - [ ] Health endpoint responds
   ```bash
-  # The canary is unrouted by decision; check readiness through the cluster's
-  # own view of it (readiness probes hit /health):
+  # Directly, over the tailnet route (/zai-canary is stripped, proxy sees /health):
+  curl -sk https://traefik-apexalgo-iad.tail1b1987.ts.net:8444/zai-canary/health
+  # Cross-check via the cluster's own view (readiness probes hit /health):
   kubectl --server=http://traefik-apexalgo-iad:8001 get pods -n mcp -l app=zai-proxy,variant=test
   # Or via Prometheus (job label comes from the ServiceMonitor):
   curl -sk --get 'https://prometheus-apexalgo-iad-ts.ardenone.com:8444/api/v1/query' \
@@ -130,7 +147,9 @@ git push origin main
 Workers are NEEDLE fleet workers. Their endpoint comes from
 `ANTHROPIC_BASE_URL` in `~/.config/needle/adapters/*.yaml` (today all point at
 the production URL above). To canary-test with a worker, point one adapter at
-the canary's URL and relaunch that worker.
+the canary's URL — `https://traefik-apexalgo-iad.tail1b1987.ts.net:8444/zai-canary` (tailnet
+self-signed cert; skip TLS verification exactly like the `-k` curl examples
+above) — and relaunch that worker.
 
 - [ ] At least one worker has tested the canary endpoint
   ```bash

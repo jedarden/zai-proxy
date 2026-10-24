@@ -24,13 +24,13 @@ that tries to go through kubectl fails at exactly the moment it is needed.
 ```
                     ┌─────────────────────────────────────┐
                     │    Canary (zai-proxy-test)          │
-                    │    Image: X.Y.Z-canary              │
+                    │    Image: X.Y.Z (test)              │
                     └──────────────┬──────────────────────┘
                                    │ Fails Testing
                                    ▼
                     ┌─────────────────────────────────────┐
                     │    Production (zai-proxy)           │
-                    │    Image: X.Y.Z (no -canary)        │
+                    │    Image: X.Y.Z (production)        │
                     │    UNCHANGED - Still serving        │
                     └─────────────────────────────────────┘
 

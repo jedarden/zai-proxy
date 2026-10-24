@@ -41,13 +41,13 @@ Before promoting canary to production, ensure:
 ```
                     ┌─────────────────────────────────────┐
                     │    Canary (zai-proxy-test)          │
-                    │    Image: X.Y.Z-canary              │
+                    │    Image: X.Y.Z (test)              │
                     └──────────────┬──────────────────────┘
                                    │ Promote
                                    ▼
                     ┌─────────────────────────────────────┐
                     │    Production (zai-proxy)           │
-                    │    Image: X.Y.Z (no -canary)        │
+                    │    Image: X.Y.Z (production)        │
                     └──────────────┬──────────────────────┘
                                    │ declared by
                                    ▼
@@ -77,7 +77,7 @@ curl -sk https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444/health
 
 ### Step 1: Update the Production Manifest (the only change path)
 
-**Example: Promoting 1.2.1-canary to 1.2.1**
+**Example: Promoting candidate 1.2.1 (validated on the canary) to production**
 
 ```bash
 cd /home/coding/declarative-config
@@ -217,23 +217,20 @@ kubectl --server=http://traefik-apexalgo-iad:8001 get deployment/zai-proxy -n mc
 # Expected output: ronaldraygun/zai-proxy:1.2.1
 ```
 
-### Step 5: Update VERSION File
+### Step 5: VERSION File — No Manual Edit Needed
 
-Remove the `-canary` suffix from the VERSION file in the repository:
+There is no `-canary` suffix in this scheme (canary brought under GitOps
+2026-10-23, bead zaiproxy-a5c6427f): the canary pins a plain candidate
+semver in its manifest, and promotion ports that same tag into the
+production manifest. `proxy/VERSION` in this repository is bumped by CI on
+release (the `ci: auto-bump version` commits) — never hand-edited as part
+of a promotion.
 
 ```bash
 cd /home/coding/zai-proxy/proxy
 
-# View current version
+# Confirm the released version CI stamped (should match the promoted tag):
 cat VERSION
-# Current: 1.2.1-canary
-
-# Update to stable version
-echo "1.2.1" > VERSION
-
-# Verify
-cat VERSION
-# Should show: 1.2.1
 ```
 
 ### Step 6: Tag Git Commit as Release

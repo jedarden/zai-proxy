@@ -14,39 +14,32 @@ This guide covers common failure scenarios when testing canary deployments and h
   through kubectl fails at the moment you need it.
 - Production is directly reachable over the tailnet (self-signed VPN cert,
   use `-k`): `https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444`.
-- **The canary is deliberately unrouted** (decision 2026-10-23, bead
-  zaiproxy-a5c6427f): observe it through its logs and through Prometheus —
-  the ServiceMonitor checked in beside the manifests
+- **The canary is routed since 2026-10-24** (bead zaiproxy-70046ba4;
+  `k8s/apexalgo-iad/mcp/zai-proxy-test-vpn-ingressroute.yml`): the
+  `/zai-canary` path prefix on the existing tailnet host
+  `https://traefik-apexalgo-iad.tail1b1987.ts.net:8444/zai-canary` reaches this
+  deployment. A StripPrefix middleware removes the prefix, so
+  `/zai-canary/health`, `/zai-canary/metrics` and `/zai-canary/v1/...` land
+  on the proxy's normal mux. No DNS record was needed — the tailnet host
+  already resolves everywhere the fleet runs, and the route's explicit
+  priority outranks production's bare-Host catch-all for this prefix only.
+  The tailnet host serves Traefik's default self-signed cert (the
+  `*.ardenone.com` wildcard does not cover `ts.net` names), so use `-k`,
+  exactly as for production's documented tailnet access:
+  ```bash
+  curl -sk https://traefik-apexalgo-iad.tail1b1987.ts.net:8444/zai-canary/health
+  curl -sk https://traefik-apexalgo-iad.tail1b1987.ts.net:8444/zai-canary/metrics
+  ```
+- **The canary still receives NO production traffic.** Production's Service
+  selects `variant=production` and the canary's selects `variant=test`, and
+  no weighted split exists — traffic reaches the canary only from consumers
+  that explicitly point at the `/zai-canary` URL above (the traffic story
+  and its reasoning are in the ingressroute's header comment). Observe it
+  through its logs and through Prometheus — the ServiceMonitor checked in
+  beside the manifests
   (`k8s/apexalgo-iad/mcp/zai-proxy-servicemonitor.yml`) scrapes both
   variants, and the four canary alerts live in
-  `k8s/apexalgo-iad/monitoring/zai-proxy-alerting-rules.yml`. If a route is
-  ever needed (e.g. to point a worker adapter straight at the canary), it
-  takes one OUT-OF-REPO step first — a DNS record in the ardenone.com zone
-  (`zai-proxy-test-mcp-apexalgo-iad-ts.ardenone.com` → the Traefik tailnet
-  IP; the `*.ardenone.com` wildcard TLS already covers the name, but nothing
-  resolves it today) — and then this manifest, committed in
-  declarative-config:
-  ```yaml
-  # k8s/apexalgo-iad/mcp/zai-proxy-test-vpn-ingressroute.yml
-  apiVersion: traefik.io/v1alpha1
-  kind: IngressRoute
-  metadata:
-    name: zai-proxy-test-vpn
-    namespace: mcp
-  spec:
-    entryPoints:
-      - vpn
-    routes:
-      - kind: Rule
-        match: Host(`zai-proxy-test-mcp-apexalgo-iad-ts.ardenone.com`)
-        services:
-          - name: zai-proxy-test
-            port: 8080
-    tls:
-      secretName: vpn-wildcard-tls
-  ```
-  Until the DNS record exists, the IngressRoute would answer nothing — do
-  not ship it ahead of the record.
+  `k8s/apexalgo-iad/monitoring/zai-proxy-alerting-rules.yml`.
 
 ## Quick Diagnosis Checklist
 
@@ -635,11 +628,12 @@ curl -sk --max-time 10 https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444/m
   grep -E "^zai_proxy_(requests|tokens)_total" | head -10
 echo
 
-# Canary: deliberately unrouted — Prometheus carries variant="test" series
-# (ServiceMonitor, 2026-10-23); logs carry the same counters
-echo "Canary (from logs):"
-kubectl --server=$S logs -n $NAMESPACE deployment/zai-proxy-test --tail=200 | \
-  grep -E "Token usage|zai_proxy" | tail -10
+# Canary: direct /metrics over the /zai-canary tailnet route (2026-10-24);
+# if the route itself is what is under diagnosis, fall back to the logs,
+# which carry the same counters
+echo "Canary (direct /metrics):"
+curl -sk --max-time 10 https://traefik-apexalgo-iad.tail1b1987.ts.net:8444/zai-canary/metrics | \
+  grep -E "^zai_proxy_(requests|tokens)_total" | head -10
 echo
 
 # Pod-level comparison
