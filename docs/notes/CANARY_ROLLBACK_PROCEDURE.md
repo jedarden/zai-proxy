@@ -77,10 +77,11 @@ kubectl --server=http://traefik-apexalgo-iad:8001 rollout status deployment/zai-
 
 When canary deployment fails testing, keep production unchanged and clean up canary resources.
 
-(As of 2026-10-11 no canary manifest is checked in under
-`k8s/apexalgo-iad/mcp/` — if the canary you are rolling back was created
-some other way, first bring it under declarative-config, then stand it down
-there.)
+(The canary manifest is checked in as of 2026-10-23 under
+`k8s/apexalgo-iad/mcp/zai-proxy-test.yml` — a rollback stands it down there
+via `replicas: 0`, or `git revert`s the commit that bumped the canary image.
+If the canary you are rolling back was created some other way, first bring
+it under declarative-config, then stand it down there.)
 
 ### Rollback Triggers
 
@@ -951,6 +952,6 @@ list in Part 7; every verification step in this document uses only those.
 
 ---
 
-**Document Version:** 3.0.0
-**Last Updated:** 2026-10-11
+**Document Version:** 3.1.0
+**Last Updated:** 2026-10-23
 **Maintained By:** Claude Code Workers

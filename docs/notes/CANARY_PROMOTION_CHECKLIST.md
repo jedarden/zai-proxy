@@ -17,9 +17,15 @@ revert them moments later. The **only** documented change path is:
 3. Let ArgoCD sync (app `mcp-ns-apexalgo-iad`, automated sync with
    `selfHeal` + `prune`)
 
-(As of 2026-10-11 no canary deployment is checked in or running — bringing
-one up means adding its manifest under `k8s/apexalgo-iad/mcp/` first, via
-this same GitOps path. The steps below assume that has happened.)
+(As of 2026-10-23 the canary manifest IS checked in:
+`k8s/apexalgo-iad/mcp/zai-proxy-test.yml` in declarative-config — Deployment
++ Service, pinned image, `DEPLOYMENT_VARIANT=test`, `variant: test` pod
+label — starting at production's tag (1.13.1). A canary run starts by
+bumping BOTH the image tag and the `version:` label in that file, via this
+same GitOps path. The four canary alerts are checked in too
+(`k8s/apexalgo-iad/monitoring/zai-proxy-alerting-rules.yml`), and a
+ServiceMonitor (`k8s/apexalgo-iad/mcp/zai-proxy-servicemonitor.yml`) scrapes
+both variants, so every PromQL below returns real series.)
 
 Read-only kubectl from codinghome needs no kubeconfig — use the
 credential-free proxy endpoint:
@@ -73,7 +79,11 @@ git push origin main
 
 - [ ] No canary-specific Prometheus alerts firing
   ```bash
-  # Check Grafana or AlertManager for:
+  # The four canary alerts are checked in (declarative-config
+  # k8s/apexalgo-iad/monitoring/zai-proxy-alerting-rules.yml). They are NOT
+  # wired to the ntfy paging route — operators check them:
+  curl -sk 'https://prometheus-apexalgo-iad-ts.ardenone.com:8444/api/v1/alerts' \
+    | python3 -c "import json,sys; [print(a['labels']['alertname'], a['state']) for a in json.load(sys.stdin)['data']['alerts'] if 'ZaiProxyCanary' in a['labels'].get('alertname','')]"
   # - ZaiProxyCanaryDeploymentDown
   # - ZaiProxyCanaryErrorRateHigherThanProduction
   # - ZaiProxyCanaryHighErrorRate
@@ -82,19 +92,27 @@ git push origin main
 
 - [ ] Canary is receiving traffic (if using split traffic)
   ```bash
-  # No VPN route exists for the canary; its own /metrics output is visible in
-  # its logs, or via Prometheus once a ServiceMonitor is wired up:
+  # The canary is deliberately unrouted (no VPN IngressRoute — see the
+  # troubleshooting guide for the decision and the bring-up recipe). Check
+  # traffic via Prometheus (variant="test" series live since the
+  # 2026-10-23 ServiceMonitor):
+  curl -sk --get 'https://prometheus-apexalgo-iad-ts.ardenone.com:8444/api/v1/query' \
+    --data-urlencode 'query=sum by (variant) (rate(zai_proxy_requests_total{variant="test"}[5m]))'
+  # or via its logs:
   kubectl --server=http://traefik-apexalgo-iad:8001 logs -n mcp deployment/zai-proxy-test --tail=100
   ```
 
 ### Functional Testing
 - [ ] Health endpoint responds
   ```bash
-  # Either add an IngressRoute for the canary in declarative-config, or check
-  # readiness through the cluster's own view of it:
+  # The canary is unrouted by decision; check readiness through the cluster's
+  # own view of it (readiness probes hit /health):
   kubectl --server=http://traefik-apexalgo-iad:8001 get pods -n mcp -l app=zai-proxy,variant=test
+  # Or via Prometheus (job label comes from the ServiceMonitor):
+  curl -sk --get 'https://prometheus-apexalgo-iad-ts.ardenone.com:8444/api/v1/query' \
+    --data-urlencode 'query=up{service="zai-proxy-test"}'
   ```
-  Expected: pods Ready (readiness probes hit `/health`)
+  Expected: pods Ready (readiness probes hit `/health`); `up == 1` in Prometheus
 
 - [ ] Token counting is working
   ```bash
@@ -134,9 +152,10 @@ the canary's URL and relaunch that worker.
   curl -sk --get 'https://prometheus-apexalgo-iad-ts.ardenone.com:8444/api/v1/query' \
     --data-urlencode 'query=sum by (model) (increase(zai_proxy_tokens_total{variant="test"}[30m]))'
   ```
-  Note: as of 2026-10-11 no ServiceMonitor for zai-proxy is wired up, so this
-  returns empty until one lands — the log check above is the reliable
-  verification today.
+  Live since 2026-10-23: the ServiceMonitor
+  (`k8s/apexalgo-iad/mcp/zai-proxy-servicemonitor.yml`) scrapes both
+  variants, so this returns real series. The log check above remains a good
+  cross-check.
 
 ### Version Confirmation
 - [ ] Canary version is confirmed

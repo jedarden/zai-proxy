@@ -10,8 +10,12 @@ The zai-proxy deployment uses a dual-deployment strategy:
 
 After a canary version has been validated, it can be promoted to production using this procedure.
 
-(As of 2026-10-11 no canary manifest is checked in — a canary run starts by
-adding its manifest under `k8s/apexalgo-iad/mcp/` in declarative-config.)
+(The canary manifest is checked in as of 2026-10-23 —
+`k8s/apexalgo-iad/mcp/zai-proxy-test.yml` in declarative-config: Deployment
++ Service, `DEPLOYMENT_VARIANT=test`, `variant: test` pod label, pinned
+image starting at production's tag. A canary run starts by bumping the image
+tag and the `version:` label in that file; promotion ports the validated tag
+into `zai-proxy.yml`.)
 
 **Everything on the cluster is ArgoCD-managed.** The only documented change
 path is declarative-config → commit to `main` → push → ArgoCD sync. There is
@@ -153,8 +157,10 @@ sum by (variant) (rate(zai_proxy_tokens_total{variant="production"}[5m]))
 
 Runnable via the Prometheus HTTP API (tailnet, `-k` for the VPN cert):
 `https://prometheus-apexalgo-iad-ts.ardenone.com:8444/api/v1/query`.
-Note: as of 2026-10-11 no ServiceMonitor for zai-proxy is wired up, so these
-return empty until one lands — the direct /metrics endpoint works today.
+Live since 2026-10-23: the ServiceMonitor
+(`k8s/apexalgo-iad/mcp/zai-proxy-servicemonitor.yml`, beside the manifests)
+scrapes both variants, so these return real series. The direct /metrics
+endpoint still works.
 
 **Real-time monitoring:**
 

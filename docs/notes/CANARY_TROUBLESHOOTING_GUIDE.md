@@ -13,9 +13,40 @@ This guide covers common failure scenarios when testing canary deployments and h
   prohibited org-wide and mechanically blocked — a fix that tries to go
   through kubectl fails at the moment you need it.
 - Production is directly reachable over the tailnet (self-signed VPN cert,
-  use `-k`): `https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444`. The
-  canary has no VPN route today — observe it through logs and Prometheus, or
-  declare an IngressRoute for it in declarative-config.
+  use `-k`): `https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444`.
+- **The canary is deliberately unrouted** (decision 2026-10-23, bead
+  zaiproxy-a5c6427f): observe it through its logs and through Prometheus —
+  the ServiceMonitor checked in beside the manifests
+  (`k8s/apexalgo-iad/mcp/zai-proxy-servicemonitor.yml`) scrapes both
+  variants, and the four canary alerts live in
+  `k8s/apexalgo-iad/monitoring/zai-proxy-alerting-rules.yml`. If a route is
+  ever needed (e.g. to point a worker adapter straight at the canary), it
+  takes one OUT-OF-REPO step first — a DNS record in the ardenone.com zone
+  (`zai-proxy-test-mcp-apexalgo-iad-ts.ardenone.com` → the Traefik tailnet
+  IP; the `*.ardenone.com` wildcard TLS already covers the name, but nothing
+  resolves it today) — and then this manifest, committed in
+  declarative-config:
+  ```yaml
+  # k8s/apexalgo-iad/mcp/zai-proxy-test-vpn-ingressroute.yml
+  apiVersion: traefik.io/v1alpha1
+  kind: IngressRoute
+  metadata:
+    name: zai-proxy-test-vpn
+    namespace: mcp
+  spec:
+    entryPoints:
+      - vpn
+    routes:
+      - kind: Rule
+        match: Host(`zai-proxy-test-mcp-apexalgo-iad-ts.ardenone.com`)
+        services:
+          - name: zai-proxy-test
+            port: 8080
+    tls:
+      secretName: vpn-wildcard-tls
+  ```
+  Until the DNS record exists, the IngressRoute would answer nothing — do
+  not ship it ahead of the record.
 
 ## Quick Diagnosis Checklist
 
@@ -501,6 +532,12 @@ curl -sk https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444/metrics | \
 
 **Common Alerts & Fixes:**
 
+All four are checked in as of 2026-10-23: declarative-config
+`k8s/apexalgo-iad/monitoring/zai-proxy-alerting-rules.yml` (synced by ArgoCD
+app `monitoring-ns-apexalgo-iad`; evaluated but not wired to the ntfy paging
+route — operators check them). A stood-down canary (`replicas: 0` or
+manifest removed) is silent by construction, not firing.
+
 | Alert | Meaning | Fix |
 |-------|---------|-----|
 | ZaiProxyCanaryDeploymentDown | Canary pods not ready | Fix pod health issues |
@@ -598,7 +635,8 @@ curl -sk --max-time 10 https://zai-proxy-mcp-apexalgo-iad-ts.ardenone.com:8444/m
   grep -E "^zai_proxy_(requests|tokens)_total" | head -10
 echo
 
-# Canary: no VPN route — logs carry the same counters
+# Canary: deliberately unrouted — Prometheus carries variant="test" series
+# (ServiceMonitor, 2026-10-23); logs carry the same counters
 echo "Canary (from logs):"
 kubectl --server=$S logs -n $NAMESPACE deployment/zai-proxy-test --tail=200 | \
   grep -E "Token usage|zai_proxy" | tail -10
