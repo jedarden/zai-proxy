@@ -126,15 +126,14 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Apply rate limiting
-	h.rateLimiter.waitForClient(h.deploymentVariant, clientBucket)
-
-	// Track request size
-	if r.ContentLength > 0 {
-		requestSize.WithLabelValues(r.Method, r.URL.Path, h.deploymentVariant).Observe(float64(r.ContentLength))
-	}
-
-	// Capture request body (always, for translation + optional token counting).
+	// Capture the request body (always, for translation + optional token
+	// counting) before admission. The fair-queue wait can hold a request for
+	// seconds, and the fronting proxy's read deadline covers the whole client
+	// request, body included: reading only after the wait let that deadline
+	// sever bodies too large for the socket buffers (Traefik's 60s default on
+	// the vpn entrypoint killed long sessions as 499s this way, 2026-10-29).
+	// The body is buffered either way; this only moves the copy ahead of the
+	// wait. Capacity rejections above still return before reading anything.
 	var requestBody []byte
 	if r.Body != nil {
 		var buf bytes.Buffer
@@ -144,6 +143,23 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			requestBody = buf.Bytes()
 		}
 		r.Body.Close()
+	}
+
+	// Apply rate limiting
+	h.rateLimiter.waitForClient(h.deploymentVariant, clientBucket)
+
+	// The admission wait paces a shared token and is not cancellable, so the
+	// client may have hung up while its buffered body waited. Forwarding
+	// would spend upstream quota on nobody; waitForRetry makes the same
+	// check before every retry wait.
+	if r.Context().Err() != nil {
+		log.Printf("Client abandoned request during admission wait")
+		return
+	}
+
+	// Track request size
+	if r.ContentLength > 0 {
+		requestSize.WithLabelValues(r.Method, r.URL.Path, h.deploymentVariant).Observe(float64(r.ContentLength))
 	}
 
 	// Extract model name from request body for metrics labels.
