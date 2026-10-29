@@ -136,8 +136,8 @@ func TestLoadRateLimitStateMissingFileIsNotAnError(t *testing.T) {
 }
 
 // TestLoadRateLimitStateRejectsStaleState verifies a snapshot older than the
-// max age is not returned — a restart must fall back to RATE_LIMIT_MAX rather
-// than resume from a ceiling learned yesterday.
+// max age is not returned — a restart must fall back to its RATE_LIMIT_INITIAL
+// seed rather than resume from a ceiling learned yesterday.
 func TestLoadRateLimitStateRejectsStaleState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ceiling.json")
 	writeStateFile(t, path, RateLimitState{
@@ -206,7 +206,7 @@ func TestLoadRateLimitStateRejectsNonsensicalValues(t *testing.T) {
 
 // TestRestoreFromStateFileFreshStateResumesAtStoredCeiling is the core
 // acceptance case: a restart with a fresh state file must resume at the
-// stored ceiling and hold rate instead of re-learning from RATE_LIMIT_MAX.
+// stored ceiling and hold rate instead of re-learning from its initial seed.
 func TestRestoreFromStateFileFreshStateResumesAtStoredCeiling(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ceiling.json")
 	writeStateFile(t, path, RateLimitState{Ceiling: 30.4, Hold: 29.79, Ts: time.Now()})

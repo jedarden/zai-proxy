@@ -519,9 +519,10 @@ func main() {
 	rateLimiter.probeInterval = config.GetRateLimitProbeInterval()
 
 	// Resume the inferred ceiling across restarts instead of re-learning it
-	// from RATE_LIMIT_MAX (each restart otherwise re-runs a 40-60% 429 burst;
-	// see docs/plan/plan.md, "Ceiling persistence across restarts"). The probe
-	// loop is unchanged, so a genuinely higher upstream limit is still learned.
+	// from the RATE_LIMIT_INITIAL seed (each restart otherwise re-runs a
+	// 40-60% 429 burst; see docs/plan/plan.md, "Ceiling persistence across
+	// restarts"). The probe loop is unchanged, so a genuinely higher upstream
+	// limit is still learned.
 	statePath := config.GetRateLimitStateFile()
 	stateMaxAge := config.GetRateLimitStateMaxAge()
 	rateLimiter.statePath = statePath

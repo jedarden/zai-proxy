@@ -16,7 +16,9 @@ import (
 // The ceiling is deliberately unknown and learned from the observed 429 rate
 // (see docs/plan/plan.md, "Ceiling persistence across restarts"), so this
 // snapshot is the proxy's most valuable state: without it every container
-// restart re-learns the ceiling from RATE_LIMIT_MAX and burns a burst of 429s.
+// restart discards the estimate and re-learns it from the observed 429 rate
+// (seeded at RATE_LIMIT_INITIAL since 869ca94; RATE_LIMIT_MAX before that),
+// burning a burst of rejections either way.
 type RateLimitState struct {
 	Ceiling float64   `json:"ceiling"` // estimated upstream ceiling in req/s
 	Hold    float64   `json:"hold"`    // rate the limiter was holding at, in req/s
@@ -143,7 +145,8 @@ func (arl *AdaptiveRateLimiter) persistState(s *RateLimitState) {
 }
 
 // RestoreCeiling seeds the limiter from a persisted snapshot so a restart
-// resumes at the learned ceiling instead of re-learning it from RATE_LIMIT_MAX.
+// resumes at the learned ceiling instead of re-learning it from the
+// RATE_LIMIT_INITIAL seed.
 // Values are clamped into the configured range. The probe loop is deliberately
 // left unchanged, so if upstream has loosened since the snapshot was written
 // the estimate still drifts upward.
@@ -174,8 +177,8 @@ func (arl *AdaptiveRateLimiter) RestoreCeiling(s *RateLimitState) {
 }
 
 // RestoreFromStateFile applies the ceiling snapshot at path when one exists
-// and is fresh enough, leaving the limiter at its RATE_LIMIT_MAX assumption
-// otherwise. It reports whether a snapshot was applied.
+// and is fresh enough, leaving the limiter at its constructor seed
+// (RATE_LIMIT_INITIAL) otherwise. It reports whether a snapshot was applied.
 func (arl *AdaptiveRateLimiter) RestoreFromStateFile(path string, maxAge time.Duration) bool {
 	state, err := loadRateLimitState(path, maxAge)
 	if err != nil {
@@ -183,7 +186,7 @@ func (arl *AdaptiveRateLimiter) RestoreFromStateFile(path string, maxAge time.Du
 		return false
 	}
 	if state == nil {
-		log.Printf("Rate limit: no persisted ceiling at %s; starting from RATE_LIMIT_MAX", path)
+		log.Printf("Rate limit: no persisted ceiling at %s; starting from the RATE_LIMIT_INITIAL seed", path)
 		return false
 	}
 	arl.RestoreCeiling(state)

@@ -60,8 +60,8 @@ const (
 	// rescheduling.
 	DefaultRateLimitStateFile = "/var/lib/zai-proxy/ceiling.json"
 	// DefaultRateLimitStateMaxAge is the default maximum age of a persisted
-	// ceiling snapshot before a restart falls back to re-learning from
-	// RATE_LIMIT_MAX.
+	// ceiling snapshot before a restart falls back to re-learning from the
+	// RATE_LIMIT_INITIAL seed.
 	DefaultRateLimitStateMaxAge = 6 * time.Hour
 )
 
